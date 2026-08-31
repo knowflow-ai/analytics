@@ -17,6 +17,7 @@ from knowflow_analytics.contracts import QueryResult, SemanticQuery
 from knowflow_analytics.query.confirmation_memory import ConfirmationMemory
 from knowflow_analytics.query.contracts import (
     CompletedQueryResponse,
+    DrilldownOption,
     FailedQueryResponse,
     QueryError,
     QueryInterpretation,
@@ -330,6 +331,9 @@ def test_ordinary_query_projection_contains_business_output_but_no_scope_or_sql(
         parsed_s2sql='SELECT "地区", SUM("订单净金额") FROM "orders分析"',
         corrected_s2sql='SELECT "地区", SUM("订单净金额") FROM "orders分析"',
         physical_sql='SELECT region, SUM(net_amount) FROM "orders"',
+        drilldown=(
+            DrilldownOption(token="drl1.ctx.elem.d.ffff.sig", kind="dimension", label="渠道"),
+        ),
     )
 
     projected = _ordinary_query_projection(response)
@@ -340,6 +344,10 @@ def test_ordinary_query_projection_contains_business_output_but_no_scope_or_sql(
     # Chart axes are re-expressed as the shipped column labels; an element
     # missing from the result columns is dropped instead of leaking its ID.
     assert projected["visualization"] == {"type": "bar", "x": "地区", "y": ["订单净金额"]}
+    # Drilldown ships the opaque token and the governed label only.
+    assert projected["drilldown"] == [
+        {"token": "drl1.ctx.elem.d.ffff.sig", "kind": "dimension", "label": "渠道"}
+    ]
     for internal in (
         "dataset:orders",
         "model:orders",

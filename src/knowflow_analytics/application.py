@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
 
+from pydantic import ValidationError
+
 from knowflow_analytics.catalog.release import ReleasePublisher
 from knowflow_analytics.catalog.store import (
     CatalogError,
@@ -181,6 +183,7 @@ from knowflow_analytics.query.contracts import (
     StructuredQueryRequest,
 )
 from knowflow_analytics.query.corrector import LlmPhysicalSqlCorrector
+from knowflow_analytics.query.errors import SemanticParsingError
 from knowflow_analytics.query.diagnostics import (
     QUERY_DIAGNOSTIC_DEFAULT_TTL_SECONDS,
     QUERY_DIAGNOSTIC_MAX_RESULT_ROWS,
@@ -3469,6 +3472,98 @@ class AnalyticsApplication:
             actor_id=actor_id,
             permission_scope_hash=permission_scope_hash,
             mode="natural",
+        )
+        return response
+
+    def structured_query(
+        self,
+        request: StructuredQueryRequest,
+        *,
+        actor_id: str | None = None,
+        permission_scope_hash: str | None = None,
+    ) -> QueryResponse:
+        """Execute one governed QueryStructReq against the Active Release.
+
+        Same authority chain as natural-language Ask from the Corrector on;
+        no Mapper, no LLM, no semantic index.
+        """
+
+        response = self._query_service.query_structured(request, actor_id=actor_id)
+        self._save_query_diagnostic_best_effort(
+            request=request,
+            response=response,
+            actor_id=actor_id,
+            permission_scope_hash=permission_scope_hash,
+            mode="structured",
+        )
+        return response
+
+    def drilldown_query(
+        self,
+        *,
+        project_id: str,
+        query_id: str,
+        token: str,
+        actor_id: str,
+        permission_scope_hash: str,
+    ) -> QueryResponse:
+        """Continue a completed answer by one signed drilldown option.
+
+        The base semantics are recovered from the persisted query artifact in
+        the exact (actor, project, scope, query) slot — the client only returns
+        the opaque token it was shown.
+        """
+
+        try:
+            artifact = self.catalog.get_query_diagnostic(
+                actor_id=actor_id,
+                project_id=project_id,
+                permission_scope_hash=permission_scope_hash,
+                query_id=query_id,
+            )
+        except CatalogError as exc:
+            raise SemanticParsingError(
+                "下钻已过期或不属于当前查询，请重新提问",
+                code="STALE_QUERY_SELECTION",
+            ) from exc
+        base_raw = artifact.response.get("semantic_query")
+        if not isinstance(base_raw, dict):
+            raise SemanticParsingError(
+                "该回答不支持下钻，请重新提问",
+                code="CANDIDATE_NOT_FOUND",
+            )
+        try:
+            base_query = SemanticQuery.model_validate(base_raw)
+        except ValidationError as exc:
+            raise SemanticParsingError(
+                "该回答不支持下钻，请重新提问",
+                code="CANDIDATE_NOT_FOUND",
+            ) from exc
+        response = self._query_service.query_drilldown(
+            project_id=project_id,
+            query_id=query_id,
+            token=token,
+            base_query=base_query,
+            base_release_id=artifact.release_id,
+            base_spec_hash=artifact.spec_hash,
+            actor_id=actor_id,
+        )
+        # 诊断里的 request 记实际执行的 continuation；链式下钻的语义恢复
+        # 走 artifact.response.semantic_query，不依赖这里。
+        executed_query = (
+            response.semantic_query
+            if isinstance(response, CompletedQueryResponse)
+            else base_query
+        )
+        self._save_query_diagnostic_best_effort(
+            request=StructuredQueryRequest(
+                project_id=project_id,
+                semantic_query=executed_query,
+            ),
+            response=response,
+            actor_id=actor_id,
+            permission_scope_hash=permission_scope_hash,
+            mode="structured",
         )
         return response
 

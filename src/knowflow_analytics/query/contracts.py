@@ -367,6 +367,28 @@ class QueryResponseBase(FrozenModel):
     diagnostics: QueryDiagnosis | None = None
 
 
+class DrilldownOption(FrozenModel):
+    """One follow-up cut the caller may take on a completed answer.
+
+    ``token`` is an opaque HMAC continuation (``drl1``) bound to the exact
+    actor/project/query/release context, mirroring the ``sel1`` clarification
+    tokens.  The ordinary wire carries only the governed business ``label``;
+    the semantic element is recovered server-side from the token.
+    """
+
+    token: str = Field(min_length=1, max_length=1_024)
+    kind: Literal["dimension", "metric"]
+    label: str = Field(min_length=1, max_length=256)
+
+
+class DrilldownQueryRequest(FrozenModel):
+    """Continuation of a completed query by one displayed drilldown option."""
+
+    project_id: str = Field(min_length=1, max_length=128)
+    query_id: str = Field(min_length=1, max_length=128)
+    token: str = Field(min_length=1, max_length=1_024)
+
+
 class CompletedQueryResponse(QueryResponseBase):
     state: Literal[QueryState.COMPLETED] = QueryState.COMPLETED
     interpretation: QueryInterpretation
@@ -380,6 +402,10 @@ class CompletedQueryResponse(QueryResponseBase):
     # unambiguous or the user already picked via ``selected_candidate_id``.
     resolved_by_llm: tuple[ResolvedAmbiguity, ...] = ()
     semantic_decisions: tuple[SemanticDecision, ...] = ()
+    # Signed follow-up cuts (split by another dimension / switch the metric).
+    # Empty when the caller context cannot bind a token (no actor) or the
+    # dataset has no remaining governed members.
+    drilldown: tuple[DrilldownOption, ...] = ()
     parsed_s2sql: str
     corrected_s2sql: str
     physical_sql: str | None = None

@@ -55,6 +55,7 @@ from knowflow_analytics.query.contracts import (
     FailedQueryResponse,
     QueryRequest,
     QueryResponse,
+    StructuredQueryRequest,
 )
 from knowflow_analytics.query.diagnostics import QueryDiagnosticExport
 
@@ -169,6 +170,11 @@ def _ordinary_query_projection(response: QueryResponse) -> dict[str, Any]:
             "resolved_by_llm": [item.model_dump(mode="json") for item in response.resolved_by_llm],
             "semantic_decisions": [
                 item.model_dump(mode="json") for item in response.semantic_decisions
+            ],
+            # Signed follow-up cuts: opaque token + governed label only.
+            "drilldown": [
+                {"token": item.token, "kind": item.kind, "label": item.label}
+                for item in response.drilldown
             ],
         }
     )
@@ -2187,6 +2193,52 @@ def create_api(
         if published.release.project_id != project_id:
             raise HTTPException(status_code=404, detail="release not found")
         return published
+
+    class ReleaseStructuredQueryRequest(_RequestModel):
+        """Release 级结构化查询：语义 ID 直达 Corrector→Translator→Guard→Executor。"""
+
+        project_id: str = Field(min_length=1, max_length=128)
+        semantic_query: SemanticQuery
+        query_id: str | None = Field(default=None, min_length=1, max_length=128)
+        include_debug_sql: bool = False
+
+    @app.post("/v1/analytics/structured-query", response_model=QueryResponse)
+    def structured_query(payload: ReleaseStructuredQueryRequest, request_context: Context):
+        """受治理结构化查询，绑定 Active Release；集成方入口，返回完整响应。"""
+
+        require_project(payload.project_id, request_context)
+        expensive(request_context)
+        return application.structured_query(
+            StructuredQueryRequest(
+                project_id=payload.project_id,
+                semantic_query=payload.semantic_query,
+                query_id=payload.query_id,
+                include_debug_sql=payload.include_debug_sql and allow_debug_sql,
+            ),
+            actor_id=request_context.actor_id,
+            permission_scope_hash=request_context.permission_scope_hash,
+        )
+
+    class DrilldownRequest(_RequestModel):
+        project_id: str = Field(min_length=1, max_length=128)
+        query_id: str = Field(min_length=1, max_length=128)
+        token: str = Field(min_length=1, max_length=1_024)
+
+    @app.post("/v1/analytics/query:drilldown")
+    def drilldown_query(payload: DrilldownRequest, request_context: Context):
+        """普通问数的下钻续跑：签名 token + 持久化 artifact 恢复语义，业务投影返回。"""
+
+        require_project(payload.project_id, request_context)
+        expensive(request_context)
+        return _ordinary_query_projection(
+            application.drilldown_query(
+                project_id=payload.project_id,
+                query_id=payload.query_id,
+                token=payload.token,
+                actor_id=request_context.actor_id,
+                permission_scope_hash=request_context.permission_scope_hash,
+            )
+        )
 
     @app.post("/v1/analytics/query")
     def query(payload: QueryRequest, request_context: Context):

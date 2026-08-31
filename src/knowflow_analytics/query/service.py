@@ -14,7 +14,12 @@ from itertools import product
 from typing import Protocol
 
 from knowflow_analytics.catalog.store import PublishedRelease
-from knowflow_analytics.contracts import QueryResult, SemanticQuery, SemanticRelease
+from knowflow_analytics.contracts import (
+    QueryResult,
+    SemanticQuery,
+    SemanticQueryType,
+    SemanticRelease,
+)
 from knowflow_analytics.errors import AnalyticsError
 from knowflow_analytics.hashing import content_hash
 from knowflow_analytics.query.ambiguity import (
@@ -33,6 +38,7 @@ from knowflow_analytics.query.contracts import (
     ClarificationOption,
     ClarificationQueryResponse,
     CompletedQueryResponse,
+    DrilldownOption,
     FailedQueryResponse,
     MapMode,
     MappingEvidence,
@@ -97,6 +103,11 @@ from knowflow_analytics.semantic.translator import SemanticTranslator
 LOGGER = logging.getLogger(__name__)
 _MAX_SEMANTIC_CONFIRMATION_OPTIONS = 20
 _SELECTION_TOKEN_VERSION = "sel1"
+# Drilldown continuations reuse the sel1 machinery: opaque HMAC refs bound to
+# the exact actor/project/query/release context, recovered by re-enumeration.
+_DRILLDOWN_TOKEN_VERSION = "drl1"
+_MAX_DRILLDOWN_DIMENSIONS = 12
+_MAX_DRILLDOWN_METRICS = 8
 
 
 @dataclass(frozen=True)
@@ -1836,6 +1847,13 @@ class AnalyticsQueryService:
                 semantic_query=translated.audit_query,
                 resolved_by_llm=resolved_by_llm,
                 semantic_decisions=semantic_decisions,
+                drilldown=self._drilldown_options(
+                    release=release,
+                    query=translated.audit_query,
+                    project_id=request.project_id,
+                    query_id=query_id,
+                    actor_id=actor_id,
+                ),
                 parsed_s2sql=corrected.parsed_s2sql,
                 corrected_s2sql=corrected.corrected_s2sql,
                 physical_sql=physical.sql if request.include_debug_sql else None,
@@ -1973,6 +1991,7 @@ class AnalyticsQueryService:
         *,
         now: datetime | None = None,
         semantic_release: SemanticRelease | None = None,
+        actor_id: str | None = None,
     ) -> QueryResponse:
         """Execute QueryStructReq without Mapper, LLM, or semantic index.
 
@@ -1980,6 +1999,8 @@ class AnalyticsQueryService:
         structured parser.  A caller
         may bind an unpublished Candidate release explicitly; active-release
         callers continue to resolve it from the normal release provider.
+        ``actor_id`` only binds drilldown continuations; omitting it keeps the
+        response free of signed tokens.
         """
 
         query_id = request.query_id or f"q_{uuid.uuid4().hex}"
@@ -2080,6 +2101,13 @@ class AnalyticsQueryService:
                 data=result,
                 visualization=self._visualization(release, corrected.semantic_query),
                 semantic_query=corrected.semantic_query,
+                drilldown=self._drilldown_options(
+                    release=release,
+                    query=corrected.semantic_query,
+                    project_id=request.project_id,
+                    query_id=query_id,
+                    actor_id=actor_id,
+                ),
                 parsed_s2sql=corrected.canonical_s2sql,
                 corrected_s2sql=corrected.canonical_s2sql,
                 physical_sql=physical.sql if request.include_debug_sql else None,
@@ -3643,6 +3671,267 @@ class AnalyticsQueryService:
             tuple(semantic_matches),
         )
 
+    # ── drilldown continuations ─────────────────────────────────────────
+
+    def _drilldown_context_ref(
+        self,
+        *,
+        project_id: str,
+        actor_id: str,
+        query_id: str,
+        release: SemanticRelease,
+        dataset_id: str,
+    ) -> str:
+        return self._opaque_selection_ref(
+            "drilldown_context",
+            content_hash(
+                {
+                    "project_id": project_id,
+                    "actor_id": actor_id,
+                    "query_id": query_id,
+                    "release_id": release.id,
+                    "spec_hash": release.spec_hash,
+                    "dataset_id": dataset_id,
+                }
+            ),
+        )
+
+    def _drilldown_token(
+        self,
+        *,
+        release: SemanticRelease,
+        context_ref: str,
+        kind: str,
+        element_id: str,
+    ) -> str:
+        element_ref = self._opaque_selection_ref(
+            "drilldown_element",
+            f"{release.spec_hash}\0{kind}\0{element_id}",
+        )
+        expires_at = format(int(time.time()) + self._selection_token_ttl_seconds, "x")
+        unsigned = ".".join(
+            (
+                _DRILLDOWN_TOKEN_VERSION,
+                context_ref,
+                element_ref,
+                "d" if kind == "dimension" else "m",
+                expires_at,
+            )
+        )
+        signature = (
+            base64.urlsafe_b64encode(
+                hmac.new(
+                    self._selection_secret,
+                    unsigned.encode(),
+                    hashlib.sha256,
+                ).digest()[:16]
+            )
+            .decode()
+            .rstrip("=")
+        )
+        return f"{unsigned}.{signature}"
+
+    def _drilldown_options(
+        self,
+        *,
+        release: SemanticRelease,
+        query: SemanticQuery,
+        project_id: str,
+        query_id: str,
+        actor_id: str | None,
+    ) -> tuple[DrilldownOption, ...]:
+        """Sign follow-up cuts for a completed aggregate answer.
+
+        Candidates come only from the frozen Dataset membership (scope members
+        are reachability-compiled at publish time); anything the compiled route
+        still cannot serve fails closed later in the structured pipeline.  No
+        actor context means no bindable audience, so no tokens are issued.
+        """
+
+        actor = str(actor_id or "").strip()
+        if not actor or query.query_type is not SemanticQueryType.AGGREGATE:
+            return ()
+        dataset = next((item for item in release.datasets if item.id == query.dataset_id), None)
+        if dataset is None:
+            return ()
+        dimension_names = {item.id: item.name for item in release.dimensions}
+        metric_names = {item.id: item.name for item in release.metrics}
+        context_ref = self._drilldown_context_ref(
+            project_id=project_id,
+            actor_id=actor,
+            query_id=query_id,
+            release=release,
+            dataset_id=dataset.id,
+        )
+        options: list[DrilldownOption] = []
+        used_dimensions = set(query.dimension_ids)
+        for dimension_id in dataset.dimension_ids:
+            if dimension_id in used_dimensions or dimension_id not in dimension_names:
+                continue
+            if sum(1 for item in options if item.kind == "dimension") >= _MAX_DRILLDOWN_DIMENSIONS:
+                break
+            options.append(
+                DrilldownOption(
+                    token=self._drilldown_token(
+                        release=release,
+                        context_ref=context_ref,
+                        kind="dimension",
+                        element_id=dimension_id,
+                    ),
+                    kind="dimension",
+                    label=dimension_names[dimension_id],
+                )
+            )
+        used_metrics = set(query.metric_ids)
+        metric_count = 0
+        for metric_id in dataset.metric_ids:
+            if metric_id in used_metrics or metric_id not in metric_names:
+                continue
+            if metric_count >= _MAX_DRILLDOWN_METRICS:
+                break
+            metric_count += 1
+            options.append(
+                DrilldownOption(
+                    token=self._drilldown_token(
+                        release=release,
+                        context_ref=context_ref,
+                        kind="metric",
+                        element_id=metric_id,
+                    ),
+                    kind="metric",
+                    label=metric_names[metric_id],
+                )
+            )
+        return tuple(options)
+
+    def _decode_drilldown_token(
+        self,
+        token: str,
+        *,
+        release: SemanticRelease,
+        project_id: str,
+        actor_id: str,
+        query_id: str,
+        dataset_id: str,
+    ) -> tuple[str, str]:
+        """Authenticate in O(1), then resolve the member by re-enumeration."""
+
+        parts = token.split(".")
+        if len(parts) != 6 or parts[0] != _DRILLDOWN_TOKEN_VERSION:
+            raise SemanticParsingError(
+                "下钻选项格式无效，请重新提问",
+                code="CANDIDATE_NOT_FOUND",
+            )
+        unsigned = ".".join(parts[:5])
+        expected_signature = (
+            base64.urlsafe_b64encode(
+                hmac.new(
+                    self._selection_secret,
+                    unsigned.encode(),
+                    hashlib.sha256,
+                ).digest()[:16]
+            )
+            .decode()
+            .rstrip("=")
+        )
+        if not hmac.compare_digest(parts[5], expected_signature):
+            raise SemanticParsingError(
+                "下钻选项已失效，请重新提问",
+                code="CANDIDATE_NOT_FOUND",
+            )
+        try:
+            expires_at = int(parts[4], 16)
+        except ValueError as exc:
+            raise SemanticParsingError(
+                "下钻选项格式无效，请重新提问",
+                code="CANDIDATE_NOT_FOUND",
+            ) from exc
+        if expires_at < int(time.time()):
+            raise SemanticParsingError(
+                "下钻选项已过期，请重新提问",
+                code="STALE_QUERY_SELECTION",
+            )
+        expected_context = self._drilldown_context_ref(
+            project_id=project_id,
+            actor_id=actor_id,
+            query_id=query_id,
+            release=release,
+            dataset_id=dataset_id,
+        )
+        if not hmac.compare_digest(parts[1], expected_context):
+            raise SemanticParsingError(
+                "下钻选项不属于当前查询，请重新提问",
+                code="CANDIDATE_NOT_FOUND",
+            )
+        if parts[3] not in {"d", "m"}:
+            raise SemanticParsingError(
+                "下钻选项格式无效，请重新提问",
+                code="CANDIDATE_NOT_FOUND",
+            )
+        kind = "dimension" if parts[3] == "d" else "metric"
+        dataset = next((item for item in release.datasets if item.id == dataset_id), None)
+        members = (
+            dataset.dimension_ids if kind == "dimension" else dataset.metric_ids
+        ) if dataset is not None else ()
+        matches = tuple(
+            element_id
+            for element_id in members
+            if hmac.compare_digest(
+                parts[2],
+                self._opaque_selection_ref(
+                    "drilldown_element",
+                    f"{release.spec_hash}\0{kind}\0{element_id}",
+                ),
+            )
+        )
+        if len(matches) != 1:
+            raise SemanticParsingError(
+                "下钻选项已失效，请重新提问",
+                code="CANDIDATE_NOT_FOUND",
+            )
+        return kind, matches[0]
+
+    def query_drilldown(
+        self,
+        *,
+        project_id: str,
+        query_id: str,
+        token: str,
+        base_query: SemanticQuery,
+        base_release_id: str,
+        base_spec_hash: str,
+        actor_id: str,
+        now: datetime | None = None,
+    ) -> QueryResponse:
+        """Continue a completed answer by one signed drilldown option.
+
+        The base semantics come from the persisted query artifact, never from
+        the client.  The continuation always executes against the Active
+        Release; if publishing moved it since the answer, the token fails
+        closed instead of silently re-running on different semantics.
+        """
+
+        published = self._releases.get_active_release(project_id)
+        release = published.release
+        if release.id != base_release_id or release.spec_hash != base_spec_hash:
+            raise SemanticParsingError(
+                "语义模型已更新，下钻已失效，请重新提问",
+                code="STALE_QUERY_SELECTION",
+            )
+        kind, element_id = self._decode_drilldown_token(
+            token,
+            release=release,
+            project_id=project_id,
+            actor_id=actor_id,
+            query_id=query_id,
+            dataset_id=base_query.dataset_id,
+        )
+        request = StructuredQueryRequest(
+            project_id=project_id,
+            semantic_query=_apply_drilldown(base_query, kind, element_id),
+        )
+        return self.query_structured(request, now=now, actor_id=actor_id)
+
     @staticmethod
     def _semantic_selection_token(
         *,
@@ -4505,6 +4794,38 @@ class AnalyticsQueryService:
             diagnostics=diagnostics,
             error=QueryError(stage=stage, code=code, message=message),
         )
+
+
+def _apply_drilldown(base: SemanticQuery, kind: str, element_id: str) -> SemanticQuery:
+    """Derive the continuation query from the persisted base semantics.
+
+    Splitting adds one governed dimension and keeps every other constraint.
+    Switching the metric replaces the projection and drops anything that
+    referenced the previous metrics (overrides, metric/measure filters, metric
+    order columns) — carrying them over would either fail validation or quietly
+    filter the new metric by the old one's values.
+    """
+
+    if kind == "dimension":
+        return base.model_copy(
+            update={
+                "dimension_ids": tuple(dict.fromkeys((*base.dimension_ids, element_id))),
+            }
+        )
+    kept_order = tuple(
+        item
+        for item in base.order_by
+        if item.element_id in base.dimension_ids or item.element_id == element_id
+    )
+    return base.model_copy(
+        update={
+            "metric_ids": (element_id,),
+            "aggregation_overrides": (),
+            "measure_filters": (),
+            "metric_filters": (),
+            "order_by": kept_order,
+        }
+    )
 
 
 def _failure_message(exc: AnalyticsError) -> str:

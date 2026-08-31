@@ -1,6 +1,6 @@
 # KnowFlow Analytics
 
-[English](README.en.md) | 简体中文
+[English](README.en.md) | 简体中文 | [官网](https://www.knowflowchat.cn) | [社区与支持](#社区与支持)
 
 **面向 AI Agent 与数据应用的开源语义层和受治理查询引擎。**
 
@@ -335,6 +335,16 @@ src/knowflow_analytics/
 - 既无主标识也无业务度量的事件/桥接表不会成为事实根。
 - 多轮改写默认关闭，只读取同一会话、Release 和业务范围内上一轮成功的语义查询。
 - 确认记忆支持 API 查询和撤销，独立版暂未提供单独的记忆管理页面。
+
+---
+
+## 社区与支持
+
+- **官网**：[www.knowflowchat.cn](https://www.knowflowchat.cn)
+- **微信公众号**：KnowFlow 企业知识库
+- **交流群**：加微信 `skycode007`，备注“加群”
+- **问题反馈**：[GitHub Issues](https://github.com/knowflow-ai/analytics/issues)
+- **KnowFlow 社区**：[社区与支持](https://github.com/knowflow-ai/KnowFlow#%E7%A4%BE%E5%8C%BA%E4%B8%8E%E6%94%AF%E6%8C%81)
 
 ---
 

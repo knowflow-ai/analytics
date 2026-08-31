@@ -1,6 +1,6 @@
 # KnowFlow Analytics
 
-English | [简体中文](README.md)
+English | [简体中文](README.md) | [Website](https://www.knowflowchat.cn) | [Community and support](#community-and-support)
 
 **An open-source semantic layer and governed query engine for AI agents and data applications.**
 
@@ -335,6 +335,16 @@ Production deployments should still use a dedicated read-only database account, 
 - An event/bridge table with neither an identifier nor a business measure cannot become a fact root.
 - Multi-turn rewriting is disabled by default and only reads the previous successful semantic query in the same conversation, release, and business scope.
 - Confirmation memory supports API listing and revocation; standalone does not yet have a dedicated memory-management screen.
+
+---
+
+## Community and support
+
+- **Website**: [www.knowflowchat.cn](https://www.knowflowchat.cn)
+- **WeChat official account**: KnowFlow 企业知识库
+- **Community group**: add WeChat `skycode007` and include “加群” in your request
+- **Issue tracker**: [GitHub Issues](https://github.com/knowflow-ai/analytics/issues)
+- **KnowFlow community**: [Community and support](https://github.com/knowflow-ai/KnowFlow#%E7%A4%BE%E5%8C%BA%E4%B8%8E%E6%94%AF%E6%8C%81)
 
 ---
 

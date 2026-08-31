@@ -1,0 +1,31 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* :host 让同一份变量与字体在 Shadow DOM(嵌入商业版)里同样生效。 */
+:root,
+:host {
+  color-scheme: light;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Segoe UI', 'Noto Sans SC',
+    sans-serif;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: #f8fafc;
+  color: #0f172a;
+}
+
+/* Shadow DOM 里没有 body:嵌入根节点承接同一套基础排版。背景交给宿主内容区。 */
+.kf-embed-root {
+  font-family: Inter, -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Segoe UI', 'Noto Sans SC',
+    sans-serif;
+  color: #0f172a;
+}
+
+.react-flow__attribution {
+  display: none;
+}

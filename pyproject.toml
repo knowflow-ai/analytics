@@ -1,0 +1,57 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "knowflow-analytics"
+version = "0.0.1"
+description = "KnowFlow Analytics: a governed semantic layer and natural-language query service"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.12,<3.15"
+dependencies = [
+  "fastapi==0.140.1",
+  "httpx==0.28.1",
+  "jsonschema>=4.23.0,<5.0.0",
+  "psycopg[binary,pool]>=3.2.3,<4.0.0",
+  "pydantic>=2.12.5,<3.0.0",
+  "pydantic-settings>=2.10.0,<3.0.0",
+  "sqlalchemy>=2.0.45,<3.0.0",
+  "sqlglot==30.17.0",
+  "tzdata>=2025.2",
+  "uvicorn[standard]==0.51.0",
+]
+
+[project.scripts]
+knowflow-analytics-oss = "knowflow_analytics.oss.server:main"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.4.2",
+  "pytest-cov>=7.0.0",
+  "ruff>=0.14.0,<1.0.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/knowflow_analytics"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = ["-q", "--strict-markers"]
+markers = [
+  "postgres: requires the local PostgreSQL fixture",
+]
+
+[tool.coverage.run]
+source = ["knowflow_analytics"]
+
+[tool.coverage.report]
+show_missing = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

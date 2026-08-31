@@ -1,0 +1,46 @@
+# One-command open-source deployment: catalog PostgreSQL + the analytics service.
+# The business database you want to ask questions about is configured from
+# the web UI (设置) after startup; it is not part of this file.
+services:
+  catalog-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: analytics_catalog
+      POSTGRES_USER: analytics
+      # Keep the password URL-safe (letters, digits, -_.~): it is interpolated into a URL below.
+      POSTGRES_PASSWORD: ${CATALOG_DB_PASSWORD:-analytics}
+    volumes:
+      - catalog-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U analytics -d analytics_catalog"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  analytics:
+    image: ${KNOWFLOW_ANALYTICS_IMAGE:-knowflowai/analytics:v0.0.1}
+    depends_on:
+      catalog-db:
+        condition: service_healthy
+    environment:
+      KNOWFLOW_OSS_CATALOG_DATABASE_URL: postgresql+psycopg://analytics:${CATALOG_DB_PASSWORD:-analytics}@catalog-db:5432/analytics_catalog
+      KNOWFLOW_OSS_WEAK_METRIC_ADJUDICATION_MODE: ${KNOWFLOW_OSS_WEAK_METRIC_ADJUDICATION_MODE:-shadow}
+      KNOWFLOW_OSS_SEMANTIC_INTENT_ADJUDICATION_MODE: ${KNOWFLOW_OSS_SEMANTIC_INTENT_ADJUDICATION_MODE:-shadow}
+      KNOWFLOW_OSS_ANALYSIS_OBJECT_ADJUDICATION_MODE: ${KNOWFLOW_OSS_ANALYSIS_OBJECT_ADJUDICATION_MODE:-shadow}
+      KNOWFLOW_OSS_CONFIRMATION_MEMORY_TTL_SECONDS: ${KNOWFLOW_OSS_CONFIRMATION_MEMORY_TTL_SECONDS:-2592000}
+      # Optional shared password for the web UI. Leave empty for no login screen.
+      KNOWFLOW_OSS_ACCESS_PASSWORD: ${KNOWFLOW_OSS_ACCESS_PASSWORD:-}
+    # Docker Desktop provides this name automatically. The explicit host-gateway
+    # mapping also makes the documented URL work on Linux Docker Engine.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      # Safe default: only the local machine can reach the password-optional UI.
+      # Remote deployments must opt into 0.0.0.0 and should set ACCESS_PASSWORD.
+      - "${KNOWFLOW_OSS_BIND_ADDRESS:-127.0.0.1}:${KNOWFLOW_OSS_PORT:-9395}:9395"
+    volumes:
+      - analytics-data:/data
+
+volumes:
+  catalog-data:
+  analytics-data:

@@ -1,0 +1,362 @@
+{
+  "projectId": "parity-sales",
+  "revisionId": "rev_modeling_contract_v1",
+  "contractVersion": "knowflow-modeling-v1",
+  "models": [
+    {
+      "id": "model_orders",
+      "name": "订单",
+      "bizName": "orders",
+      "description": "销售订单事实表",
+      "sensitiveLevel": 0,
+      "databaseId": "postgresql-local",
+      "domainId": "sales",
+      "alias": "订单表",
+      "modelDetail": {
+        "queryType": "table_query",
+        "dbType": "postgresql",
+        "tableQuery": "analytics_v0.orders",
+        "identifiers": [
+          {
+            "name": "订单ID",
+            "type": "primary",
+            "bizName": "id",
+            "isCreateDimension": 1
+          },
+          {
+            "name": "客户ID",
+            "type": "foreign",
+            "bizName": "customer_id",
+            "isCreateDimension": 0
+          }
+        ],
+        "dimensions": [
+          {
+            "name": "下单时间",
+            "type": "partition_time",
+            "expr": "order_time",
+            "dateFormat": "yyyy-MM-dd HH:mm:ss",
+            "dataType": "timestamp",
+            "typeParams": {
+              "isPrimary": "true",
+              "timeGranularity": "day"
+            },
+            "isCreateDimension": 1,
+            "bizName": "order_time",
+            "description": "订单创建时间"
+          },
+          {
+            "name": "渠道",
+            "type": "categorical",
+            "expr": "channel",
+            "dateFormat": "yyyy-MM-dd",
+            "dataType": "varchar",
+            "isCreateDimension": 1,
+            "bizName": "channel",
+            "description": "下单渠道"
+          }
+        ],
+        "measures": [
+          {
+            "name": "订单金额",
+            "agg": "SUM",
+            "expr": "amount",
+            "bizName": "amount",
+            "isCreateMetric": 1,
+            "alias": "销售额,收入",
+            "unit": "元"
+          }
+        ],
+        "fields": [
+          {
+            "fieldName": "id",
+            "dataType": "bigint"
+          },
+          {
+            "fieldName": "customer_id",
+            "dataType": "bigint"
+          },
+          {
+            "fieldName": "order_time",
+            "dataType": "timestamp"
+          },
+          {
+            "fieldName": "channel",
+            "dataType": "varchar"
+          },
+          {
+            "fieldName": "amount",
+            "dataType": "numeric"
+          }
+        ]
+      }
+    },
+    {
+      "id": "model_customers",
+      "name": "客户",
+      "bizName": "customers",
+      "description": "客户维表",
+      "sensitiveLevel": 0,
+      "databaseId": "postgresql-local",
+      "domainId": "sales",
+      "modelDetail": {
+        "queryType": "table_query",
+        "dbType": "postgresql",
+        "tableQuery": "analytics_v0.customers",
+        "identifiers": [
+          {
+            "name": "客户ID",
+            "type": "primary",
+            "bizName": "id",
+            "isCreateDimension": 1
+          }
+        ],
+        "dimensions": [
+          {
+            "name": "客户名称",
+            "type": "categorical",
+            "expr": "name",
+            "dateFormat": "yyyy-MM-dd",
+            "dataType": "varchar",
+            "isCreateDimension": 1,
+            "bizName": "name",
+            "description": "客户显示名称"
+          }
+        ],
+        "fields": [
+          {
+            "fieldName": "id",
+            "dataType": "bigint"
+          },
+          {
+            "fieldName": "name",
+            "dataType": "varchar"
+          }
+        ]
+      }
+    },
+    {
+      "id": "model_order_sql_contract",
+      "name": "订单SQL合同",
+      "bizName": "order_sql_contract",
+      "description": "只用于验证 SQL 模型元数据无损往返",
+      "sensitiveLevel": 0,
+      "databaseId": "postgresql-local",
+      "domainId": "sales",
+      "modelDetail": {
+        "queryType": "sql_query",
+        "dbType": "postgresql",
+        "sqlQuery": "SELECT id, amount FROM analytics_v0.orders WHERE channel = {{channel}}",
+        "fields": [
+          {
+            "fieldName": "id",
+            "dataType": "bigint"
+          },
+          {
+            "fieldName": "amount",
+            "dataType": "numeric"
+          }
+        ],
+        "sqlVariables": [
+          {
+            "name": "channel",
+            "valueType": "STRING",
+            "defaultValues": [
+              "线上"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "modelRelations": [
+    {
+      "id": "relation_orders_customers",
+      "domainId": "sales",
+      "fromModelId": "model_orders",
+      "toModelId": "model_customers",
+      "joinType": "left join",
+      "joinConditions": [
+        {
+          "leftField": "customer_id",
+          "rightField": "id",
+          "operator": "="
+        }
+      ],
+      "knowflowCardinality": "many_to_one"
+    }
+  ],
+  "dimensions": [
+    {
+      "id": "dimension_order_time",
+      "name": "下单日期",
+      "bizName": "order_date",
+      "description": "按天下钻订单",
+      "sensitiveLevel": 0,
+      "modelId": "model_orders",
+      "type": "partition_time",
+      "expr": "order_time",
+      "semanticType": "DATE",
+      "alias": "订单日期,日期",
+      "dataType": "DATETIME",
+      "typeParams": {
+        "isPrimary": "true",
+        "timeGranularity": "day"
+      }
+    },
+    {
+      "id": "dimension_channel",
+      "name": "渠道",
+      "bizName": "channel",
+      "description": "订单来源渠道",
+      "sensitiveLevel": 0,
+      "modelId": "model_orders",
+      "type": "categorical",
+      "expr": "channel",
+      "semanticType": "CATEGORY",
+      "alias": "来源渠道",
+      "dataType": "VARCHAR"
+    },
+    {
+      "id": "dimension_customer_name",
+      "name": "客户名称",
+      "bizName": "customer_name",
+      "description": "客户名称",
+      "sensitiveLevel": 0,
+      "modelId": "model_customers",
+      "type": "categorical",
+      "expr": "name",
+      "semanticType": "CATEGORY",
+      "alias": "客户",
+      "dataType": "VARCHAR"
+    }
+  ],
+  "metrics": [
+    {
+      "id": "metric_order_count",
+      "name": "订单数",
+      "bizName": "order_count",
+      "description": "去重订单数量",
+      "sensitiveLevel": 0,
+      "modelId": "model_orders",
+      "alias": "订单量",
+      "isTag": 0,
+      "metricDefineType": "FIELD",
+      "metricDefineByFieldParams": {
+        "expr": "COUNT(DISTINCT id)",
+        "fields": [
+          {
+            "fieldName": "id"
+          }
+        ]
+      }
+    },
+    {
+      "id": "metric_revenue",
+      "name": "销售额",
+      "bizName": "revenue",
+      "description": "订单金额合计",
+      "sensitiveLevel": 0,
+      "modelId": "model_orders",
+      "alias": "收入",
+      "isTag": 0,
+      "metricDefineType": "MEASURE",
+      "metricDefineByMeasureParams": {
+        "expr": "amount",
+        "measures": [
+          {
+            "name": "订单金额",
+            "agg": "SUM",
+            "expr": "amount",
+            "bizName": "amount",
+            "isCreateMetric": 1,
+            "unit": "元"
+          }
+        ]
+      }
+    },
+    {
+      "id": "metric_avg_order_value",
+      "name": "客单价",
+      "bizName": "avg_order_value",
+      "description": "销售额除以订单数",
+      "sensitiveLevel": 0,
+      "modelId": "model_orders",
+      "isTag": 0,
+      "metricDefineType": "METRIC",
+      "metricDefineByMetricParams": {
+        "expr": "revenue / order_count",
+        "metrics": [
+          {
+            "id": "metric_revenue",
+            "bizName": "revenue"
+          },
+          {
+            "id": "metric_order_count",
+            "bizName": "order_count"
+          }
+        ]
+      }
+    }
+  ],
+  "dataSets": [
+    {
+      "id": "dataset_sales",
+      "name": "销售分析",
+      "bizName": "sales_analysis",
+      "description": "订单与客户问数范围",
+      "sensitiveLevel": 0,
+      "domainId": "sales",
+      "alias": "经营分析",
+      "dataSetDetail": {
+        "dataSetModelConfigs": [
+          {
+            "id": "model_orders",
+            "includesAll": false,
+            "metrics": [
+              "metric_order_count",
+              "metric_revenue",
+              "metric_avg_order_value"
+            ],
+            "dimensions": [
+              "dimension_order_time",
+              "dimension_channel"
+            ]
+          },
+          {
+            "id": "model_customers",
+            "includesAll": false,
+            "metrics": [],
+            "dimensions": [
+              "dimension_customer_name"
+            ]
+          }
+        ]
+      },
+      "queryConfig": {
+        "detailTypeDefaultConfig": {
+          "timeDefaultConfig": {
+            "unit": 1,
+            "period": "DAY",
+            "timeMode": "LAST"
+          },
+          "limit": 500
+        },
+        "aggregateTypeDefaultConfig": {
+          "timeDefaultConfig": {
+            "unit": 7,
+            "period": "DAY",
+            "timeMode": "RECENT"
+          },
+          "limit": 200
+        }
+      },
+      "admins": [
+        "analyst-1"
+      ],
+      "adminOrgs": []
+    }
+  ],
+  "terms": [],
+  "dimensionValues": []
+}

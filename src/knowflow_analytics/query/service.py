@@ -3696,12 +3696,20 @@ class AnalyticsQueryService:
             ),
         )
 
+    # op 位 → (kind, action)：d=加维度，r=去维度，m=换指标。
+    _DRILLDOWN_OPS = {
+        "d": ("dimension", "add"),
+        "r": ("dimension", "remove"),
+        "m": ("metric", "replace"),
+    }
+
     def _drilldown_token(
         self,
         *,
         release: SemanticRelease,
         context_ref: str,
         kind: str,
+        op: str,
         element_id: str,
     ) -> str:
         element_ref = self._opaque_selection_ref(
@@ -3714,7 +3722,7 @@ class AnalyticsQueryService:
                 _DRILLDOWN_TOKEN_VERSION,
                 context_ref,
                 element_ref,
-                "d" if kind == "dimension" else "m",
+                op,
                 expires_at,
             )
         )
@@ -3764,24 +3772,40 @@ class AnalyticsQueryService:
             dataset_id=dataset.id,
         )
         options: list[DrilldownOption] = []
-        used_dimensions = set(query.dimension_ids)
-        for dimension_id in dataset.dimension_ids:
-            if dimension_id in used_dimensions or dimension_id not in dimension_names:
-                continue
-            if sum(1 for item in options if item.kind == "dimension") >= _MAX_DRILLDOWN_DIMENSIONS:
-                break
+
+        def issue(kind: str, op: str, action: str, element_id: str, label: str) -> None:
             options.append(
                 DrilldownOption(
                     token=self._drilldown_token(
                         release=release,
                         context_ref=context_ref,
-                        kind="dimension",
-                        element_id=dimension_id,
+                        kind=kind,
+                        op=op,
+                        element_id=element_id,
                     ),
-                    kind="dimension",
-                    label=dimension_names[dimension_id],
+                    kind=kind,
+                    action=action,
+                    label=label,
                 )
             )
+
+        used_dimensions = set(query.dimension_ids)
+        added = 0
+        for dimension_id in dataset.dimension_ids:
+            if dimension_id in used_dimensions or dimension_id not in dimension_names:
+                continue
+            if added >= _MAX_DRILLDOWN_DIMENSIONS:
+                break
+            added += 1
+            issue("dimension", "d", "add", dimension_id, dimension_names[dimension_id])
+        # 已用维度可移除；否则下钻链只能变长。移除后必须仍有投影
+        # （剩余维度或任一指标），否则不签发。
+        for dimension_id in query.dimension_ids:
+            if dimension_id not in dimension_names:
+                continue
+            if not query.metric_ids and len(query.dimension_ids) <= 1:
+                break
+            issue("dimension", "r", "remove", dimension_id, dimension_names[dimension_id])
         used_metrics = set(query.metric_ids)
         metric_count = 0
         for metric_id in dataset.metric_ids:
@@ -3790,18 +3814,7 @@ class AnalyticsQueryService:
             if metric_count >= _MAX_DRILLDOWN_METRICS:
                 break
             metric_count += 1
-            options.append(
-                DrilldownOption(
-                    token=self._drilldown_token(
-                        release=release,
-                        context_ref=context_ref,
-                        kind="metric",
-                        element_id=metric_id,
-                    ),
-                    kind="metric",
-                    label=metric_names[metric_id],
-                )
-            )
+            issue("metric", "m", "replace", metric_id, metric_names[metric_id])
         return tuple(options)
 
     def _decode_drilldown_token(
@@ -3863,12 +3876,13 @@ class AnalyticsQueryService:
                 "下钻选项不属于当前查询，请重新提问",
                 code="CANDIDATE_NOT_FOUND",
             )
-        if parts[3] not in {"d", "m"}:
+        op = self._DRILLDOWN_OPS.get(parts[3])
+        if op is None:
             raise SemanticParsingError(
                 "下钻选项格式无效，请重新提问",
                 code="CANDIDATE_NOT_FOUND",
             )
-        kind = "dimension" if parts[3] == "d" else "metric"
+        kind, action = op
         dataset = next((item for item in release.datasets if item.id == dataset_id), None)
         members = (
             dataset.dimension_ids if kind == "dimension" else dataset.metric_ids
@@ -3889,7 +3903,7 @@ class AnalyticsQueryService:
                 "下钻选项已失效，请重新提问",
                 code="CANDIDATE_NOT_FOUND",
             )
-        return kind, matches[0]
+        return action, matches[0]
 
     def query_drilldown(
         self,
@@ -3918,7 +3932,7 @@ class AnalyticsQueryService:
                 "语义模型已更新，下钻已失效，请重新提问",
                 code="STALE_QUERY_SELECTION",
             )
-        kind, element_id = self._decode_drilldown_token(
+        action, element_id = self._decode_drilldown_token(
             token,
             release=release,
             project_id=project_id,
@@ -3928,7 +3942,7 @@ class AnalyticsQueryService:
         )
         request = StructuredQueryRequest(
             project_id=project_id,
-            semantic_query=_apply_drilldown(base_query, kind, element_id),
+            semantic_query=_apply_drilldown(base_query, action, element_id),
         )
         return self.query_structured(request, now=now, actor_id=actor_id)
 
@@ -4796,20 +4810,33 @@ class AnalyticsQueryService:
         )
 
 
-def _apply_drilldown(base: SemanticQuery, kind: str, element_id: str) -> SemanticQuery:
+def _apply_drilldown(base: SemanticQuery, action: str, element_id: str) -> SemanticQuery:
     """Derive the continuation query from the persisted base semantics.
 
-    Splitting adds one governed dimension and keeps every other constraint.
-    Switching the metric replaces the projection and drops anything that
-    referenced the previous metrics (overrides, metric/measure filters, metric
-    order columns) — carrying them over would either fail validation or quietly
-    filter the new metric by the old one's values.
+    ``add`` splits by one more governed dimension and keeps every other
+    constraint.  ``remove`` drops a grouping dimension: its ORDER BY reference
+    goes with it, while value filters on it stay — "not grouped by region" and
+    "only 华南" are independent statements.  ``replace`` switches the metric and
+    drops anything that referenced the previous metrics (overrides,
+    metric/measure filters, metric order columns) — carrying them over would
+    either fail validation or quietly filter the new metric by the old one's
+    values.
     """
 
-    if kind == "dimension":
+    if action == "add":
         return base.model_copy(
             update={
                 "dimension_ids": tuple(dict.fromkeys((*base.dimension_ids, element_id))),
+            }
+        )
+    if action == "remove":
+        remaining = tuple(item for item in base.dimension_ids if item != element_id)
+        return base.model_copy(
+            update={
+                "dimension_ids": remaining,
+                "order_by": tuple(
+                    item for item in base.order_by if item.element_id != element_id
+                ),
             }
         )
     kept_order = tuple(

@@ -78,12 +78,14 @@ def test_completed_response_issues_governed_drilldown_options(sales_release, sal
     service = _service(sales_release, sales_index)
     response = _completed(service, actor_id="user-1")
 
-    labels = {(item.kind, item.label) for item in response.drilldown}
-    # 已用成员（区域 / 净收入）不再作为候选；其余冻结成员按治理名签发。
-    assert ("dimension", "区域") not in labels
-    assert ("dimension", "渠道") in labels
-    assert ("dimension", "客户分层") in labels
-    assert ("metric", "退款金额") in labels
+    labels = {(item.action, item.label) for item in response.drilldown}
+    # 未用成员按治理名签发 add/replace；已用维度签发 remove（链条才能变短）。
+    assert ("add", "区域") not in labels
+    assert ("add", "渠道") in labels
+    assert ("add", "客户分层") in labels
+    assert ("remove", "区域") in labels
+    assert ("remove", "渠道") not in labels
+    assert ("replace", "退款金额") in labels
     assert all(item.token.startswith("drl1.") for item in response.drilldown)
 
 
@@ -99,7 +101,7 @@ def test_split_by_dimension_executes_structured_continuation(sales_release, sale
     service = _service(sales_release, sales_index)
     response = _completed(service, actor_id="user-1")
     option = next(
-        item for item in response.drilldown if item.kind == "dimension" and item.label == "渠道"
+        item for item in response.drilldown if item.action == "add" and item.label == "渠道"
     )
 
     continuation = service.query_drilldown(
@@ -115,9 +117,47 @@ def test_split_by_dimension_executes_structured_continuation(sales_release, sale
     assert continuation.state is QueryState.COMPLETED
     assert continuation.semantic_query.dimension_ids == ("region", "channel")
     assert continuation.semantic_query.metric_ids == ("net_revenue",)
-    # 续跑响应继续可钻，且不再提供已用的「渠道」。
-    labels = {item.label for item in continuation.drilldown if item.kind == "dimension"}
-    assert "渠道" not in labels
+    # 续跑响应继续可钻：「渠道」从可加转为可移除。
+    added = {item.label for item in continuation.drilldown if item.action == "add"}
+    removable = {item.label for item in continuation.drilldown if item.action == "remove"}
+    assert "渠道" not in added
+    assert removable == {"区域", "渠道"}
+
+
+def test_remove_dimension_shrinks_the_chain(sales_release, sales_index):
+    service = _service(sales_release, sales_index)
+    response = _completed(service, actor_id="user-1")
+    split = service.query_drilldown(
+        project_id="sales",
+        query_id=response.query_id,
+        token=next(
+            item for item in response.drilldown if item.action == "add" and item.label == "渠道"
+        ).token,
+        base_query=response.semantic_query,
+        base_release_id=response.release_id,
+        base_spec_hash=response.spec_hash,
+        actor_id="user-1",
+    )
+    assert split.semantic_query.dimension_ids == ("region", "channel")
+
+    remove_region = next(
+        item for item in split.drilldown if item.action == "remove" and item.label == "区域"
+    )
+    shrunk = service.query_drilldown(
+        project_id="sales",
+        query_id=split.query_id,
+        token=remove_region.token,
+        base_query=split.semantic_query,
+        base_release_id=split.release_id,
+        base_spec_hash=split.spec_hash,
+        actor_id="user-1",
+    )
+
+    assert shrunk.state is QueryState.COMPLETED
+    assert shrunk.semantic_query.dimension_ids == ("channel",)
+    assert shrunk.semantic_query.metric_ids == ("net_revenue",)
+    # 移除后「区域」回到可加集合。
+    assert ("add", "区域") in {(item.action, item.label) for item in shrunk.drilldown}
 
 
 def test_switch_metric_replaces_projection(sales_release, sales_index):
@@ -226,18 +266,24 @@ def test_apply_drilldown_semantics():
         limit=10,
     )
 
-    split = _apply_drilldown(base, "dimension", "channel")
+    split = _apply_drilldown(base, "add", "channel")
     assert split.dimension_ids == ("region", "channel")
     assert split.metric_filters == base.metric_filters
     assert split.order_by == base.order_by
 
     # 重复加同一维度不产生重复列。
-    dedup = _apply_drilldown(base, "dimension", "region")
+    dedup = _apply_drilldown(base, "add", "region")
     assert dedup.dimension_ids == ("region",)
 
-    switched = _apply_drilldown(base, "metric", "refund_amount")
+    switched = _apply_drilldown(base, "replace", "refund_amount")
     assert switched.metric_ids == ("refund_amount",)
     # 引用旧指标的过滤与排序被清掉，维度排序保留。
     assert switched.metric_filters == ()
     assert switched.aggregation_overrides == ()
     assert switched.order_by == (QueryOrder(element_id="region", direction="asc"),)
+
+    removed = _apply_drilldown(split, "remove", "region")
+    assert removed.dimension_ids == ("channel",)
+    # 被移除维度的排序引用一并清掉；指标过滤（独立语义）保留。
+    assert removed.order_by == (QueryOrder(element_id="net_revenue", direction="desc"),)
+    assert removed.metric_filters == base.metric_filters

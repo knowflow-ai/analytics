@@ -374,11 +374,23 @@ class DrilldownOption(FrozenModel):
     actor/project/query/release context, mirroring the ``sel1`` clarification
     tokens.  The ordinary wire carries only the governed business ``label``;
     the semantic element is recovered server-side from the token.
+
+    ``action``: ``add`` splits by another dimension, ``remove`` drops one the
+    answer already groups by, ``replace`` switches the metric.  Without
+    ``remove`` a drilldown chain could only ever grow.
     """
 
     token: str = Field(min_length=1, max_length=1_024)
     kind: Literal["dimension", "metric"]
+    action: Literal["add", "remove", "replace"]
     label: str = Field(min_length=1, max_length=256)
+
+    @model_validator(mode="after")
+    def action_matches_kind(self) -> DrilldownOption:
+        allowed = {"dimension": {"add", "remove"}, "metric": {"replace"}}
+        if self.action not in allowed[self.kind]:
+            raise ValueError("drilldown action does not match its kind")
+        return self
 
 
 class DrilldownQueryRequest(FrozenModel):

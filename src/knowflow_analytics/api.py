@@ -173,7 +173,12 @@ def _ordinary_query_projection(response: QueryResponse) -> dict[str, Any]:
             ],
             # Signed follow-up cuts: opaque token + governed label only.
             "drilldown": [
-                {"token": item.token, "kind": item.kind, "label": item.label}
+                {
+                    "token": item.token,
+                    "kind": item.kind,
+                    "action": item.action,
+                    "label": item.label,
+                }
                 for item in response.drilldown
             ],
         }

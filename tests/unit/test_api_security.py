@@ -332,7 +332,12 @@ def test_ordinary_query_projection_contains_business_output_but_no_scope_or_sql(
         corrected_s2sql='SELECT "地区", SUM("订单净金额") FROM "orders分析"',
         physical_sql='SELECT region, SUM(net_amount) FROM "orders"',
         drilldown=(
-            DrilldownOption(token="drl1.ctx.elem.d.ffff.sig", kind="dimension", label="渠道"),
+            DrilldownOption(
+                token="drl1.ctx.elem.d.ffff.sig",
+                kind="dimension",
+                action="add",
+                label="渠道",
+            ),
         ),
     )
 
@@ -346,7 +351,12 @@ def test_ordinary_query_projection_contains_business_output_but_no_scope_or_sql(
     assert projected["visualization"] == {"type": "bar", "x": "地区", "y": ["订单净金额"]}
     # Drilldown ships the opaque token and the governed label only.
     assert projected["drilldown"] == [
-        {"token": "drl1.ctx.elem.d.ffff.sig", "kind": "dimension", "label": "渠道"}
+        {
+            "token": "drl1.ctx.elem.d.ffff.sig",
+            "kind": "dimension",
+            "action": "add",
+            "label": "渠道",
+        }
     ]
     for internal in (
         "dataset:orders",

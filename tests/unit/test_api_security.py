@@ -317,7 +317,11 @@ def test_ordinary_query_projection_contains_business_output_but_no_scope_or_sql(
             rows=(("华东", 500, "hidden"),),
             row_count=1,
         ),
-        visualization={},
+        visualization={
+            "type": "bar",
+            "x": "dimension:region",
+            "y": ["metric:net_amount", "metric:not_in_columns"],
+        },
         semantic_query=SemanticQuery(
             dataset_id="dataset:orders",
             metric_ids=("metric:net_amount",),
@@ -333,6 +337,9 @@ def test_ordinary_query_projection_contains_business_output_but_no_scope_or_sql(
     assert projected["data"]["columns"] == ["地区", "订单净金额", "结果列 3"]
     assert projected["interpretation"]["applied_defaults"] == ()
     assert projected["trace"][0]["detail"] == {}
+    # Chart axes are re-expressed as the shipped column labels; an element
+    # missing from the result columns is dropped instead of leaking its ID.
+    assert projected["visualization"] == {"type": "bar", "x": "地区", "y": ["订单净金额"]}
     for internal in (
         "dataset:orders",
         "model:orders",
@@ -346,6 +353,35 @@ def test_ordinary_query_projection_contains_business_output_but_no_scope_or_sql(
         "corrected_s2sql",
     ):
         assert internal not in rendered
+
+
+def test_ordinary_query_projection_defaults_empty_visualization_to_table():
+    response = CompletedQueryResponse(
+        query_id="q1",
+        release_id="release-1",
+        spec_hash="sha256:spec",
+        index_snapshot_id="idx-1",
+        trace=(),
+        interpretation=QueryInterpretation(
+            dataset_id="dataset:orders",
+            metrics=("订单净金额",),
+            dimensions=(),
+            filters=(),
+        ),
+        data=QueryResult(columns=("metric:net_amount",), rows=((500,),), row_count=1),
+        visualization={},
+        semantic_query=SemanticQuery(
+            dataset_id="dataset:orders",
+            metric_ids=("metric:net_amount",),
+            dimension_ids=(),
+        ),
+        parsed_s2sql="SELECT 1",
+        corrected_s2sql="SELECT 1",
+    )
+
+    projected = _ordinary_query_projection(response)
+
+    assert projected["visualization"] == {"type": "table", "x": None, "y": []}
 
 
 def test_ordinary_failed_projection_does_not_expose_database_error_text():

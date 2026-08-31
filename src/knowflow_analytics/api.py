@@ -165,6 +165,7 @@ def _ordinary_query_projection(response: QueryResponse) -> dict[str, Any]:
                 **response.data.model_dump(mode="json"),
                 "columns": columns,
             },
+            "visualization": _ordinary_visualization(response, columns),
             "resolved_by_llm": [item.model_dump(mode="json") for item in response.resolved_by_llm],
             "semantic_decisions": [
                 item.model_dump(mode="json") for item in response.semantic_decisions
@@ -172,6 +173,35 @@ def _ordinary_query_projection(response: QueryResponse) -> dict[str, Any]:
         }
     )
     return payload
+
+
+def _ordinary_visualization(
+    response: CompletedQueryResponse,
+    projected_columns: list[str],
+) -> dict[str, Any]:
+    """Chart hint for ordinary Ask, expressed in projected column labels only.
+
+    The full artifact keeps ``visualization`` keyed by semantic IDs; the
+    ordinary wire must never carry those, so axes are re-expressed as the exact
+    deduplicated business labels shipped in ``data.columns``.  An axis whose
+    element does not appear in the result columns is dropped rather than leaked.
+    """
+
+    source = response.visualization if isinstance(response.visualization, dict) else {}
+    label_by_source_column = dict(zip(response.data.columns, projected_columns, strict=False))
+    chart_type = source.get("type")
+    x_id = source.get("x")
+    raw_y = source.get("y")
+    y_ids = raw_y if isinstance(raw_y, (list, tuple)) else ()
+    return {
+        "type": chart_type if isinstance(chart_type, str) else "table",
+        "x": label_by_source_column.get(x_id) if isinstance(x_id, str) else None,
+        "y": [
+            label_by_source_column[item]
+            for item in y_ids
+            if isinstance(item, str) and item in label_by_source_column
+        ],
+    }
 
 
 class _RequestModel(BaseModel):

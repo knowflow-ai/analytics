@@ -2,7 +2,7 @@
 
 [English](README.en.md) | 简体中文
 
-**面向 PostgreSQL 的开源语义层与受治理问数引擎。**
+**面向 AI Agent 与数据应用的开源语义层和受治理查询引擎。**
 
 KnowFlow Analytics 把指标、维度、业务术语、维度值、实体关系和聚合口径维护成一份经过审核、可版本化的语义模型。同一份模型可以服务自然语言问数、AI Agent、结构化查询 API、嵌入式数据应用和回归评测，不需要为每个入口重复维护 Prompt 与 Few-shot。
 

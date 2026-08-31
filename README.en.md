@@ -2,7 +2,7 @@
 
 English | [简体中文](README.md)
 
-**An open-source semantic layer and governed analytics engine for PostgreSQL.**
+**An open-source semantic layer and governed query engine for AI agents and data applications.**
 
 KnowFlow Analytics maintains metrics, dimensions, business terms, dimension values, entity relationships, and aggregation rules in a reviewed, versioned semantic model. The same model can serve natural-language analytics, AI agents, structured query APIs, embedded data applications, and regression evaluation. You do not need to rebuild business meaning independently in every prompt and few-shot set.
 

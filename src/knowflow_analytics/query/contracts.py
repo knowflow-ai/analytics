@@ -376,29 +376,41 @@ class DrilldownOption(FrozenModel):
     the semantic element is recovered server-side from the token.
 
     ``action``: ``add`` splits by another dimension, ``remove`` drops one the
-    answer already groups by, ``replace`` switches the metric.  Without
-    ``remove`` a drilldown chain could only ever grow.
+    answer already groups by, ``refilter`` swaps the value of an existing
+    dimension filter, ``replace`` switches the metric, ``retime`` swaps the
+    governed default time window.  Without the shrinking/altering actions a
+    drilldown chain could only ever grow.
     """
 
     token: str = Field(min_length=1, max_length=1_024)
-    kind: Literal["dimension", "metric"]
-    action: Literal["add", "remove", "replace"]
+    kind: Literal["dimension", "metric", "time"]
+    action: Literal["add", "remove", "refilter", "replace", "retime"]
     label: str = Field(min_length=1, max_length=256)
 
     @model_validator(mode="after")
     def action_matches_kind(self) -> DrilldownOption:
-        allowed = {"dimension": {"add", "remove"}, "metric": {"replace"}}
+        allowed = {
+            "dimension": {"add", "remove", "refilter"},
+            "metric": {"replace"},
+            "time": {"retime"},
+        }
         if self.action not in allowed[self.kind]:
             raise ValueError("drilldown action does not match its kind")
         return self
 
 
 class DrilldownQueryRequest(FrozenModel):
-    """Continuation of a completed query by one displayed drilldown option."""
+    """Continuation of a completed query by one displayed drilldown option.
+
+    ``value`` accompanies only ``refilter`` tokens: it is a business value
+    literal (the same trust level as words in a natural-language question),
+    never a semantic ID.  An unknown value simply matches no rows.
+    """
 
     project_id: str = Field(min_length=1, max_length=128)
     query_id: str = Field(min_length=1, max_length=128)
     token: str = Field(min_length=1, max_length=1_024)
+    value: str | None = Field(default=None, min_length=1, max_length=512)
 
 
 class CompletedQueryResponse(QueryResponseBase):

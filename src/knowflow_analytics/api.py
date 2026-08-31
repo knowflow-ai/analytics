@@ -215,6 +215,34 @@ def _ordinary_visualization(
     }
 
 
+def _release_ask_context(release) -> dict[str, Any]:
+    """Ask 消费者的最小 Release 投影：治理名与值字典，无建模产物与物理信息。"""
+
+    return {
+        "release_id": release.id,
+        "spec_hash": release.spec_hash,
+        "datasets": [{"id": item.id} for item in release.datasets],
+        "metrics": [
+            {"name": item.name, "aliases": list(item.aliases)} for item in release.metrics
+        ],
+        "dimensions": [
+            {"id": item.id, "name": item.name, "aliases": list(item.aliases)}
+            for item in release.dimensions
+        ],
+        "terms": [
+            {"name": item.name, "aliases": list(item.aliases)} for item in release.terms
+        ],
+        "dimension_values": [
+            {
+                "dimension_id": item.dimension_id,
+                "value": item.value,
+                "display_name": item.display_name,
+            }
+            for item in release.dimension_values
+        ],
+    }
+
+
 class _RequestModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -2199,6 +2227,24 @@ def create_api(
             raise HTTPException(status_code=404, detail="release not found")
         return published
 
+    @app.get("/v1/analytics/projects/{project_id}/releases/{release_id}/ask-context")
+    def get_release_ask_context(
+        project_id: str,
+        release_id: str,
+        request_context: Context,
+    ):
+        """问数消费者的轻量投影：dataset 范围 + 业务说法词表 + 值字典。
+
+        完整 Release 携带 modeling_catalog 等建模产物，问数入口按 release
+        拉一次就是 MB 级；这里只投影提问所需的治理名字面。
+        """
+
+        require_project(project_id, request_context)
+        published = application.get_release(release_id)
+        if published.release.project_id != project_id:
+            raise HTTPException(status_code=404, detail="release not found")
+        return _release_ask_context(published.release)
+
     class ReleaseStructuredQueryRequest(_RequestModel):
         """Release 级结构化查询：语义 ID 直达 Corrector→Translator→Guard→Executor。"""
 
@@ -2228,6 +2274,8 @@ def create_api(
         project_id: str = Field(min_length=1, max_length=128)
         query_id: str = Field(min_length=1, max_length=128)
         token: str = Field(min_length=1, max_length=1_024)
+        # refilter 续跑携带的业务值 literal（与自然语言问句中的词同等地位）。
+        value: str | None = Field(default=None, min_length=1, max_length=512)
 
     @app.post("/v1/analytics/query:drilldown")
     def drilldown_query(payload: DrilldownRequest, request_context: Context):
@@ -2242,6 +2290,7 @@ def create_api(
                 token=payload.token,
                 actor_id=request_context.actor_id,
                 permission_scope_hash=request_context.permission_scope_hash,
+                value=payload.value,
             )
         )
 

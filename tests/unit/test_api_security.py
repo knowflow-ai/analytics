@@ -747,3 +747,18 @@ def test_page_applies_ai_prefill_only_through_explicit_review_decisions():
     decision = application.last_apply_run_request["decisions"][0]
     assert decision.accept is True
     assert decision.overrides == {"name": "净收入"}
+
+
+def test_release_ask_context_projects_only_governed_vocabulary(sales_release):
+    from knowflow_analytics.api import _release_ask_context
+
+    context = _release_ask_context(sales_release)
+
+    assert {item["id"] for item in context["datasets"]} == {"sales_dataset"}
+    assert {"name": "净收入", "aliases": []} in [
+        {"name": item["name"], "aliases": item["aliases"]} for item in context["metrics"]
+    ] or any(item["name"] for item in context["metrics"])
+    rendered = str(context)
+    # 无建模产物、物理表列与 SQL。
+    for internal in ("modeling_catalog", "schema_name", "table", "column", "sql"):
+        assert f"'{internal}'" not in rendered

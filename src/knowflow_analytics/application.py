@@ -3506,6 +3506,7 @@ class AnalyticsApplication:
         token: str,
         actor_id: str,
         permission_scope_hash: str,
+        value: str | None = None,
     ) -> QueryResponse:
         """Continue a completed answer by one signed drilldown option.
 
@@ -3547,6 +3548,7 @@ class AnalyticsApplication:
             base_release_id=artifact.release_id,
             base_spec_hash=artifact.spec_hash,
             actor_id=actor_id,
+            value=value,
         )
         # 诊断里的 request 记实际执行的 continuation；链式下钻的语义恢复
         # 走 artifact.response.semantic_query，不依赖这里。

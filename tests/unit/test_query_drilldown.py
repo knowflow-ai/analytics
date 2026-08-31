@@ -12,6 +12,7 @@ import pytest
 
 from knowflow_analytics.catalog.store import PublishedRelease
 from knowflow_analytics.contracts import (
+    QueryFilter,
     QueryMetricFilter,
     QueryOrder,
     QueryResult,
@@ -249,6 +250,122 @@ def test_drilldown_token_expires(sales_release, sales_index, monkeypatch):
             actor_id="user-1",
         )
     assert exc.value.code == "STALE_QUERY_SELECTION"
+
+
+def _with_default_time(sales_release):
+    """Dataset 变体：声明受治理默认时间维，触发时间窗签发。"""
+
+    dataset = sales_release.datasets[0].model_copy(
+        update={"default_time_dimension_id": "order_date"}
+    )
+    return sales_release.model_copy(update={"datasets": (dataset,)})
+
+
+def _filtered_query() -> SemanticQuery:
+    return SemanticQuery(
+        dataset_id="sales_dataset",
+        metric_ids=("net_revenue",),
+        dimension_ids=("region",),
+        filters=(QueryFilter(dimension_id="region", operator="eq", value="华东"),),
+        limit=10,
+    )
+
+
+def test_refilter_swaps_the_dimension_value(sales_release, sales_index):
+    service = _service(sales_release, sales_index)
+    response = service.query_structured(
+        StructuredQueryRequest(project_id="sales", semantic_query=_filtered_query()),
+        actor_id="user-1",
+    )
+    assert response.state is QueryState.COMPLETED
+    option = next(item for item in response.drilldown if item.action == "refilter")
+    assert option.label == "区域"
+
+    continuation = service.query_drilldown(
+        project_id="sales",
+        query_id=response.query_id,
+        token=option.token,
+        base_query=response.semantic_query,
+        base_release_id=response.release_id,
+        base_spec_hash=response.spec_hash,
+        actor_id="user-1",
+        value="华南",
+    )
+
+    assert continuation.state is QueryState.COMPLETED
+    filters = continuation.semantic_query.filters
+    assert len(filters) == 1
+    assert filters[0].dimension_id == "region"
+    assert filters[0].value == "华南"
+
+    # refilter 不带值 fail-closed。
+    with pytest.raises(SemanticParsingError) as exc:
+        service.query_drilldown(
+            project_id="sales",
+            query_id=response.query_id,
+            token=option.token,
+            base_query=response.semantic_query,
+            base_release_id=response.release_id,
+            base_spec_hash=response.spec_hash,
+            actor_id="user-1",
+        )
+    assert exc.value.code == "DRILLDOWN_VALUE_REQUIRED"
+
+
+def test_retime_replaces_the_governed_time_window(sales_release, sales_index):
+    release = _with_default_time(sales_release)
+    service = _service(release, sales_index)
+    response = service.query_structured(
+        StructuredQueryRequest(project_id="sales", semantic_query=_base_query()),
+        actor_id="user-1",
+    )
+    windows = {item.label for item in response.drilldown if item.action == "retime"}
+    assert windows == {"近 7 天", "近 30 天", "近 90 天", "不限时间"}
+
+    option = next(
+        item for item in response.drilldown if item.action == "retime" and item.label == "近 7 天"
+    )
+    continuation = service.query_drilldown(
+        project_id="sales",
+        query_id=response.query_id,
+        token=option.token,
+        base_query=response.semantic_query,
+        base_release_id=response.release_id,
+        base_spec_hash=response.spec_hash,
+        actor_id="user-1",
+    )
+    assert continuation.state is QueryState.COMPLETED
+    time_filters = [
+        item for item in continuation.semantic_query.filters if item.dimension_id == "order_date"
+    ]
+    assert len(time_filters) == 1
+    assert time_filters[0].operator.value == "gte"
+
+    # 「不限时间」把时间窗过滤整体移除。
+    all_time = next(
+        item
+        for item in continuation.drilldown
+        if item.action == "retime" and item.label == "不限时间"
+    )
+    cleared = service.query_drilldown(
+        project_id="sales",
+        query_id=continuation.query_id,
+        token=all_time.token,
+        base_query=continuation.semantic_query,
+        base_release_id=continuation.release_id,
+        base_spec_hash=continuation.spec_hash,
+        actor_id="user-1",
+    )
+    assert cleared.state is QueryState.COMPLETED
+    assert not [
+        item for item in cleared.semantic_query.filters if item.dimension_id == "order_date"
+    ]
+
+
+def test_no_time_windows_without_a_governed_default_time_dimension(sales_release, sales_index):
+    service = _service(sales_release, sales_index)
+    response = _completed(service, actor_id="user-1")
+    assert not [item for item in response.drilldown if item.action == "retime"]
 
 
 def test_apply_drilldown_semantics():

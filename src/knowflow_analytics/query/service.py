@@ -15,6 +15,8 @@ from typing import Protocol
 
 from knowflow_analytics.catalog.store import PublishedRelease
 from knowflow_analytics.contracts import (
+    FilterOperator,
+    QueryFilter,
     QueryResult,
     SemanticQuery,
     SemanticQueryType,
@@ -3696,12 +3698,22 @@ class AnalyticsQueryService:
             ),
         )
 
-    # op 位 → (kind, action)：d=加维度，r=去维度，m=换指标。
+    # op 位 → (kind, action)：d=加维度，r=去维度，f=换过滤值，m=换指标，t=换时间窗。
     _DRILLDOWN_OPS = {
         "d": ("dimension", "add"),
         "r": ("dimension", "remove"),
+        "f": ("dimension", "refilter"),
         "m": ("metric", "replace"),
+        "t": ("time", "retime"),
     }
+    # 时间窗是固定枚举集：窗口 id 即被签名的"元素"，decode 时按集合重枚举匹配。
+    _DRILLDOWN_TIME_WINDOWS: dict[str, tuple[str, int | None]] = {
+        "__time:7d": ("近 7 天", 7),
+        "__time:30d": ("近 30 天", 30),
+        "__time:90d": ("近 90 天", 90),
+        "__time:all": ("不限时间", None),
+    }
+    _MAX_DRILLDOWN_REFILTERS = 6
 
     def _drilldown_token(
         self,
@@ -3806,6 +3818,21 @@ class AnalyticsQueryService:
             if not query.metric_ids and len(query.dimension_ids) <= 1:
                 break
             issue("dimension", "r", "remove", dimension_id, dimension_names[dimension_id])
+        # 已有等值过滤的维度可换值（值由续跑请求携带，是业务值 literal 而非语义 ID）。
+        refiltered: list[str] = []
+        for item in query.filters:
+            if item.operator not in (FilterOperator.EQ, FilterOperator.IN):
+                continue
+            if item.dimension_id in refiltered or item.dimension_id not in dimension_names:
+                continue
+            if len(refiltered) >= self._MAX_DRILLDOWN_REFILTERS:
+                break
+            refiltered.append(item.dimension_id)
+            issue("dimension", "f", "refilter", item.dimension_id, dimension_names[item.dimension_id])
+        # 受治理默认时间维存在时提供固定时间窗切换。
+        if dataset.default_time_dimension_id in dimension_names:
+            for window_id, (window_label, _days) in self._DRILLDOWN_TIME_WINDOWS.items():
+                issue("time", "t", "retime", window_id, window_label)
         used_metrics = set(query.metric_ids)
         metric_count = 0
         for metric_id in dataset.metric_ids:
@@ -3884,9 +3911,12 @@ class AnalyticsQueryService:
             )
         kind, action = op
         dataset = next((item for item in release.datasets if item.id == dataset_id), None)
-        members = (
-            dataset.dimension_ids if kind == "dimension" else dataset.metric_ids
-        ) if dataset is not None else ()
+        if kind == "time":
+            members: tuple[str, ...] = tuple(self._DRILLDOWN_TIME_WINDOWS)
+        elif dataset is None:
+            members = ()
+        else:
+            members = dataset.dimension_ids if kind == "dimension" else dataset.metric_ids
         matches = tuple(
             element_id
             for element_id in members
@@ -3915,6 +3945,7 @@ class AnalyticsQueryService:
         base_release_id: str,
         base_spec_hash: str,
         actor_id: str,
+        value: str | None = None,
         now: datetime | None = None,
     ) -> QueryResponse:
         """Continue a completed answer by one signed drilldown option.
@@ -3940,9 +3971,35 @@ class AnalyticsQueryService:
             query_id=query_id,
             dataset_id=base_query.dataset_id,
         )
+        if action == "refilter":
+            if not value or not value.strip():
+                raise SemanticParsingError(
+                    "请选择要替换的过滤值",
+                    code="DRILLDOWN_VALUE_REQUIRED",
+                )
+            new_query = _apply_refilter(base_query, element_id, value.strip())
+        elif action == "retime":
+            dataset = next(
+                (item for item in release.datasets if item.id == base_query.dataset_id),
+                None,
+            )
+            time_dimension_id = dataset.default_time_dimension_id if dataset else None
+            if not time_dimension_id:
+                raise SemanticParsingError(
+                    "下钻选项已失效，请重新提问",
+                    code="CANDIDATE_NOT_FOUND",
+                )
+            new_query = _apply_retime(
+                base_query,
+                time_dimension_id,
+                self._DRILLDOWN_TIME_WINDOWS[element_id][1],
+                now=now,
+            )
+        else:
+            new_query = _apply_drilldown(base_query, action, element_id)
         request = StructuredQueryRequest(
             project_id=project_id,
-            semantic_query=_apply_drilldown(base_query, action, element_id),
+            semantic_query=new_query,
         )
         return self.query_structured(request, now=now, actor_id=actor_id)
 
@@ -4851,6 +4908,69 @@ def _apply_drilldown(base: SemanticQuery, action: str, element_id: str) -> Seman
             "measure_filters": (),
             "metric_filters": (),
             "order_by": kept_order,
+        }
+    )
+
+
+def _apply_refilter(base: SemanticQuery, dimension_id: str, value: str) -> SemanticQuery:
+    """Swap the equality filter on one governed dimension for a new value.
+
+    Only that dimension's eq/in predicates are replaced; every other filter,
+    grouping, and ordering stays.  The value is a caller-supplied business
+    literal — an unknown value matches no rows, which is the safe outcome.
+    """
+
+    kept = tuple(
+        item
+        for item in base.filters
+        if not (
+            item.dimension_id == dimension_id
+            and item.operator in (FilterOperator.EQ, FilterOperator.IN)
+        )
+    )
+    return base.model_copy(
+        update={
+            "filters": (
+                *kept,
+                QueryFilter(
+                    dimension_id=dimension_id,
+                    operator=FilterOperator.EQ,
+                    value=value,
+                ),
+            ),
+        }
+    )
+
+
+def _apply_retime(
+    base: SemanticQuery,
+    time_dimension_id: str,
+    days: int | None,
+    *,
+    now: datetime | None = None,
+) -> SemanticQuery:
+    """Replace filters on the governed default time dimension with one window.
+
+    ``days=None`` means "all time": the window filters are simply dropped.
+    The bound is an ISO date literal; the translator's ``render_time_bound``
+    adapts it to the physical column type downstream.
+    """
+
+    kept = tuple(item for item in base.filters if item.dimension_id != time_dimension_id)
+    if days is None:
+        return base.model_copy(update={"filters": kept})
+    today = (now or datetime.now(UTC)).date()
+    bound = (today - timedelta(days=days)).isoformat()
+    return base.model_copy(
+        update={
+            "filters": (
+                *kept,
+                QueryFilter(
+                    dimension_id=time_dimension_id,
+                    operator=FilterOperator.GTE,
+                    value=bound,
+                ),
+            ),
         }
     )
 

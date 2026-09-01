@@ -8,6 +8,8 @@ governed candidate set; the model may select one local key or abstain.
 
 from __future__ import annotations
 
+import logging
+
 import json
 from enum import StrEnum
 from typing import Literal, Protocol
@@ -17,6 +19,8 @@ from pydantic import Field, ValidationError
 from knowflow_analytics.contracts import FrozenModel
 from knowflow_analytics.gateways.model import ModelGatewayError, StructuredModelGateway
 from knowflow_analytics.hashing import content_hash
+
+LOGGER = logging.getLogger(__name__)
 
 IntentKind = Literal["semantic_element", "analysis_object"]
 CandidateKind = Literal[
@@ -232,8 +236,22 @@ class LlmIntentAdjudicator:
                 if exc.code in {"MODEL_GATEWAY_FAILED", "MODEL_OUTPUT_INVALID"}
                 else "MODEL_GATEWAY_FAILED"
             )
+            # 真因必须可见：purpose 白名单缺失曾被折叠成 MODEL_GATEWAY_FAILED，
+            # shadow 永远 UNAVAILABLE 而无人知道为什么。
+            LOGGER.warning(
+                "intent adjudication gateway failed kind=%s code=%s error=%s",
+                intent_kind,
+                getattr(exc, "code", ""),
+                str(exc)[:200],
+            )
             return self._unavailable(candidate_set_hash, failure_code)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 - adjudication must stay abstainable
+            LOGGER.warning(
+                "intent adjudication failed unexpectedly kind=%s error_type=%s error=%s",
+                intent_kind,
+                type(exc).__name__,
+                str(exc)[:200],
+            )
             return self._unavailable(candidate_set_hash, "MODEL_GATEWAY_FAILED")
 
         try:

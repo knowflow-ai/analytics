@@ -166,6 +166,20 @@ class _MultiTurnGateway:
         }
 
 
+class _RecordingGateway:
+    """只记录调用目的，不对问句做断言——用于"不该改写"的场景。"""
+
+    def __init__(self) -> None:
+        self.purposes: list[str] = []
+
+    def generate_json(self, **kwargs):
+        self.purposes.append(kwargs["purpose"])
+        return {
+            "thought": "按区域汇总净收入",
+            "sql": 'SELECT "区域", SUM("净收入") FROM "销售经营" GROUP BY "区域"',
+        }
+
+
 class _QueryHistory:
     def __init__(self, previous: QueryHistoryTurn | None = None) -> None:
         self.previous = previous
@@ -266,7 +280,7 @@ def test_structured_query_bypasses_mapping_and_executes_governed_semantic_ids(
     ]
 
 
-def test_multi_turn_rewrites_only_after_current_candidate_discovery(
+def test_multi_turn_rewrite_runs_before_candidate_discovery(
     sales_release,
     sales_index,
 ) -> None:
@@ -312,11 +326,127 @@ def test_multi_turn_rewrites_only_after_current_candidate_discovery(
     )
 
     assert response.state is QueryState.COMPLETED
+    # 改写在解析之前：先 rewrite，后 s2sql。
     assert gateway.purposes == ["analytics.multi_turn_rewrite", "analytics.s2sql"]
     assert response.semantic_query.metric_ids == ("net_revenue",)
     assert len(history.saved) == 1
     assert history.saved[0].question == "华东呢？"
     assert history.saved[0].effective_question == "华东地区的净收入是多少？"
+
+
+def test_purely_referential_follow_up_is_rewritten_instead_of_failing_to_map(
+    sales_release,
+    sales_index,
+) -> None:
+    """「那环比呢」映射不到任何语义对象，改写必须仍然发生。
+
+    改写原本在候选选中之后，等于让"当前问句自己能选出作用域"成为前置条件——
+    纯指代型追问在 CANDIDATE_DISCOVERY 就抛 NO_SEMANTIC_MAPPING，永远走不到
+    改写。与上游 NL2SQLParser.rewriteMultiTurn 同序后（映射之前、按会话取上一轮、
+    当前映射只用于拼 Prompt），这类追问才能继承上一轮口径。
+    """
+
+    gateway = _MultiTurnGateway()
+    previous_mapping = SemanticMapper().map(
+        question="各区域净收入是多少？",
+        dataset_id="sales_dataset",
+        index=sales_index,
+        mode=MapMode.STRICT,
+    )
+    history = _QueryHistory(
+        QueryHistoryTurn(
+            question="各区域净收入是多少？",
+            effective_question="各区域净收入是多少？",
+            corrected_s2sql=('SELECT "区域", SUM("净收入") FROM "销售经营" GROUP BY "区域"'),
+            mapping=previous_mapping,
+            dataset_id="sales_dataset",
+            release_id="release_sales_v1",
+            spec_hash="fixture-v1",
+            index_snapshot_id=sales_index.id,
+        )
+    )
+    service = AnalyticsQueryService(
+        releases=_ReleaseProvider(sales_release, sales_index),
+        orchestrator=CandidateOrchestrator(
+            mapper=SemanticMapper(),
+            llm_parser=LlmS2SqlParser(gateway),
+        ),
+        translator=SemanticTranslator(),
+        executor=_CapturingExecutor(),
+        multi_turn_rewriter=MultiTurnRewriter(gateway, enabled=True),
+        query_history=history,
+    )
+
+    response = service.query(
+        QueryRequest(
+            project_id="sales",
+            # 这句话里没有任何受治理成员的说法。
+            question="那呢",
+            dataset_ids=("sales_dataset",),
+            conversation_id="conversation-1",
+        ),
+        actor_id="user-1",
+    )
+
+    assert response.state is QueryState.COMPLETED
+    assert gateway.purposes == ["analytics.multi_turn_rewrite", "analytics.s2sql"]
+    assert history.saved[0].effective_question == "华东地区的净收入是多少？"
+
+
+def test_follow_up_rewrite_skips_a_previous_scope_outside_the_allowed_range(
+    sales_release,
+    sales_index,
+) -> None:
+    """上一轮的作用域不在本次允许范围内时不改写。
+
+    Prompt 会带上该作用域里的受治理成员名；超出授权范围就不是"补上下文"，
+    而是越权展示。这时回退原问句，按原问句正常处理。
+    """
+
+    gateway = _RecordingGateway()
+    previous_mapping = SemanticMapper().map(
+        question="各区域净收入是多少？",
+        dataset_id="sales_dataset",
+        index=sales_index,
+        mode=MapMode.STRICT,
+    )
+    history = _QueryHistory(
+        QueryHistoryTurn(
+            question="各区域净收入是多少？",
+            effective_question="各区域净收入是多少？",
+            corrected_s2sql=('SELECT "区域", SUM("净收入") FROM "销售经营" GROUP BY "区域"'),
+            mapping=previous_mapping,
+            dataset_id="retired_dataset",
+            release_id="release_sales_v1",
+            spec_hash="fixture-v1",
+            index_snapshot_id=sales_index.id,
+        )
+    )
+    service = AnalyticsQueryService(
+        releases=_ReleaseProvider(sales_release, sales_index),
+        orchestrator=CandidateOrchestrator(
+            mapper=SemanticMapper(),
+            llm_parser=LlmS2SqlParser(gateway),
+        ),
+        translator=SemanticTranslator(),
+        executor=_CapturingExecutor(),
+        multi_turn_rewriter=MultiTurnRewriter(gateway, enabled=True),
+        query_history=history,
+    )
+
+    response = service.query(
+        QueryRequest(
+            project_id="sales",
+            question="各区域净收入是多少？",
+            dataset_ids=("sales_dataset",),
+            conversation_id="conversation-1",
+        ),
+        actor_id="user-1",
+    )
+
+    assert response.state is QueryState.COMPLETED
+    # 没有改写调用，直接进解析。
+    assert gateway.purposes == ["analytics.s2sql"]
 
 
 @pytest.mark.parametrize(

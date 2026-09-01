@@ -2351,23 +2351,32 @@ class CatalogStore:
         release_id: str,
         spec_hash: str,
         index_snapshot_id: str,
-        dataset_id: str,
+        dataset_id: str | None = None,
     ):
-        """Return only the latest turn in the exact immutable semantic scope."""
+        """Return the latest successful turn in this conversation.
+
+        版本三元组（release/spec/index）仍然是硬边界：语义模型变了，旧轮次不能
+        再作为改写依据。``dataset_id`` 是可选的**收窄**：改写要在映射之前发生，
+        那时当前问句还没有作用域可言（「那环比呢」根本映射不到任何语义对象），
+        所以按会话取最近一轮、再从记录自身读它的 dataset——与上游
+        NL2SQLParser.rewriteMultiTurn 取 lastParseInfo.getDataSetId() 一致。
+        """
 
         from knowflow_analytics.query.multi_turn import QueryHistoryTurn
 
+        statement = (
+            select(query_history.c.payload)
+            .where(query_history.c.actor_id == actor_id)
+            .where(query_history.c.project_id == project_id)
+            .where(query_history.c.conversation_id == conversation_id)
+            .where(query_history.c.release_id == release_id)
+            .where(query_history.c.spec_hash == spec_hash)
+            .where(query_history.c.index_snapshot_id == index_snapshot_id)
+        )
+        if dataset_id is not None:
+            statement = statement.where(query_history.c.dataset_id == dataset_id)
         with self._engine.connect() as connection:
             payload = connection.execute(
-                select(query_history.c.payload)
-                .where(query_history.c.actor_id == actor_id)
-                .where(query_history.c.project_id == project_id)
-                .where(query_history.c.conversation_id == conversation_id)
-                .where(query_history.c.release_id == release_id)
-                .where(query_history.c.spec_hash == spec_hash)
-                .where(query_history.c.index_snapshot_id == index_snapshot_id)
-                .where(query_history.c.dataset_id == dataset_id)
-                .order_by(query_history.c.id.desc())
-                .limit(1)
+                statement.order_by(query_history.c.id.desc()).limit(1)
             ).scalar_one_or_none()
         return QueryHistoryTurn.model_validate(payload) if payload is not None else None

@@ -101,7 +101,11 @@ from knowflow_analytics.query.weak_metric_adjudicator import (
     WeakMetricAdjudicationResult,
     WeakMetricAdjudicator,
 )
-from knowflow_analytics.semantic.index import SemanticElementType, normalize_text
+from knowflow_analytics.semantic.index import (
+    SemanticElementType,
+    SemanticIndexSnapshot,
+    normalize_text,
+)
 from knowflow_analytics.semantic.s2sql_translator import S2SqlSemanticTranslator
 from knowflow_analytics.semantic.translator import SemanticTranslator
 
@@ -314,6 +318,19 @@ class AnalyticsQueryService:
                     "index_snapshot_id": index.id,
                 },
             )
+            # 多轮改写发生在映射与作用域解析**之前**：追问「那环比呢」本身映射不到
+            # 任何语义对象，把改写放在候选选中之后等于让"当前问句自己能选出作用域"
+            # 成为前置条件，纯指代型追问永远走不到改写。与上游 NL2SQLParser
+            # .rewriteMultiTurn 同序——它也在 doParse 之前单独 map 一次只为拼
+            # Prompt，dataset 取自上一轮记录。改写只产出问句文本，之后照常走完整
+            # 链路（映射、作用域、冻结路由、各道 fail-closed 门），不获得任何事实权威。
+            effective_question = self._rewrite_follow_up(
+                request=request,
+                release=release,
+                index=index,
+                dataset_ids=dataset_ids,
+                tenant_id=tenant_id,
+            )
             trace.append(QueryTraceStep(stage=QueryStage.CANDIDATE_DISCOVERY, status="started"))
             global_evidence = None
             scope_resolution = None
@@ -323,7 +340,7 @@ class AnalyticsQueryService:
             )
             if use_global_scope_router:
                 global_evidence = self._orchestrator.collect_evidence(
-                    question=request.question,
+                    question=effective_question,
                     dataset_ids=dataset_ids,
                     index=index,
                     tenant_id=tenant_id,
@@ -428,7 +445,7 @@ class AnalyticsQueryService:
                         evidence=global_evidence,
                         dataset_ids=dataset_ids,
                         selection_context=selection_context,
-                        question=request.question,
+                        question=effective_question,
                         now=now,
                         selected_element_id=selected_element_id,
                         selected_element_type=selected_element_type,
@@ -738,7 +755,7 @@ class AnalyticsQueryService:
                         )
                     ):
                         adjudication = self._adjudicate_weak_metric(
-                            question=request.question,
+                            question=effective_question,
                             detected_text=confirmation_detected_text,
                             release=release,
                             metric_ids=metric_ids,
@@ -808,7 +825,7 @@ class AnalyticsQueryService:
                     ):
                         selected_groups, semantic_intent_adjudication_detail = (
                             self._adjudicate_metric_option_groups(
-                                question=request.question,
+                                question=effective_question,
                                 release=release,
                                 phrase_groups=confirmation_phrase_groups,
                                 exact_context=self._exact_semantic_context(
@@ -884,7 +901,7 @@ class AnalyticsQueryService:
                         )
                         intent_result = self._adjudicate_intent(
                             intent_kind="semantic_element",
-                            question=request.question,
+                            question=effective_question,
                             detected_text=confirmation_detected_text,
                             candidates=intent_candidates,
                             exact_context=self._exact_semantic_context(
@@ -1029,7 +1046,7 @@ class AnalyticsQueryService:
                             evidence=global_evidence,
                             dataset_ids=scope_resolution.candidate_dataset_ids,
                             selection_context=selection_context,
-                            question=request.question,
+                            question=effective_question,
                             now=now,
                         )
                         if not ambiguous_metric_ids
@@ -1179,7 +1196,7 @@ class AnalyticsQueryService:
                     ):
                         intent_result = self._adjudicate_intent(
                             intent_kind="analysis_object",
-                            question=request.question,
+                            question=effective_question,
                             detected_text="业务记录粒度",
                             candidates=self._intent_candidates_for_options(
                                 release=release,
@@ -1319,7 +1336,7 @@ class AnalyticsQueryService:
                     )
                 assert scope_resolution.selected_dataset_id is not None
                 candidate_set = self._orchestrator.discover_selected_scope(
-                    question=request.question,
+                    question=effective_question,
                     release=release,
                     evidence=global_evidence,
                     dataset_id=scope_resolution.selected_dataset_id,
@@ -1330,7 +1347,7 @@ class AnalyticsQueryService:
                 )
             else:
                 candidate_set = self._orchestrator.discover(
-                    question=request.question,
+                    question=effective_question,
                     release=release,
                     index=index,
                     dataset_ids=dataset_ids,
@@ -1506,45 +1523,6 @@ class AnalyticsQueryService:
                     element_ids=tuple(member.element_id for member in unresolved.members),
                     degraded_reasons=selected.mapping.degraded_reasons,
                 )
-            if request.conversation_id is not None:
-                normalized_actor = tenant_id
-                if not normalized_actor:
-                    raise SemanticParsingError(
-                        "多轮问数必须绑定当前用户",
-                        code="MULTI_TURN_ACTOR_REQUIRED",
-                    )
-                if self._query_history is not None and self._multi_turn_rewriter is not None:
-                    previous = self._query_history.last_success(
-                        actor_id=normalized_actor,
-                        project_id=request.project_id,
-                        conversation_id=request.conversation_id,
-                        release_id=release.id,
-                        spec_hash=release.spec_hash,
-                        index_snapshot_id=index.id,
-                        dataset_id=selected.dataset_id,
-                    )
-                    if previous is not None:
-                        effective_question = self._multi_turn_rewriter.rewrite(
-                            MultiTurnContext(
-                                tenant_id=tenant_id,
-                                current_question=request.question,
-                                current_mapping=selected.mapping,
-                                previous_question=previous.effective_question,
-                                previous_mapping=previous.mapping,
-                                previous_corrected_s2sql=previous.corrected_s2sql,
-                            )
-                        )
-                        if use_global_scope_router and effective_question != request.question:
-                            # The rewrite is a new effective question produced
-                            # after the root Scope is known. Retrieve once for
-                            # that selected Scope rather than reusing evidence
-                            # collected for the original wording.
-                            global_evidence = self._orchestrator.collect_evidence(
-                                question=effective_question,
-                                dataset_ids=(selected.dataset_id,),
-                                index=index,
-                                tenant_id=tenant_id,
-                            )
             trace.append(QueryTraceStep(stage=QueryStage.FINAL_PARSING, status="started"))
             translation_holder = {}
 
@@ -3440,6 +3418,74 @@ class AnalyticsQueryService:
             for candidate in candidates
             if candidate.dataset_id in exact_metric_dataset_ids
         )
+
+    def _rewrite_follow_up(
+        self,
+        *,
+        request: QueryRequest,
+        release: SemanticRelease,
+        index: SemanticIndexSnapshot,
+        dataset_ids: tuple[str, ...],
+        tenant_id: str,
+    ) -> str:
+        """追问改写：把上一轮的口径补进这一轮的问句，失败一律回退原问句。
+
+        与上游同序，在映射之前执行。上一轮按会话取最近一次成功，**不以当前问句
+        的作用域为前置条件**——那正是「那环比呢」走不到改写的原因。当前问句的
+        映射只用来拼 Prompt，投影到上一轮所在的作用域（等价于上游的
+        ``getMatchedElements(dataId)``）；映射为空是正常输入，不是错误。
+
+        改写只产出问句文本：它不选事实根、不定路由、不写 SQL，后续照常走完整
+        受治理链路。任何异常都回退原问句——可观察性和便利性都不该让问数失败。
+        """
+
+        if request.conversation_id is None:
+            return request.question
+        if self._query_history is None or self._multi_turn_rewriter is None:
+            return request.question
+        if not tenant_id:
+            raise SemanticParsingError(
+                "多轮问数必须绑定当前用户",
+                code="MULTI_TURN_ACTOR_REQUIRED",
+            )
+        previous = self._query_history.last_success(
+            actor_id=tenant_id,
+            project_id=request.project_id,
+            conversation_id=request.conversation_id,
+            release_id=release.id,
+            spec_hash=release.spec_hash,
+            index_snapshot_id=index.id,
+        )
+        if previous is None:
+            return request.question
+        # 上一轮的作用域必须仍在本次允许范围内：Prompt 会带上该作用域里的受治理
+        # 成员名，超出授权范围就不是"补上下文"而是越权展示。
+        if previous.dataset_id not in dataset_ids:
+            return request.question
+        evidence = self._orchestrator.collect_evidence(
+            question=request.question,
+            dataset_ids=(previous.dataset_id,),
+            index=index,
+            tenant_id=tenant_id,
+        )
+        projections = self._orchestrator.project_scope_evidence(
+            evidence=evidence,
+            dataset_ids=(previous.dataset_id,),
+            mode=MapMode.STRICT,
+        )
+        if not projections:
+            return request.question
+        rewritten = self._multi_turn_rewriter.rewrite(
+            MultiTurnContext(
+                tenant_id=tenant_id,
+                current_question=request.question,
+                current_mapping=projections[0],
+                previous_question=previous.effective_question,
+                previous_mapping=previous.mapping,
+                previous_corrected_s2sql=previous.corrected_s2sql,
+            )
+        )
+        return rewritten or request.question
 
     @staticmethod
     def _supports_global_scope_routing(

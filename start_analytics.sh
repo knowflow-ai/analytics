@@ -86,8 +86,8 @@ export KNOWFLOW_ANALYTICS_ALLOW_DEBUG_SQL="$(local_setting KNOWFLOW_ANALYTICS_AL
 # 多轮改写：追问继承上一轮的口径。实测（2026-09-01，rel_72ffa832）同一会话里
 # 「华东的净金额」→「按渠道拆分」得到 渠道×净金额；新会话问同一句只能回落到
 # 默认计数指标 订单数量。代价是有上一轮成功记录时每轮多一次模型调用。
-# 已知边界：改写发生在候选选中之后，「那环比呢」这类映射不到任何语义对象的
-# 纯指代追问仍会 NO_SEMANTIC_MAPPING，改写救不了。
+# 改写在映射与作用域解析之前执行（与上游 NL2SQLParser 同序），所以「那环比呢」
+# 这类映射不到任何语义对象的纯指代追问也能继承上一轮口径。
 export KNOWFLOW_ANALYTICS_MULTI_TURN_ENABLED="$(local_setting KNOWFLOW_ANALYTICS_MULTI_TURN_ENABLED true)"
 
 if lsof -ti ":$PORT" -sTCP:LISTEN >/dev/null 2>&1; then

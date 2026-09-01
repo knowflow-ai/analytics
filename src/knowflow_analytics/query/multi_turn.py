@@ -69,7 +69,7 @@ class QueryHistoryStore(Protocol):
         release_id: str,
         spec_hash: str,
         index_snapshot_id: str,
-        dataset_id: str,
+        dataset_id: str | None = None,
     ) -> QueryHistoryTurn | None: ...
 
     def save_success(

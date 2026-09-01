@@ -1845,7 +1845,9 @@ class AnalyticsQueryService:
                     defaults,
                 ),
                 data=result,
-                visualization=self._visualization(release, translated.audit_query),
+                visualization=self._visualization(
+                    release, translated.audit_query, corrected.corrected_s2sql
+                ),
                 semantic_query=translated.audit_query,
                 resolved_by_llm=resolved_by_llm,
                 semantic_decisions=semantic_decisions,
@@ -2101,7 +2103,9 @@ class AnalyticsQueryService:
                     defaults,
                 ),
                 data=result,
-                visualization=self._visualization(release, corrected.semantic_query),
+                visualization=self._visualization(
+                    release, corrected.semantic_query, corrected.canonical_s2sql
+                ),
                 semantic_query=corrected.semantic_query,
                 drilldown=self._drilldown_options(
                     release=release,
@@ -4829,12 +4833,21 @@ class AnalyticsQueryService:
         )
 
     @staticmethod
-    def _visualization(release: SemanticRelease, query: SemanticQuery) -> dict[str, object]:
+    def _visualization(
+        release: SemanticRelease,
+        query: SemanticQuery,
+        s2sql: str = "",
+    ) -> dict[str, object]:
         dimensions = {item.id: item for item in release.dimensions}
         # QueryType.DETAIL represents field selection rather than an
         # aggregate chart query (common/.../pojo/enums/QueryType.java).
         if query.query_type.value == "detail":
             chart = "table"
+        elif not query.dimension_ids and "RATIO_TO_TOTAL(" in s2sql:
+            # 组内占比且无分组：单个 0..1 比例值。RATIO_TO_TOTAL 是受治理
+            # 保留函数名，corrected_s2sql 权威文本中出现即语义成立；输出列
+            # 仍叫指标原名（「净金额」），下游无法从列名/数值可靠判定占比。
+            chart = "ratio"
         elif any(dimensions[item].semantic_type == "time" for item in query.dimension_ids):
             chart = "line"
         elif query.metric_ids and query.dimension_ids:

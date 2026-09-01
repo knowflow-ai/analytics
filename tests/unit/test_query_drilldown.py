@@ -404,3 +404,31 @@ def test_apply_drilldown_semantics():
     # 被移除维度的排序引用一并清掉；指标过滤（独立语义）保留。
     assert removed.order_by == (QueryOrder(element_id="net_revenue", direction="desc"),)
     assert removed.metric_filters == base.metric_filters
+
+
+def test_visualization_marks_groupless_ratio_as_ratio_chart(sales_release):
+    ratio_query = SemanticQuery(
+        dataset_id="sales_dataset",
+        metric_ids=("net_revenue",),
+        dimension_ids=(),
+    )
+    marked = AnalyticsQueryService._visualization(
+        sales_release,
+        ratio_query,
+        "SELECT RATIO_TO_TOTAL(\"净收入\", \"区域\", '华东') FROM \"销售经营\"",
+    )
+    assert marked["type"] == "ratio"
+
+    # 普通无分组聚合仍是 table；带分组的占比仍走 bar（可切饼图）。
+    plain = AnalyticsQueryService._visualization(sales_release, ratio_query, "SELECT 1")
+    assert plain["type"] == "table"
+    grouped = AnalyticsQueryService._visualization(
+        sales_release,
+        SemanticQuery(
+            dataset_id="sales_dataset",
+            metric_ids=("net_revenue",),
+            dimension_ids=("region",),
+        ),
+        "SELECT RATIO_TO_TOTAL(...)",
+    )
+    assert grouped["type"] == "bar"

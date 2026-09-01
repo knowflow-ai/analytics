@@ -352,6 +352,7 @@ def test_ordinary_query_projection_contains_business_output_but_no_scope_or_sql(
     assert projected["visualization"] == {
         "type": "bar",
         "x": "地区",
+        "series": None,
         "y": ["订单净金额"],
         "y_units": ["元"],
         "y_formats": ["number"],
@@ -409,6 +410,7 @@ def test_ordinary_query_projection_defaults_empty_visualization_to_table():
     assert projected["visualization"] == {
         "type": "table",
         "x": None,
+        "series": None,
         "y": [],
         "y_units": [],
         "y_formats": [],

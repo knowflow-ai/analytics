@@ -253,9 +253,13 @@ def _ordinary_visualization(
     kept = [
         item for item in y_ids if isinstance(item, str) and item in label_by_source_column
     ]
+    series_id = source.get("series")
     return {
         "type": chart_type if isinstance(chart_type, str) else "table",
         "x": label_by_source_column.get(x_id) if isinstance(x_id, str) else None,
+        "series": (
+            label_by_source_column.get(series_id) if isinstance(series_id, str) else None
+        ),
         "y": [label_by_source_column[item] for item in kept],
         # 与 y 逐位对齐的展示单位；非字符串一律置 None。
         "y_units": [

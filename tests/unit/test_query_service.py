@@ -790,6 +790,7 @@ def test_detail_measure_filter_is_explained_with_business_names(
     assert response.visualization == {
         "type": "table",
         "x": None,
+        "series": None,
         "y": ("refund_amount",),
         "y_units": [None],
         "y_formats": ["number"],

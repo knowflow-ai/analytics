@@ -4876,7 +4876,31 @@ class AnalyticsQueryService:
                 for item in output_columns
                 if item.kind in {"metric", "calculation", "ratio"}
             ]
-            x_id = dimension_columns[0].element_id if dimension_columns else None
+            # 时间维优先做横轴：两个维度时另一个维度是分组系列（对齐上游趋势图
+            # 的 dateColumnName / categoryColumnName 分工）。只取第一个维度做 x
+            # 会把另一个维度整个丢掉，多行落在同一个 x 上连成乱线。
+            time_columns = [
+                item
+                for item in dimension_columns
+                if item.time_grain is not None
+                or (
+                    item.element_id in dimensions
+                    and dimensions[item.element_id].semantic_type == "time"
+                )
+            ]
+            x_column = (
+                time_columns[0]
+                if time_columns
+                else dimension_columns[0]
+                if dimension_columns
+                else None
+            )
+            series_columns = [item for item in dimension_columns if item is not x_column]
+            series_id = series_columns[0].element_id if len(series_columns) == 1 else None
+            # 三个及以上维度，或分组系列叠加多个数值列，一张图表达不了，回表格。
+            if len(dimension_columns) > 2 or (series_id and len(value_columns) > 1):
+                chart = "table"
+            x_id = x_column.element_id if x_column is not None else None
             y_ids = [item.element_id for item in value_columns]
             y_units = [units.get(item.element_id) for item in value_columns]
             # 只有比率列按百分比展示。与它并列的 SUM(指标) 也是 calculation，
@@ -4891,12 +4915,15 @@ class AnalyticsQueryService:
             ]
         else:
             x_id = query.dimension_ids[0] if query.dimension_ids else None
+            series_id = None
             y_ids = list(query.metric_ids)
             y_units = [units.get(metric_id) for metric_id in query.metric_ids]
             y_formats = ["number"] * len(y_ids)
         return {
             "type": chart,
             "x": x_id,
+            # 分组系列所在的结果列；为空表示系列即指标本身。
+            "series": series_id,
             "y": tuple(y_ids),
             # 与 y 逐位对齐的展示单位（「元」「件」…），无单位为 None。
             "y_units": y_units,

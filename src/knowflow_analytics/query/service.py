@@ -4906,12 +4906,15 @@ class AnalyticsQueryService:
         """结果列的展示名：受治理成员用治理名，计算列用 S2SQL 里的业务别名。
 
         别名由模型在只含业务名的 S2SQL 里书写，与问句用词同级，不含物理名。
+        Parser 要求别名用下划线包裹以免与治理名冲突（``_月份_``），那是 SQL
+        层约定，展示时脱掉。
         """
 
         governed = {item.id: item.name for item in release.dimensions}
         governed.update({item.id: item.name for item in release.metrics})
         return tuple(
-            governed.get(item.element_id) or item.name for item in output_columns
+            governed.get(item.element_id) or _display_alias(item.name)
+            for item in output_columns
         )
 
     @staticmethod
@@ -4977,6 +4980,20 @@ def _apply_drilldown(base: SemanticQuery, action: str, element_id: str) -> Seman
             "order_by": kept_order,
         }
     )
+
+
+def _display_alias(alias: str) -> str:
+    """脱掉 S2SQL 别名的包裹下划线：``_月份_`` → ``月份``。
+
+    Parser prompt 要求 ``AS`` 别名用下划线包裹，好让别名不与受治理业务名撞名；
+    这是解析层的约定，不该出现在结果列头上。
+    """
+
+    text = str(alias or "").strip()
+    if len(text) > 2 and text.startswith("_") and text.endswith("_"):
+        stripped = text[1:-1].strip("_").strip()
+        return stripped or text
+    return text
 
 
 def _apply_refilter(base: SemanticQuery, dimension_id: str, value: str) -> SemanticQuery:

@@ -1241,6 +1241,18 @@ export interface AnalyticsQueryFailure {
   details: Record<string, unknown>;
 }
 
+/** 线上反复被人工确认的说法，聚合成待审别名证据。 */
+export interface AnalyticsConfirmationSuggestion {
+  id: string;
+  detected_text: string;
+  selection_kind: 'metric' | 'dimension' | 'dimension_value' | 'analysis_object';
+  /** 用户确认时选中的语义元素；据此把说法一键采纳为它的别名。 */
+  semantic_element_id: string | null;
+  confirmation_count: number;
+  latest_confirmed_at: string;
+  status: 'pending_review';
+}
+
 
 export interface AnalyticsReleaseSummary {
   id: string;

@@ -26,6 +26,8 @@ describe('complete-catalog workbench surfaces', () => {
       '数据源',
       '语义建模',
       '问数验证',
+      // 发布后的回流入口：线上真实提问变成别名与术语。
+      '问数反馈',
     ]);
   });
 

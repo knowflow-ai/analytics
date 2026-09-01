@@ -6,10 +6,11 @@ import type {
   AnalyticsSemanticSpec,
 } from '@analytics/api/types';
 
-export type WorkbenchStep = 'tables' | 'catalog' | 'publish';
+export type WorkbenchStep = 'tables' | 'catalog' | 'publish' | 'feedback';
 
 /** Preserve old deep links without restoring legacy editable-topic UI. */
 export function normalizeWorkbenchStep(value: string | null): WorkbenchStep {
+  if (value === 'feedback') return 'feedback';
   if (value === 'publish') return 'publish';
   if (value === 'catalog' || value === 'canvas' || value === 'ai' || value === 'topics') {
     return 'catalog';

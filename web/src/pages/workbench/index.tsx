@@ -6,6 +6,7 @@ import { deriveCandidate, getModelingSummary, getRevision } from '@analytics/api
 import type { AnalyticsRevision } from '@analytics/api/types';
 import { Badge, Button, Spinner, useToast } from '@analytics/components/ui';
 import { describeError, REVISION_STATE_LABELS } from '@analytics/lib/labels';
+import { AskFeedbackPanel } from './ask-feedback';
 import { PublishPanel } from './publish';
 import { CompletenessStrip } from './completeness-strip';
 import { TablesPanel } from './tables';
@@ -20,6 +21,9 @@ export const WORKBENCH_STEPS: Array<{ key: StepKey; label: string }> = [
   { key: 'tables', label: '数据源' },
   { key: 'catalog', label: '语义建模' },
   { key: 'publish', label: '问数验证' },
+  // 发布之后才有线上提问可看。它不是一次性建模步骤，而是回流入口：用户问了
+  // 什么、系统听不懂什么，回到这里变成别名与术语。
+  { key: 'feedback', label: '问数反馈' },
 ];
 
 /** Everything a panel needs to read and advance the current revision. */
@@ -220,6 +224,7 @@ export function WorkbenchPage() {
           )}
           {context && step === 'catalog' && <SemanticCatalogPanel key={context.revision.id} {...context} />}
           {context && step === 'publish' && <PublishPanel {...context} />}
+          {context && step === 'feedback' && <AskFeedbackPanel {...context} />}
         </div>
       </div>
     </div>

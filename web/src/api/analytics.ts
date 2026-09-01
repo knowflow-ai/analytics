@@ -652,7 +652,13 @@ export type GrantSubjectType = 'user' | 'org' | 'group';
 export type ProjectRole = 'admin' | 'editor' | 'viewer';
 
 export interface ProjectGrants {
-  users: Array<{ user_id: string; username?: string; role_code: string }>;
+  // 实机返回的用户名字段是 nickname（不是 username）；两个都收，取到哪个用哪个。
+  users: Array<{
+    user_id: string;
+    nickname?: string;
+    username?: string;
+    role_code: string;
+  }>;
   orgs: Array<{ org_unit_id: string; name?: string; role_code: string }>;
   groups: Array<{ group_id: string; name?: string; role_code: string }>;
 }

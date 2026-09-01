@@ -109,7 +109,7 @@ export function ProjectAuthorizeDialog({
       ...(data.users ?? []).map((item) => ({
         subject_type: 'user' as const,
         subject_id: item.user_id,
-        name: item.username || item.user_id,
+        name: item.nickname || item.username || item.user_id,
         role_code: (item.role_code || 'viewer') as ProjectRole,
       })),
       ...(data.orgs ?? []).map((item) => ({

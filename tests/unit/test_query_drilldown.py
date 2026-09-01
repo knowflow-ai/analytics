@@ -432,3 +432,75 @@ def test_visualization_marks_groupless_ratio_as_ratio_chart(sales_release):
         "SELECT RATIO_TO_TOTAL(...)",
     )
     assert grouped["type"] == "bar"
+
+
+def test_period_ratio_projection_keeps_aliased_columns_and_marks_delta(
+    sales_release,
+    sales_index,
+):
+    """同比/环比：结果列是 S2SQL 别名而非语义 ID。
+
+    只按语义 ID 映射会让整行退化成「结果列 N」、并清空图表轴——
+    这是曾经的线上表现，此测试锁住修复。
+    """
+
+    from knowflow_analytics.api import _ordinary_query_projection
+    from knowflow_analytics.query.orchestrator import CandidateOrchestrator
+    from knowflow_analytics.query.parser import LlmS2SqlParser
+    from knowflow_analytics.query.contracts import QueryRequest
+    from knowflow_analytics.semantic.index import EmbeddingBatch, SemanticIndexBuilder
+
+    class _Embedding:
+        def encode(self, texts):
+            return EmbeddingBatch(
+                model_id="constant", dimension=1, vectors=tuple((1.0,) for _ in texts)
+            )
+
+    class _Gateway:
+        def generate_json(self, **_kwargs):
+            return {
+                "thought": "按月同比",
+                "sql": (
+                    'SELECT DATE_TRUNC(\'month\', "下单日期") AS "月份", '
+                    'RATIO_OVER("净收入") AS "同比" FROM "销售经营" '
+                    "GROUP BY DATE_TRUNC('month', \"下单日期\")"
+                ),
+            }
+
+    class _RowExecutor:
+        def execute(self, *, query, release):
+            return QueryResult(
+                columns=tuple(item.element_id for item in query.columns),
+                rows=(("2026-08", 0.9),),
+                row_count=1,
+            )
+
+    dataset = sales_release.datasets[0].model_copy(
+        update={"default_time_dimension_id": "order_date"}
+    )
+    release = sales_release.model_copy(update={"datasets": (dataset,)})
+    index = SemanticIndexBuilder(_Embedding()).build(release)
+    service = AnalyticsQueryService(
+        releases=_ReleaseProvider(release, index),
+        orchestrator=CandidateOrchestrator(
+            mapper=SemanticMapper(), llm_parser=LlmS2SqlParser(_Gateway())
+        ),
+        translator=SemanticTranslator(),
+        executor=_RowExecutor(),
+        selection_secret="drilldown-secret-of-at-least-32-bytes",
+    )
+
+    response = service.query(
+        QueryRequest(
+            project_id="sales", question="按月净收入同比", dataset_ids=("sales_dataset",)
+        ),
+        actor_id="user-1",
+    )
+    assert response.state is QueryState.COMPLETED
+
+    projected = _ordinary_query_projection(response)
+    assert projected["data"]["columns"] == ["月份", "同比"]
+    # 派生时间维（DATE_TRUNC）是分组轴，比率列是数值系列且标记为增长率。
+    assert projected["visualization"]["x"] == "月份"
+    assert projected["visualization"]["y"] == ["同比"]
+    assert projected["visualization"]["y_formats"] == ["delta"]

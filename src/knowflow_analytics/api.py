@@ -147,10 +147,17 @@ def _ordinary_query_projection(response: QueryResponse) -> dict[str, Any]:
             )
         ),
     }
+    # 服务端按结果列逐位给出的展示名优先：textual 路径的结果列是 SQL 别名
+    # （RATIO_OVER("净收入") AS "同比"），只按语义 ID 查会整列退化成「结果列 N」。
+    served_labels = dict(
+        zip(response.data.columns, response.column_labels, strict=False)
+    )
     columns = []
     seen: dict[str, int] = {}
     for index, column in enumerate(response.data.columns, start=1):
-        label = column_labels.get(column, f"结果列 {index}")
+        label = (
+            column_labels.get(column) or served_labels.get(column) or f"结果列 {index}"
+        )
         seen[label] = seen.get(label, 0) + 1
         columns.append(label if seen[label] == 1 else f"{label} ({seen[label]})")
     payload.update(
@@ -204,12 +211,12 @@ def _ordinary_visualization(
     x_id = source.get("x")
     raw_y = source.get("y")
     y_ids = raw_y if isinstance(raw_y, (list, tuple)) else ()
-    raw_units = source.get("y_units")
-    y_units_by_id = (
-        dict(zip(y_ids, raw_units, strict=False))
-        if isinstance(raw_units, (list, tuple))
-        else {}
-    )
+    def aligned(key: str) -> dict[str, Any]:
+        raw = source.get(key)
+        return dict(zip(y_ids, raw, strict=False)) if isinstance(raw, (list, tuple)) else {}
+
+    y_units_by_id = aligned("y_units")
+    y_formats_by_id = aligned("y_formats")
     kept = [
         item for item in y_ids if isinstance(item, str) and item in label_by_source_column
     ]
@@ -220,6 +227,11 @@ def _ordinary_visualization(
         # 与 y 逐位对齐的展示单位；非字符串一律置 None。
         "y_units": [
             unit if isinstance(unit := y_units_by_id.get(item), str) else None
+            for item in kept
+        ],
+        # 与 y 逐位对齐的数值形态；未知一律按常规数值。
+        "y_formats": [
+            fmt if (fmt := y_formats_by_id.get(item)) in {"number", "percent", "delta"} else "number"
             for item in kept
         ],
     }

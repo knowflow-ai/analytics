@@ -430,6 +430,11 @@ class CompletedQueryResponse(QueryResponseBase):
     # Empty when the caller context cannot bind a token (no actor) or the
     # dataset has no remaining governed members.
     drilldown: tuple[DrilldownOption, ...] = ()
+    # Display label per result column, positionally aligned with
+    # ``data.columns``.  The textual path emits the SQL alias as the result
+    # column (``RATIO_OVER("净收入") AS "同比"`` yields ``同比``), so mapping
+    # result columns through semantic IDs alone degrades them to "结果列 N".
+    column_labels: tuple[str, ...] = ()
     parsed_s2sql: str
     corrected_s2sql: str
     physical_sql: str | None = None

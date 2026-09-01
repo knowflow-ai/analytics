@@ -16,6 +16,7 @@ from typing import Protocol
 from knowflow_analytics.catalog.store import PublishedRelease
 from knowflow_analytics.contracts import (
     FilterOperator,
+    OutputColumn,
     QueryFilter,
     QueryResult,
     SemanticQuery,
@@ -1846,8 +1847,9 @@ class AnalyticsQueryService:
                 ),
                 data=result,
                 visualization=self._visualization(
-                    release, translated.audit_query, corrected.corrected_s2sql
+                    release, translated.audit_query, corrected.corrected_s2sql, physical.columns
                 ),
+                column_labels=self._column_labels(release, physical.columns),
                 semantic_query=translated.audit_query,
                 resolved_by_llm=resolved_by_llm,
                 semantic_decisions=semantic_decisions,
@@ -2104,8 +2106,9 @@ class AnalyticsQueryService:
                 ),
                 data=result,
                 visualization=self._visualization(
-                    release, corrected.semantic_query, corrected.canonical_s2sql
+                    release, corrected.semantic_query, corrected.canonical_s2sql, physical.columns
                 ),
+                column_labels=self._column_labels(release, physical.columns),
                 semantic_query=corrected.semantic_query,
                 drilldown=self._drilldown_options(
                     release=release,
@@ -4837,16 +4840,22 @@ class AnalyticsQueryService:
         release: SemanticRelease,
         query: SemanticQuery,
         s2sql: str = "",
+        output_columns: tuple[OutputColumn, ...] = (),
     ) -> dict[str, object]:
         dimensions = {item.id: item for item in release.dimensions}
+        # 期间比是增长率 (current - previous) / previous：可为负、可超 100%，
+        # 与 0..1 的占比是两种量。RATIO_* 是受治理保留函数名，corrected_s2sql
+        # 是权威文本，出现即语义成立。
+        upper = s2sql.upper()
+        is_period_ratio = "RATIO_OVER(" in upper or "RATIO_ROLL(" in upper
+        is_share = "RATIO_TO_TOTAL(" in upper
         # QueryType.DETAIL represents field selection rather than an
         # aggregate chart query (common/.../pojo/enums/QueryType.java).
         if query.query_type.value == "detail":
             chart = "table"
-        elif not query.dimension_ids and "RATIO_TO_TOTAL(" in s2sql:
-            # 组内占比且无分组：单个 0..1 比例值。RATIO_TO_TOTAL 是受治理
-            # 保留函数名，corrected_s2sql 权威文本中出现即语义成立；输出列
-            # 仍叫指标原名（「净金额」），下游无法从列名/数值可靠判定占比。
+        elif not query.dimension_ids and is_share:
+            # 组内占比且无分组：单个 0..1 比例值。输出列仍叫指标原名
+            # （「净金额」），下游无法从列名或数值可靠判定占比。
             chart = "ratio"
         elif any(dimensions[item].semantic_type == "time" for item in query.dimension_ids):
             chart = "line"
@@ -4854,14 +4863,56 @@ class AnalyticsQueryService:
             chart = "bar"
         else:
             chart = "table"
+
         units = {item.id: item.unit for item in release.metrics}
+        # 轴与系列一律用结果列标识：textual 路径下结果列是 SQL 别名，
+        # 与语义 ID 不同名，用语义 ID 会在投影层整体失配。
+        if output_columns:
+            dimension_columns = [item for item in output_columns if item.kind == "dimension"]
+            value_columns = [
+                item for item in output_columns if item.kind in {"metric", "calculation"}
+            ]
+            x_id = dimension_columns[0].element_id if dimension_columns else None
+            y_ids = [item.element_id for item in value_columns]
+            y_units = [units.get(item.element_id) for item in value_columns]
+            y_formats = [
+                "delta"
+                if is_period_ratio and item.kind == "calculation"
+                else "percent"
+                if is_share and item.kind == "calculation"
+                else "number"
+                for item in value_columns
+            ]
+        else:
+            x_id = query.dimension_ids[0] if query.dimension_ids else None
+            y_ids = list(query.metric_ids)
+            y_units = [units.get(metric_id) for metric_id in query.metric_ids]
+            y_formats = ["number"] * len(y_ids)
         return {
             "type": chart,
-            "x": query.dimension_ids[0] if query.dimension_ids else None,
-            "y": query.metric_ids,
+            "x": x_id,
+            "y": tuple(y_ids),
             # 与 y 逐位对齐的展示单位（「元」「件」…），无单位为 None。
-            "y_units": [units.get(metric_id) for metric_id in query.metric_ids],
+            "y_units": y_units,
+            # 与 y 逐位对齐的数值形态：number 常规、percent 占比、delta 增长率。
+            "y_formats": y_formats,
         }
+
+    @staticmethod
+    def _column_labels(
+        release: SemanticRelease,
+        output_columns: tuple[OutputColumn, ...],
+    ) -> tuple[str, ...]:
+        """结果列的展示名：受治理成员用治理名，计算列用 S2SQL 里的业务别名。
+
+        别名由模型在只含业务名的 S2SQL 里书写，与问句用词同级，不含物理名。
+        """
+
+        governed = {item.id: item.name for item in release.dimensions}
+        governed.update({item.id: item.name for item in release.metrics})
+        return tuple(
+            governed.get(item.element_id) or item.name for item in output_columns
+        )
 
     @staticmethod
     def _failed_without_release(

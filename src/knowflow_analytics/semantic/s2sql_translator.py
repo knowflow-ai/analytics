@@ -1782,11 +1782,19 @@ def _output_columns(statement: _QueryStatement) -> tuple[OutputColumn, ...]:
             element_id = projection.alias.strip() if projection.alias else ""
             if not element_id or len(element_id) > 256 or element_id in used_ids:
                 element_id = f"expression:{index}"
+            # 只引用维度且不含聚合的表达式（DATE_TRUNC('month', "下单日期")）
+            # 是派生维度——SQL 里它也确实落在 GROUP BY 上。分成 dimension 让
+            # 下游能把它当分组轴，而不是当成一条数值系列。
+            derived_dimension = (
+                bool(semantic_ids)
+                and all(pair[0] == "dimension" for pair in semantic_ids)
+                and original_projection.find(exp.AggFunc) is None
+            )
             results.append(
                 OutputColumn(
                     element_id=element_id,
                     name=projection.alias or f"计算列{index + 1}",
-                    kind="calculation",
+                    kind="dimension" if derived_dimension else "calculation",
                 )
             )
             used_ids.add(element_id)

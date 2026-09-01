@@ -4901,6 +4901,13 @@ class AnalyticsQueryService:
             if len(dimension_columns) > 2 or (series_id and len(value_columns) > 1):
                 chart = "table"
             x_id = x_column.element_id if x_column is not None else None
+            x_is_time = x_column is not None and (
+                x_column.time_grain is not None
+                or (
+                    x_column.element_id in dimensions
+                    and dimensions[x_column.element_id].semantic_type == "time"
+                )
+            )
             y_ids = [item.element_id for item in value_columns]
             y_units = [units.get(item.element_id) for item in value_columns]
             # 只有比率列按百分比展示。与它并列的 SUM(指标) 也是 calculation，
@@ -4915,6 +4922,9 @@ class AnalyticsQueryService:
             ]
         else:
             x_id = query.dimension_ids[0] if query.dimension_ids else None
+            x_is_time = bool(
+                x_id in dimensions and dimensions[x_id].semantic_type == "time"
+            )
             series_id = None
             y_ids = list(query.metric_ids)
             y_units = [units.get(metric_id) for metric_id in query.metric_ids]
@@ -4924,6 +4934,9 @@ class AnalyticsQueryService:
             "x": x_id,
             # 分组系列所在的结果列；为空表示系列即指标本身。
             "series": series_id,
+            # 横轴是否时间：前端据此用时间刻度，让一年的空档显示成一年，
+            # 而不是与相邻一天等宽（类目轴等距会歪曲时距）。
+            "x_time": x_is_time,
             "y": tuple(y_ids),
             # 与 y 逐位对齐的展示单位（「元」「件」…），无单位为 None。
             "y_units": y_units,

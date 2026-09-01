@@ -260,6 +260,7 @@ def _ordinary_visualization(
         "series": (
             label_by_source_column.get(series_id) if isinstance(series_id, str) else None
         ),
+        "x_time": bool(source.get("x_time")),
         "y": [label_by_source_column[item] for item in kept],
         # 与 y 逐位对齐的展示单位；非字符串一律置 None。
         "y_units": [

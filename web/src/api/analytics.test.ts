@@ -264,16 +264,71 @@ describe('问数项目授权（仅嵌入版可见，接口走宿主路径）', (
     expect(options).toBeUndefined();
   });
 
-  it('三类主体各自的检索路径', async () => {
+  it('三类主体的查询参数名各不相同，不能套一个通用的 keyword', async () => {
     requestMock.mockResolvedValue([]);
     await searchGrantSubjects('user', '张');
-    await searchGrantSubjects('org', '');
+    await searchGrantSubjects('org', '销售');
     await searchGrantSubjects('group', 'a b');
+    await searchGrantSubjects('user', '');
 
     expect(requestMock.mock.calls.map((call) => call[0])).toEqual([
-      '/v1/kb_folder/subjects/users?keyword=%E5%BC%A0',
-      '/v1/kb_folder/subjects/orgs',
-      '/v1/kb_folder/subjects/groups?keyword=a%20b',
+      '/v1/kb_folder/subjects/users?username=%E5%BC%A0',
+      '/v1/kb_folder/subjects/orgs?keyword=%E9%94%80%E5%94%AE',
+      '/v1/kb_folder/subjects/groups?name=a%20b',
+      // 空关键词不带参数（与知识库授权面板一致）。
+      '/v1/kb_folder/subjects/users',
+    ]);
+  });
+
+  it('宿主接口带 {code,data} 信封，必须剥一层——否则看起来就是"接口没数据"', async () => {
+    // client 不解包响应：核心接口没有信封，宿主接口有。
+    requestMock.mockResolvedValue({
+      code: 0,
+      message: 'ok',
+      data: { list: [{ id: 'u1', username: 'zhang' }] },
+    });
+    expect(await searchGrantSubjects('user', '')).toEqual([
+      { id: 'u1', name: 'zhang' },
+    ]);
+
+    requestMock.mockResolvedValue({
+      code: 0,
+      data: { users: [{ user_id: 'u1', role_code: 'viewer' }], orgs: [], groups: [] },
+    });
+    expect((await listProjectGrants('prj_1')).users).toEqual([
+      { user_id: 'u1', role_code: 'viewer' },
+    ]);
+
+    // 没有信封时原样解析，两种形态都要能吃。
+    requestMock.mockResolvedValue({ list: [{ id: 'u2', username: 'li' }] });
+    expect(await searchGrantSubjects('user', '')).toEqual([{ id: 'u2', name: 'li' }]);
+  });
+
+  it('用户与协作组从 list 里取，组织是树要递归拍平', async () => {
+    requestMock.mockResolvedValue({
+      list: [
+        { id: 'u1', nickname: '张三', username: 'zhang', email: 'z@x.com' },
+        { id: 'u2', username: 'lisi' },
+        { id: '', username: '没有 id 的丢弃' },
+      ],
+    });
+    expect(await searchGrantSubjects('user', '')).toEqual([
+      { id: 'u1', name: '张三' },
+      { id: 'u2', name: 'lisi' },
+    ]);
+
+    // 组织返回树，子级按层级缩进；扁平解析会整棵丢掉子组织。
+    requestMock.mockResolvedValue([
+      { id: 'o1', name: '总部', children: [{ id: 'o2', name: '华东', children: [] }] },
+    ]);
+    expect(await searchGrantSubjects('org', '')).toEqual([
+      { id: 'o1', name: '总部' },
+      { id: 'o2', name: '\u3000华东' },
+    ]);
+
+    requestMock.mockResolvedValue({ list: [{ id: 'g1', name: '数据组' }] });
+    expect(await searchGrantSubjects('group', '')).toEqual([
+      { id: 'g1', name: '数据组' },
     ]);
   });
 });

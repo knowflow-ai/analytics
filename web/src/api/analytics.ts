@@ -643,6 +643,10 @@ export const exportQueryDiagnostic = (projectId: string, queryId: string) =>
 // --- 问数项目授权（仅嵌入版；开源独立版不提供多用户 RBAC）-------------------
 // 走宿主路径而非核心：授权是商业版能力，核心不认识授权。client 的 rewritePath
 // 只改写 /v1/analytics/ 开头的路径，宿主路径原样发出并自带鉴权头。
+//
+// 注意信封差异：client 不解包响应，直接返回整个 payload。核心接口没有信封，
+// 宿主接口有 `{code, data, message}`——所以这里必须自己剥一层，否则拿到的是
+// 信封本身，看起来就是"接口没数据"。
 
 export type GrantSubjectType = 'user' | 'org' | 'group';
 export type ProjectRole = 'admin' | 'editor' | 'viewer';
@@ -655,10 +659,18 @@ export interface ProjectGrants {
 
 const HOST_GRANT_BASE = '/v1/kb_folder';
 
-export const listProjectGrants = (projectId: string) =>
-  request<ProjectGrants>(
-    `${HOST_GRANT_BASE}/analytics_project_grants?project_id=${encodeURIComponent(projectId)}`,
-  );
+export const listProjectGrants = async (projectId: string): Promise<ProjectGrants> => {
+  const data = hostPayload(
+    await request<unknown>(
+      `${HOST_GRANT_BASE}/analytics_project_grants?project_id=${encodeURIComponent(projectId)}`,
+    ),
+  ) as Partial<ProjectGrants> | null;
+  return {
+    users: data?.users ?? [],
+    orgs: data?.orgs ?? [],
+    groups: data?.groups ?? [],
+  };
+};
 
 export const grantProject = (
   projectId: string,
@@ -678,10 +690,75 @@ export const revokeProject = (
     body: { project_id: projectId, ...body },
   });
 
-/** 授权面板的主体数据源（宿主转发 knowflow）。 */
-export const searchGrantSubjects = (kind: GrantSubjectType, keyword: string) => {
-  const path =
-    kind === 'user' ? 'users' : kind === 'org' ? 'orgs' : 'groups';
-  const query = keyword ? `?keyword=${encodeURIComponent(keyword)}` : '';
-  return request<unknown>(`${HOST_GRANT_BASE}/subjects/${path}${query}`);
-};
+export interface GrantSubjectOption {
+  id: string;
+  name: string;
+}
+
+/** 宿主接口统一是 `{code, data, message}`；核心接口没有信封。 */
+function hostPayload(response: unknown): unknown {
+  if (response && typeof response === 'object' && 'code' in response) {
+    return (response as { data?: unknown }).data;
+  }
+  return response;
+}
+
+/** 组织是一棵树，按层级缩进拍平（与知识库授权面板同一处理）。 */
+function flattenOrgTree(nodes: unknown, depth = 0): GrantSubjectOption[] {
+  const out: GrantSubjectOption[] = [];
+  for (const node of Array.isArray(nodes) ? nodes : []) {
+    const item = node as { id?: unknown; name?: unknown; children?: unknown };
+    if (item.id === undefined || item.id === null) continue;
+    out.push({
+      id: String(item.id),
+      name: `${'\u3000'.repeat(depth)}${String(item.name ?? item.id)}`,
+    });
+    out.push(...flattenOrgTree(item.children, depth + 1));
+  }
+  return out;
+}
+
+/**
+ * 授权面板的主体数据源（宿主转发 knowflow），与知识库授权面板复用同一组接口。
+ *
+ * 三类主体的查询参数与返回结构各不相同，必须逐类处理，不能套一个通用解析：
+ * 用户 `username=`、组织 `keyword=`、协作组 `name=`；用户与协作组返回
+ * `{list:[...]}`（或直接是数组），组织返回**树**、需要递归拍平。
+ */
+export async function searchGrantSubjects(
+  kind: GrantSubjectType,
+  keyword: string,
+): Promise<GrantSubjectOption[]> {
+  const query = (name: string) =>
+    keyword ? `?${name}=${encodeURIComponent(keyword)}` : '';
+
+  if (kind === 'org') {
+    const data = hostPayload(
+      await request<unknown>(`${HOST_GRANT_BASE}/subjects/orgs${query('keyword')}`),
+    );
+    return flattenOrgTree(data);
+  }
+
+  const path = kind === 'user' ? 'users' : 'groups';
+  const data = hostPayload(
+    await request<unknown>(
+      `${HOST_GRANT_BASE}/subjects/${path}${query(kind === 'user' ? 'username' : 'name')}`,
+    ),
+  );
+  const rows = Array.isArray(data)
+    ? data
+    : Array.isArray((data as { list?: unknown[] })?.list)
+      ? ((data as { list: unknown[] }).list ?? [])
+      : [];
+  return rows
+    .map((row) => {
+      const item = row as Record<string, unknown>;
+      const id = item.id ?? '';
+      const name =
+        kind === 'user'
+          ? (item.nickname ?? item.username ?? item.email ?? id)
+          : (item.name ?? id);
+      return { id: String(id), name: String(name) };
+    })
+    .filter((item) => item.id);
+}

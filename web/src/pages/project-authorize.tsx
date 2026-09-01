@@ -6,6 +6,7 @@ import {
   listProjectGrants,
   revokeProject,
   searchGrantSubjects,
+  type GrantSubjectOption,
   type GrantSubjectType,
   type ProjectRole,
 } from '@analytics/api/analytics';
@@ -32,34 +33,6 @@ const ROLES: ReadonlyArray<{ key: ProjectRole; label: string; hint: string }> = 
   { key: 'editor', label: '可建模', hint: '在可提问之上，还能修改语义模型' },
   { key: 'admin', label: '可管理', hint: '在可建模之上，还能管理该项目' },
 ];
-
-interface SubjectOption {
-  id: string;
-  name: string;
-}
-
-/** 三类主体的返回结构不同，这里统一成 {id,name}——差异不该渗进 UI。 */
-function toOptions(payload: unknown): SubjectOption[] {
-  const rows = Array.isArray(payload)
-    ? payload
-    : Array.isArray((payload as { items?: unknown[] })?.items)
-      ? ((payload as { items: unknown[] }).items ?? [])
-      : Array.isArray((payload as { data?: unknown[] })?.data)
-        ? ((payload as { data: unknown[] }).data ?? [])
-        : [];
-  return rows
-    .map((row) => {
-      const item = row as Record<string, unknown>;
-      const id = String(
-        item.id ?? item.user_id ?? item.org_unit_id ?? item.group_id ?? '',
-      );
-      const name = String(
-        item.name ?? item.username ?? item.nickname ?? item.email ?? id,
-      );
-      return { id, name };
-    })
-    .filter((item) => item.id);
-}
 
 /**
  * 问数项目授权：把用户/组织/协作组授权到一个项目（= 一套语义模型）。
@@ -95,14 +68,14 @@ export function ProjectAuthorizeDialog({
   });
   const subjects = useQuery({
     queryKey: ['analytics-grant-subjects', kind, keyword],
-    queryFn: async () => toOptions(await searchGrantSubjects(kind, keyword)),
+    queryFn: () => searchGrantSubjects(kind, keyword),
     enabled: open,
   });
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: grantsKey });
 
   const add = useMutation({
-    mutationFn: (subject: SubjectOption) =>
+    mutationFn: (subject: GrantSubjectOption) =>
       grantProject(projectId, {
         subject_type: kind,
         subject_id: subject.id,

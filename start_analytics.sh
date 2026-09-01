@@ -83,6 +83,12 @@ export KNOWFLOW_ANALYTICS_CONFIRMATION_MEMORY_TTL_SECONDS="$(local_setting KNOWF
 # 问数「执行过程」要给出真正执行的物理 SQL 才谈得上可确认。关闭时物理 SQL 在
 # 查询当时就不写入诊断产物（历史轮无法补看），过程面板只到业务名 S2SQL 为止。
 export KNOWFLOW_ANALYTICS_ALLOW_DEBUG_SQL="$(local_setting KNOWFLOW_ANALYTICS_ALLOW_DEBUG_SQL true)"
+# 多轮改写：追问继承上一轮的口径。实测（2026-09-01，rel_72ffa832）同一会话里
+# 「华东的净金额」→「按渠道拆分」得到 渠道×净金额；新会话问同一句只能回落到
+# 默认计数指标 订单数量。代价是有上一轮成功记录时每轮多一次模型调用。
+# 已知边界：改写发生在候选选中之后，「那环比呢」这类映射不到任何语义对象的
+# 纯指代追问仍会 NO_SEMANTIC_MAPPING，改写救不了。
+export KNOWFLOW_ANALYTICS_MULTI_TURN_ENABLED="$(local_setting KNOWFLOW_ANALYTICS_MULTI_TURN_ENABLED true)"
 
 if lsof -ti ":$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
   die "端口 $PORT 已被占用，先停止旧进程：kill \$(lsof -ti :$PORT -sTCP:LISTEN)"

@@ -892,3 +892,45 @@ def test_streaming_query_rejects_a_foreign_project():
     )
 
     assert response.status_code == 403
+
+
+class _ConfirmationSuggestionApplication(_FakeApplication):
+    def list_confirmation_suggestions(self, *, project_id, actor_id):
+        from datetime import UTC, datetime
+
+        from knowflow_analytics.query.confirmation_memory import ConfirmationSuggestion
+
+        assert project_id == "sales"
+        assert actor_id == "actor-1"
+        return (
+            ConfirmationSuggestion(
+                id="csug_1",
+                detected_text="销售额",
+                selection_kind="metric",
+                semantic_element_id="net_revenue",
+                dataset_id="sales_dataset",
+                confirmation_count=3,
+                latest_confirmed_at=datetime(2026, 9, 1, tzinfo=UTC),
+            ),
+        )
+
+
+def test_confirmation_suggestions_expose_the_target_element_to_the_modeling_surface():
+    """建模面要一键把说法采纳成该元素的别名，只给说法不给目标就只能看不能做。
+
+    这是建模 API；零泄漏合同约束的是问数普通 wire。作用域标识仍不外泄。
+    """
+
+    client = _client(_ConfirmationSuggestionApplication())
+
+    response = client.get(
+        "/v1/analytics/projects/sales/confirmation-suggestions", headers=_HEADERS
+    )
+
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["detected_text"] == "销售额"
+    assert item["semantic_element_id"] == "net_revenue"
+    assert item["confirmation_count"] == 3
+    # 作用域标识不进建模投影：采纳别名不需要知道它落在哪个 Scope。
+    assert "dataset_id" not in item

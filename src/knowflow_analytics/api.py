@@ -2164,6 +2164,11 @@ def create_api(
                     "id": item.id,
                     "detected_text": item.detected_text,
                     "selection_kind": item.selection_kind,
+                    # 建模面要据此把「用户反复确认的说法」一键采纳为该元素的别名；
+                    # 不给 ID 就只能看不能做。这是建模 API，不是问数普通 wire——
+                    # 零泄漏合同约束的是后者，建模工作台本来就在编辑这些语义对象。
+                    # 业务名由建模端从已加载的目录解析，核心不重复维护一份。
+                    "semantic_element_id": item.semantic_element_id,
                     "confirmation_count": item.confirmation_count,
                     "latest_confirmed_at": item.latest_confirmed_at.isoformat(),
                     "status": item.status,

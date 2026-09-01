@@ -24,6 +24,7 @@ from sqlalchemy import (
     select,
     update,
 )
+from sqlalchemy import true as sa_true
 from sqlalchemy.exc import IntegrityError
 
 from knowflow_analytics.contracts import FrozenModel, SemanticRelease
@@ -414,11 +415,14 @@ class CatalogStore:
             )
         return record
 
-    def list_projects(self, *, id_prefix: str, limit: int = 200) -> tuple[ProjectRecord, ...]:
-        """按 id 前缀列项目，最新在前。
+    def list_projects(
+        self, *, id_prefix: str | None = None, limit: int = 200
+    ) -> tuple[ProjectRecord, ...]:
+        """按 id 前缀列项目，最新在前；``id_prefix`` 为空则列全部。
 
         项目归属不在本服务：BFF 把 actor 的 HMAC 标签编进 id 前缀
-        （prj_u{owner}_{nonce}），这里只按前缀过滤，不认识 actor。
+        （prj_u{owner}_{nonce}），这里只按前缀过滤，不认识 actor。列全部是给
+        BFF 做资源授权过滤用的候选集（与知识库列表同模式），本服务不做授权判断。
         """
 
         with self._engine.connect() as connection:
@@ -430,7 +434,11 @@ class CatalogStore:
                         projects.c.active_release_id,
                         projects.c.created_at,
                     )
-                    .where(projects.c.id.like(f"{id_prefix}%"))
+                    .where(
+                        projects.c.id.like(f"{id_prefix}%")
+                        if id_prefix
+                        else sa_true()
+                    )
                     .order_by(projects.c.created_at.desc())
                     .limit(limit)
                 )

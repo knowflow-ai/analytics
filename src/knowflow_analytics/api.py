@@ -889,10 +889,16 @@ def create_api(
     @app.get("/v1/analytics/projects")
     def list_projects(
         request_context: Context,
-        id_prefix: Annotated[str, Query(min_length=1, max_length=64)],
+        id_prefix: Annotated[str | None, Query(min_length=1, max_length=64)] = None,
         limit: Annotated[int, Query(ge=1, le=500)] = 200,
     ):
-        """退出项目后此前从 UI 上不可达，只靠 sessionStorage。"""
+        """退出项目后此前从 UI 上不可达，只靠 sessionStorage。
+
+        ``id_prefix`` 省略时返回全部项目：调用方（宿主 BFF）据此做资源授权过滤，
+        与知识库列表"先列候选、再 batch_check"同一模式。核心不认识授权，只负责
+        把候选交出去；本端点需要服务令牌，浏览器无法直达（core 直通道的路径正则
+        要求 ``projects/{prj_id}/...``，列表路径匹配不上）。
+        """
 
         return {
             "items": [

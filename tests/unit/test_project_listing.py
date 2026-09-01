@@ -50,6 +50,24 @@ def test_projects_are_listed_by_owner_prefix_newest_first(sales_catalog):
     assert [item.name for item in listed] == ["新的", "旧的"]
 
 
+def test_listing_without_a_prefix_returns_every_project(sales_catalog):
+    """省略前缀 = 交出全部候选，供宿主 BFF 做资源授权过滤。
+
+    与知识库列表同模式（先列候选、再 batch_check）。本服务不认识授权，也不做
+    授权判断；端点需要服务令牌，浏览器无法直达。
+    """
+
+    store = _store()
+    store.create_project(project_id="prj_uaaaaaaaaaaaaaaaaaaaa_" + "1" * 32, name="我的")
+    store.create_project(project_id="prj_ubbbbbbbbbbbbbbbbbbbb_" + "3" * 32, name="别人的")
+
+    assert {item.name for item in store.list_projects()} == {"我的", "别人的"}
+    # 传了前缀就仍然只给该前缀的。
+    assert {
+        item.name for item in store.list_projects(id_prefix="prj_ubbbbbbbbbbbbbbbbbbbb_")
+    } == {"别人的"}
+
+
 def test_listing_carries_the_latest_revision_so_the_ui_can_open_it(sales_catalog):
     """打开项目要从最近更新的 revision 进入；没有单独的 revision 列表接口，
     所以列表自己带上它，前端一次调用就能打开。"""

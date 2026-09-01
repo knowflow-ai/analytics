@@ -3173,7 +3173,7 @@ class AnalyticsApplication:
         self.catalog.save_golden_suite(record)
         return record
 
-    def list_projects(self, *, id_prefix: str, limit: int = 200):
+    def list_projects(self, *, id_prefix: str | None = None, limit: int = 200):
         return self.catalog.list_projects(id_prefix=id_prefix, limit=limit)
 
     def list_releases(self, project_id: str, *, limit: int = 50):

@@ -791,6 +791,7 @@ def test_detail_measure_filter_is_explained_with_business_names(
         "type": "table",
         "x": None,
         "y": ("refund_amount",),
+        "y_units": [None],
     }
 
 

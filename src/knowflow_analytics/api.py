@@ -204,13 +204,23 @@ def _ordinary_visualization(
     x_id = source.get("x")
     raw_y = source.get("y")
     y_ids = raw_y if isinstance(raw_y, (list, tuple)) else ()
+    raw_units = source.get("y_units")
+    y_units_by_id = (
+        dict(zip(y_ids, raw_units, strict=False))
+        if isinstance(raw_units, (list, tuple))
+        else {}
+    )
+    kept = [
+        item for item in y_ids if isinstance(item, str) and item in label_by_source_column
+    ]
     return {
         "type": chart_type if isinstance(chart_type, str) else "table",
         "x": label_by_source_column.get(x_id) if isinstance(x_id, str) else None,
-        "y": [
-            label_by_source_column[item]
-            for item in y_ids
-            if isinstance(item, str) and item in label_by_source_column
+        "y": [label_by_source_column[item] for item in kept],
+        # 与 y 逐位对齐的展示单位；非字符串一律置 None。
+        "y_units": [
+            unit if isinstance(unit := y_units_by_id.get(item), str) else None
+            for item in kept
         ],
     }
 

@@ -4854,10 +4854,13 @@ class AnalyticsQueryService:
             chart = "bar"
         else:
             chart = "table"
+        units = {item.id: item.unit for item in release.metrics}
         return {
             "type": chart,
             "x": query.dimension_ids[0] if query.dimension_ids else None,
             "y": query.metric_ids,
+            # 与 y 逐位对齐的展示单位（「元」「件」…），无单位为 None。
+            "y_units": [units.get(metric_id) for metric_id in query.metric_ids],
         }
 
     @staticmethod

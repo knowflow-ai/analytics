@@ -322,6 +322,7 @@ def test_ordinary_query_projection_contains_business_output_but_no_scope_or_sql(
             "type": "bar",
             "x": "dimension:region",
             "y": ["metric:net_amount", "metric:not_in_columns"],
+            "y_units": ["元", "件"],
         },
         semantic_query=SemanticQuery(
             dataset_id="dataset:orders",
@@ -348,7 +349,12 @@ def test_ordinary_query_projection_contains_business_output_but_no_scope_or_sql(
     assert projected["trace"][0]["detail"] == {}
     # Chart axes are re-expressed as the shipped column labels; an element
     # missing from the result columns is dropped instead of leaking its ID.
-    assert projected["visualization"] == {"type": "bar", "x": "地区", "y": ["订单净金额"]}
+    assert projected["visualization"] == {
+        "type": "bar",
+        "x": "地区",
+        "y": ["订单净金额"],
+        "y_units": ["元"],
+    }
     # Drilldown ships the opaque token and the governed label only.
     assert projected["drilldown"] == [
         {
@@ -399,7 +405,7 @@ def test_ordinary_query_projection_defaults_empty_visualization_to_table():
 
     projected = _ordinary_query_projection(response)
 
-    assert projected["visualization"] == {"type": "table", "x": None, "y": []}
+    assert projected["visualization"] == {"type": "table", "x": None, "y": [], "y_units": []}
 
 
 def test_ordinary_failed_projection_does_not_expose_database_error_text():

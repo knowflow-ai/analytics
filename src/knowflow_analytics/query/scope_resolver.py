@@ -17,11 +17,13 @@ from typing import Protocol
 
 from knowflow_analytics.contracts import (
     AnalysisTopicRouteSpec,
+    Cardinality,
     DatasetSpec,
     DimensionSpec,
     DimensionValueSpec,
     FrozenModel,
     MetricSpec,
+    RelationSpec,
     SemanticRelease,
 )
 
@@ -111,12 +113,14 @@ class QueryScopeResolver:
         metrics: Iterable[MetricSpec],
         dimensions: Iterable[DimensionSpec],
         values: Iterable[DimensionValueSpec],
+        relations: Iterable[RelationSpec] = (),
     ) -> None:
         self._datasets = _index_by_id(datasets, label="dataset")
         self._routes = _index_by_dataset_id(routes)
         self._metrics = _index_by_id(metrics, label="metric")
         self._dimensions = _index_by_id(dimensions, label="dimension")
         self._values = _index_by_id(values, label="dimension value")
+        self._relations = {item.id: item for item in relations}
 
     @classmethod
     def from_release(cls, release: SemanticRelease) -> QueryScopeResolver:
@@ -126,6 +130,7 @@ class QueryScopeResolver:
             metrics=release.metrics,
             dimensions=release.dimensions,
             values=release.dimension_values,
+            relations=release.relations,
         )
 
     def resolve(
@@ -631,6 +636,102 @@ class QueryScopeResolver:
             anchors=anchor_dataset_ids,
         )
 
+    def _has_business_metric(self, dataset_id: str) -> bool:
+        """该 scope 是否拥有默认计数之外的业务指标。
+
+        事实→实体的关系（订单→客户）与明细→主表（订单明细→订单）在
+        many_to_one 形态上不可区分；区分信号是收敛目标必须是真正的事实
+        分析对象——只有实体计数的 scope（「客户范围」）不作为收敛去向。
+        """
+
+        dataset = self._datasets.get(dataset_id)
+        route = self._routes.get(dataset_id)
+        if dataset is None:
+            return False
+        default_count = route.default_count_metric_id if route is not None else None
+        return any(metric_id != default_count for metric_id in dataset.metric_ids)
+
+    def _fine_to_coarse(self, fine_id: str, coarse_id: str) -> bool:
+        """细 scope 的事实根是否经冻结单跳从属于粗 scope 的事实根。
+
+        同一从属既可表达为 fine —many_to_one→ coarse，也可表达为
+        coarse —one_to_many→ fine，两种建模都要认。
+        """
+
+        fine_route = self._routes.get(fine_id)
+        coarse_route = self._routes.get(coarse_id)
+        if fine_route is None or coarse_route is None:
+            return False
+        for path in fine_route.paths:
+            if path.target_model_id != coarse_route.root_model_id:
+                continue
+            if len(path.relation_ids) != 1:
+                continue
+            relation = self._relations.get(path.relation_ids[0])
+            if relation is None:
+                continue
+            forward = (
+                relation.left_model_id == fine_route.root_model_id
+                and relation.right_model_id == coarse_route.root_model_id
+                and relation.cardinality is Cardinality.MANY_TO_ONE
+            )
+            backward = (
+                relation.left_model_id == coarse_route.root_model_id
+                and relation.right_model_id == fine_route.root_model_id
+                and relation.cardinality is Cardinality.ONE_TO_MANY
+            )
+            if forward or backward:
+                return True
+        return False
+
+    def _granularity_convergence(
+        self,
+        candidates: set[str],
+        evidence_element_ids: set[str],
+    ) -> str | None:
+        """粒度全序链上的确定性收敛（2026-08-31 评审）。
+
+        候选 scope 的事实根两两构成冻结 many_to_one 从属链（订单明细→订单）时，
+        选择能覆盖全部 exact 语义证据的最粗 scope：细粒度独有证据（「商品」）
+        自然落到细，谁都覆盖不了自然维持 fail-closed，零证据落最粗——粗粒度
+        无扇出，是没有提及明细实体时最保守的解释。不读问题文本、不比较任何
+        分数；非从属的多根（独立业务实体）不适用，保持原有澄清。
+        """
+
+        if len(candidates) < 2:
+            return None
+        ordered = sorted(candidates)
+        # 全序检查：任两个候选之间必须存在唯一方向的从属关系。
+        finer_than: dict[str, set[str]] = {item: set() for item in ordered}
+        for a in ordered:
+            for b in ordered:
+                if a == b:
+                    continue
+                a_fine = self._fine_to_coarse(a, b)
+                b_fine = self._fine_to_coarse(b, a)
+                if a_fine == b_fine:
+                    return None
+                if a_fine:
+                    finer_than[a].add(b)
+        # 按「比多少个候选更细」排序：0 个 = 最粗。
+        chain = sorted(ordered, key=lambda item: len(finer_than[item]))
+        if [len(finer_than[item]) for item in chain] != list(range(len(chain))):
+            return None
+        # 只收敛到链的最粗端：细粒度独有证据在候选构造阶段就已把粗 scope
+        # 排除，能走到多根歧义分支说明两端都可行——此时「没提明细」选粗是
+        # 唯一无扇出的保守解释。最粗端必须是真正的事实分析对象（有业务指标，
+        # 排除「客户范围」这类实体计数 scope——事实→实体的 many_to_one 与
+        # 明细→主表在关系形态上不可区分，这是唯一的结构区分信号），且能
+        # 覆盖全部精确证据；否则整体不适用，保持既有 fail-closed。
+        coarsest = chain[0]
+        dataset = self._datasets.get(coarsest)
+        if dataset is None or not self._has_business_metric(coarsest):
+            return None
+        members = set(dataset.metric_ids) | set(dataset.dimension_ids)
+        if evidence_element_ids <= members:
+            return coarsest
+        return None
+
     def _finish_scope_cardinality(
         self,
         *,
@@ -691,6 +792,24 @@ class QueryScopeResolver:
                     else "精确语义证据唯一确定了受治理查询作用域。"
                 ),
                 selected=selected,
+                candidates=candidates,
+                owners=owners,
+                exact_metric_ids=exact_metric_ids,
+                confirmed_metric_ids=confirmed_metric_ids,
+                ai_adjudicated_metric_ids=ai_adjudicated_metric_ids,
+                memory_confirmed_metric_ids=memory_confirmed_metric_ids,
+                exact_dimension_ids=exact_dimension_ids,
+                anchors=applied_anchors,
+            )
+        converged = self._granularity_convergence(
+            candidates, exact_metric_ids | exact_dimension_ids
+        )
+        if converged is not None:
+            return self._resolution(
+                status=QueryScopeResolutionStatus.SELECTED,
+                code="QUERY_SCOPE_GRANULARITY_CONVERGED",
+                message="候选作用域构成粒度从属链，已按覆盖全部精确语义证据的最粗粒度收敛。",
+                selected=converged,
                 candidates=candidates,
                 owners=owners,
                 exact_metric_ids=exact_metric_ids,

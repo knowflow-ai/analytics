@@ -8,10 +8,13 @@ from knowflow_analytics.contracts import (
     Aggregation,
     AnalysisTopicPathSpec,
     AnalysisTopicRouteSpec,
+    Cardinality,
     DatasetSpec,
     DimensionSpec,
     DimensionValueSpec,
     MetricSpec,
+    RelationCondition,
+    RelationSpec,
 )
 from knowflow_analytics.query.contracts import MatchMethod, SchemaMatch
 from knowflow_analytics.query.scope_resolver import (
@@ -1408,3 +1411,177 @@ def test_unreachable_dimension_is_not_reported_as_compilation_drift(
     assert resolution.status is QueryScopeResolutionStatus.REFUSED
     assert resolution.code == "DIMENSION_NOT_REACHABLE"
     assert resolution.owner_model_ids == ("platforms",)
+
+
+# ── 粒度全序链上的确定性收敛（2026-08-31 评审）─────────────────────────
+#
+# 「业务对象卡」在明细/主表双 scope 场景对用户不可理解：两个候选是同一
+# 业务的粗细两个粒度，不是两个业务。候选事实根构成冻结单跳从属链时，
+# 收敛到覆盖全部 exact 证据、且拥有业务指标的最粗 scope；事实→实体
+# （订单→客户范围）在 many_to_one 形态上与明细→主表不可区分，靠
+# 「最粗端必须有业务指标」排除。其余形态保持既有 fail-closed 澄清。
+
+
+def _granularity_resolver(
+    *,
+    relation: RelationSpec,
+    coarse_metric_ids: tuple[str, ...] = ("net_amount", "orders_count"),
+) -> QueryScopeResolver:
+    metrics = (
+        _metric("net_amount", owner="orders"),
+        _metric("orders_count", owner="orders"),
+        _metric("items_count", owner="order_items"),
+    )
+    dimensions = (
+        _dimension("region", model_id="orders"),
+        _dimension("product", model_id="order_items"),
+    )
+    datasets = (
+        DatasetSpec(
+            id="orders_scope",
+            name="订单分析",
+            model_ids=("orders",),
+            metric_ids=coarse_metric_ids,
+            dimension_ids=("region",),
+        ),
+        DatasetSpec(
+            id="items_scope",
+            name="订单明细分析",
+            model_ids=("order_items", "orders"),
+            metric_ids=("items_count",),
+            dimension_ids=("product", "region"),
+        ),
+    )
+    routes = (
+        AnalysisTopicRouteSpec(
+            dataset_id="orders_scope",
+            root_model_id="orders",
+            default_count_metric_id="orders_count",
+        ),
+        AnalysisTopicRouteSpec(
+            dataset_id="items_scope",
+            root_model_id="order_items",
+            default_count_metric_id="items_count",
+            paths=(
+                AnalysisTopicPathSpec(
+                    target_model_id="orders",
+                    relation_ids=(relation.id,),
+                ),
+            ),
+        ),
+    )
+    return QueryScopeResolver(
+        datasets=datasets,
+        routes=routes,
+        metrics=metrics,
+        dimensions=dimensions,
+        values=(),
+        relations=(relation,),
+    )
+
+
+def _items_orders_relation(*, backward: bool = False) -> RelationSpec:
+    condition = RelationCondition(
+        left_field_id="order_items.order_id" if not backward else "orders.id",
+        right_field_id="orders.id" if not backward else "order_items.order_id",
+    )
+    if backward:
+        return RelationSpec(
+            id="items_orders",
+            left_model_id="orders",
+            right_model_id="order_items",
+            cardinality=Cardinality.ONE_TO_MANY,
+            conditions=(condition,),
+        )
+    return RelationSpec(
+        id="items_orders",
+        left_model_id="order_items",
+        right_model_id="orders",
+        cardinality=Cardinality.MANY_TO_ONE,
+        conditions=(condition,),
+    )
+
+
+@pytest.mark.parametrize("backward", [False, True])
+def test_shared_dimension_converges_to_the_coarsest_fact_scope(
+    backward: bool,
+) -> None:
+    """两 scope 共享的维度证据不再出业务对象卡；两种关系建模方向都要认。"""
+
+    resolver = _granularity_resolver(
+        relation=_items_orders_relation(backward=backward)
+    )
+
+    resolution = resolver.resolve(
+        (_Evidence("dimension", "region", "地区"),)
+    )
+
+    assert resolution.status is QueryScopeResolutionStatus.SELECTED
+    assert resolution.code == "QUERY_SCOPE_GRANULARITY_CONVERGED"
+    assert resolution.selected_dataset_id == "orders_scope"
+
+
+def test_zero_exact_evidence_converges_to_the_coarsest_fact_scope() -> None:
+    """没提及任何精确成员：粗粒度无扇出，是最保守的唯一解释。"""
+
+    resolver = _granularity_resolver(relation=_items_orders_relation())
+
+    resolution = resolver.resolve(())
+
+    assert resolution.status is QueryScopeResolutionStatus.SELECTED
+    assert resolution.code == "QUERY_SCOPE_GRANULARITY_CONVERGED"
+    assert resolution.selected_dataset_id == "orders_scope"
+
+
+def test_fine_only_dimension_still_selects_the_fine_scope_directly() -> None:
+    """明细独有证据在候选构造阶段已排除粗 scope，不经过收敛分支。"""
+
+    resolver = _granularity_resolver(relation=_items_orders_relation())
+
+    resolution = resolver.resolve(
+        (_Evidence("dimension", "product", "商品"),)
+    )
+
+    assert resolution.status is QueryScopeResolutionStatus.SELECTED
+    assert resolution.code == "QUERY_SCOPE_SELECTED"
+    assert resolution.selected_dataset_id == "items_scope"
+
+
+def test_entity_count_scope_never_absorbs_the_query() -> None:
+    """事实→实体对（订单→客户范围）：最粗端只有实体计数，规则不适用。"""
+
+    resolver = _granularity_resolver(
+        relation=_items_orders_relation(),
+        coarse_metric_ids=("orders_count",),
+    )
+
+    resolution = resolver.resolve(
+        (_Evidence("dimension", "region", "地区"),)
+    )
+
+    assert resolution.status is QueryScopeResolutionStatus.CLARIFICATION
+    assert resolution.code == "AMBIGUOUS_QUERY_SCOPE"
+    assert resolution.selected_dataset_id is None
+
+
+def test_unrelated_fact_roots_keep_the_existing_clarification(
+    resolver: QueryScopeResolver,
+) -> None:
+    """非从属多根（订单/平台，无冻结关系）不受规则影响，零证据仍澄清。"""
+
+    resolution = resolver.resolve(())
+
+    assert resolution.status is QueryScopeResolutionStatus.CLARIFICATION
+    assert resolution.code == "AMBIGUOUS_QUERY_SCOPE"
+
+
+def test_convergence_refuses_a_coarse_scope_missing_the_evidence() -> None:
+    """安全网：最粗端覆盖不了全部精确证据时整体不适用（保持 fail-closed）。"""
+
+    resolver = _granularity_resolver(relation=_items_orders_relation())
+
+    converged = resolver._granularity_convergence(
+        {"orders_scope", "items_scope"}, {"product"}
+    )
+
+    assert converged is None

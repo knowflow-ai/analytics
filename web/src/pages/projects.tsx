@@ -1,11 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus } from 'lucide-react';
+import { Plus, UserPlus } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate } from '@analytics/lib/router';
 import { createProject, listProjects } from '@analytics/api/analytics';
 import type { AnalyticsProject } from '@analytics/api/types';
 import { Button, Dialog, Empty, Field, Input, Spinner, useToast } from '@analytics/components/ui';
 import { avatarGradientOf, avatarStripeOf } from '@analytics/lib/avatar-gradient';
+import { ProjectAuthorizeDialog } from './project-authorize';
 import { describeError, formatDateTime } from '@analytics/lib/labels';
 import { EDITION, appPath } from '@analytics/api/edition';
 import { projectGridTemplateColumns } from '@analytics/lib/layout';
@@ -16,15 +17,42 @@ export function projectStatusOf(project: AnalyticsProject): { label: string; ton
   return { label: '待导入数据表', tone: 'text-slate-400' };
 }
 
-function ProjectCard({ project, onOpen }: { project: AnalyticsProject; onOpen: () => void }) {
+function ProjectCard({
+  project,
+  onOpen,
+  onAuthorize,
+}: {
+  project: AnalyticsProject;
+  onOpen: () => void;
+  /** 仅嵌入版传入：开源独立版不提供多用户 RBAC，不渲染授权入口。 */
+  onAuthorize?: () => void;
+}) {
   const status = projectStatusOf(project);
   const name = project.name ?? '';
   return (
-    <button
-      type="button"
+    // 外层从 button 改为 div：授权是卡片内的第二个动作，按钮不能嵌套按钮。
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onOpen}
-      className="group w-full overflow-hidden rounded-xl border border-slate-200 bg-white text-left shadow-[0_1px_3px_rgba(15,23,42,0.05)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md"
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') onOpen();
+      }}
+      className="group relative w-full cursor-pointer overflow-hidden rounded-xl border border-slate-200 bg-white text-left shadow-[0_1px_3px_rgba(15,23,42,0.05)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md"
     >
+      {onAuthorize && (
+        <button
+          type="button"
+          title="授权"
+          onClick={(event) => {
+            event.stopPropagation();
+            onAuthorize();
+          }}
+          className="absolute right-2 top-2 z-10 rounded-md bg-white/85 p-1.5 text-slate-500 opacity-0 shadow-sm transition-opacity hover:text-slate-900 focus:opacity-100 group-hover:opacity-100"
+        >
+          <UserPlus className="h-4 w-4" />
+        </button>
+      )}
       <div className="h-11 w-full" style={{ background: avatarStripeOf(name) }} />
       <div className="-mt-5 flex min-w-0 flex-col px-4 pb-4">
         <div className="flex min-w-0 items-start gap-3">
@@ -45,7 +73,7 @@ function ProjectCard({ project, onOpen }: { project: AnalyticsProject; onOpen: (
           创建于 {formatDateTime(project.created_at)}
         </div>
       </div>
-    </button>
+    </div>
   );
 }
 
@@ -55,6 +83,7 @@ export function ProjectsPage({ ready }: { ready: boolean }) {
   const queryClient = useQueryClient();
   const projects = useQuery({ queryKey: ['projects'], queryFn: listProjects, enabled: ready });
   const [creating, setCreating] = useState(false);
+  const [authorizing, setAuthorizing] = useState<AnalyticsProject | null>(null);
   const [name, setName] = useState('');
   const create = useMutation({
     mutationFn: () => createProject(name.trim()),
@@ -126,9 +155,23 @@ export function ProjectsPage({ ready }: { ready: boolean }) {
               key={project.id}
               project={project}
               onOpen={() => navigate(appPath(`/projects/${project.id}`))}
+              onAuthorize={
+                EDITION === 'embedded'
+                  ? () => setAuthorizing(project)
+                  : undefined
+              }
             />
           ))}
         </div>
+      )}
+
+      {authorizing && (
+        <ProjectAuthorizeDialog
+          open
+          projectId={authorizing.id}
+          projectName={authorizing.name ?? ''}
+          onClose={() => setAuthorizing(null)}
+        />
       )}
 
       <Dialog

@@ -10,6 +10,10 @@ vi.mock('./client', () => ({
 
 import {
   deleteCatalogResource,
+  grantProject,
+  listProjectGrants,
+  revokeProject,
+  searchGrantSubjects,
   exportQueryDiagnostic,
   previewCatalogDeletion,
   previewQuery,
@@ -217,5 +221,59 @@ describe('query diagnostics requests', () => {
         },
       },
     );
+  });
+});
+
+describe('问数项目授权（仅嵌入版可见，接口走宿主路径）', () => {
+  beforeEach(() => requestMock.mockReset());
+
+  it('授权与撤销打到宿主的转发路由，而不是核心', async () => {
+    requestMock.mockResolvedValue(true);
+    await grantProject('prj_1', {
+      subject_type: 'user',
+      subject_id: 'u-2',
+      role_code: 'viewer',
+    });
+
+    const [path, options] = requestMock.mock.calls[0];
+    // 核心不认识授权：授权是宿主（商业版）能力，路径不带 /v1/analytics 前缀，
+    // 因此不会被 client 的 rewritePath 改写到核心直通道上。
+    expect(path).toBe('/v1/kb_folder/analytics_project_grant');
+    expect(options.method).toBe('POST');
+    expect(options.body).toEqual({
+      project_id: 'prj_1',
+      subject_type: 'user',
+      subject_id: 'u-2',
+      role_code: 'viewer',
+    });
+
+    await revokeProject('prj_1', {
+      subject_type: 'org',
+      subject_id: 'org-1',
+      role_code: 'viewer',
+    });
+    expect(requestMock.mock.calls[1][0]).toBe('/v1/kb_folder/analytics_project_revoke');
+  });
+
+  it('项目 id 进 query 时被编码，列授权只读', async () => {
+    requestMock.mockResolvedValue({ users: [], orgs: [], groups: [] });
+    await listProjectGrants('prj/1');
+
+    const [path, options] = requestMock.mock.calls[0];
+    expect(path).toBe('/v1/kb_folder/analytics_project_grants?project_id=prj%2F1');
+    expect(options).toBeUndefined();
+  });
+
+  it('三类主体各自的检索路径', async () => {
+    requestMock.mockResolvedValue([]);
+    await searchGrantSubjects('user', '张');
+    await searchGrantSubjects('org', '');
+    await searchGrantSubjects('group', 'a b');
+
+    expect(requestMock.mock.calls.map((call) => call[0])).toEqual([
+      '/v1/kb_folder/subjects/users?keyword=%E5%BC%A0',
+      '/v1/kb_folder/subjects/orgs',
+      '/v1/kb_folder/subjects/groups?keyword=a%20b',
+    ]);
   });
 });

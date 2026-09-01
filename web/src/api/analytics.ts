@@ -639,3 +639,49 @@ export const exportQueryDiagnostic = (projectId: string, queryId: string) =>
     `${base(projectId)}/query-diagnostics/export`,
     { projectId, query: { query_id: queryId } },
   );
+
+// --- 问数项目授权（仅嵌入版；开源独立版不提供多用户 RBAC）-------------------
+// 走宿主路径而非核心：授权是商业版能力，核心不认识授权。client 的 rewritePath
+// 只改写 /v1/analytics/ 开头的路径，宿主路径原样发出并自带鉴权头。
+
+export type GrantSubjectType = 'user' | 'org' | 'group';
+export type ProjectRole = 'admin' | 'editor' | 'viewer';
+
+export interface ProjectGrants {
+  users: Array<{ user_id: string; username?: string; role_code: string }>;
+  orgs: Array<{ org_unit_id: string; name?: string; role_code: string }>;
+  groups: Array<{ group_id: string; name?: string; role_code: string }>;
+}
+
+const HOST_GRANT_BASE = '/v1/kb_folder';
+
+export const listProjectGrants = (projectId: string) =>
+  request<ProjectGrants>(
+    `${HOST_GRANT_BASE}/analytics_project_grants?project_id=${encodeURIComponent(projectId)}`,
+  );
+
+export const grantProject = (
+  projectId: string,
+  body: { subject_type: GrantSubjectType; subject_id: string; role_code: ProjectRole },
+) =>
+  request<boolean>(`${HOST_GRANT_BASE}/analytics_project_grant`, {
+    method: 'POST',
+    body: { project_id: projectId, ...body },
+  });
+
+export const revokeProject = (
+  projectId: string,
+  body: { subject_type: GrantSubjectType; subject_id: string; role_code: ProjectRole },
+) =>
+  request<boolean>(`${HOST_GRANT_BASE}/analytics_project_revoke`, {
+    method: 'POST',
+    body: { project_id: projectId, ...body },
+  });
+
+/** 授权面板的主体数据源（宿主转发 knowflow）。 */
+export const searchGrantSubjects = (kind: GrantSubjectType, keyword: string) => {
+  const path =
+    kind === 'user' ? 'users' : kind === 'org' ? 'orgs' : 'groups';
+  const query = keyword ? `?keyword=${encodeURIComponent(keyword)}` : '';
+  return request<unknown>(`${HOST_GRANT_BASE}/subjects/${path}${query}`);
+};

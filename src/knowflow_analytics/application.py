@@ -183,7 +183,6 @@ from knowflow_analytics.query.contracts import (
     StructuredQueryRequest,
 )
 from knowflow_analytics.query.corrector import LlmPhysicalSqlCorrector
-from knowflow_analytics.query.errors import SemanticParsingError
 from knowflow_analytics.query.diagnostics import (
     QUERY_DIAGNOSTIC_DEFAULT_TTL_SECONDS,
     QUERY_DIAGNOSTIC_MAX_RESULT_ROWS,
@@ -194,6 +193,7 @@ from knowflow_analytics.query.diagnostics import (
     build_query_diagnostic_artifact,
     render_query_diagnostic_export,
 )
+from knowflow_analytics.query.errors import SemanticParsingError
 from knowflow_analytics.query.intent_adjudicator import IntentAdjudicator
 from knowflow_analytics.query.mapper import SemanticMapper
 from knowflow_analytics.query.multi_turn import MultiTurnRewriter

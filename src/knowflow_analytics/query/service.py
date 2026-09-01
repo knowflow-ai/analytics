@@ -3837,7 +3837,9 @@ class AnalyticsQueryService:
             if len(refiltered) >= self._MAX_DRILLDOWN_REFILTERS:
                 break
             refiltered.append(item.dimension_id)
-            issue("dimension", "f", "refilter", item.dimension_id, dimension_names[item.dimension_id])
+            issue(
+                "dimension", "f", "refilter", item.dimension_id, dimension_names[item.dimension_id]
+            )
         # 受治理默认时间维存在时提供固定时间窗切换。
         if dataset.default_time_dimension_id in dimension_names:
             for window_id, (window_label, _days) in self._DRILLDOWN_TIME_WINDOWS.items():

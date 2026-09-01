@@ -269,7 +269,9 @@ def _ordinary_visualization(
         ],
         # 与 y 逐位对齐的数值形态；未知一律按常规数值。
         "y_formats": [
-            fmt if (fmt := y_formats_by_id.get(item)) in {"number", "percent", "delta"} else "number"
+            fmt
+            if (fmt := y_formats_by_id.get(item)) in {"number", "percent", "delta"}
+            else "number"
             for item in kept
         ],
     }

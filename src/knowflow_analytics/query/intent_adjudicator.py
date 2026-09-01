@@ -8,9 +8,8 @@ governed candidate set; the model may select one local key or abstain.
 
 from __future__ import annotations
 
-import logging
-
 import json
+import logging
 from enum import StrEnum
 from typing import Literal, Protocol
 

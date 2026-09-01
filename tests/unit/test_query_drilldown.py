@@ -447,9 +447,9 @@ def test_period_ratio_projection_keeps_aliased_columns_and_marks_delta(
     """
 
     from knowflow_analytics.api import _ordinary_query_projection
+    from knowflow_analytics.query.contracts import QueryRequest
     from knowflow_analytics.query.orchestrator import CandidateOrchestrator
     from knowflow_analytics.query.parser import LlmS2SqlParser
-    from knowflow_analytics.query.contracts import QueryRequest
     from knowflow_analytics.semantic.index import EmbeddingBatch, SemanticIndexBuilder
 
     class _Embedding:

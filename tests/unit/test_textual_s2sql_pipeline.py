@@ -1394,3 +1394,46 @@ def test_an_expression_measure_keeps_its_expression_on_the_textual_path(sales_re
     # 字面量 2 被既有的 _parameterize_literals 统一参数化,断言乘法结构+参数值。
     assert " * " in translated.physical_query.sql
     assert 2 in translated.physical_query.parameters.values()
+
+
+def test_period_ratio_allows_an_aggregate_beside_the_ratio(sales_release) -> None:
+    """「按月看净收入和它的同比」：聚合列与比率列并列。
+
+    此前只允许分组维度与比率列并列，模型自然写出的 SUM + RATIO_OVER 被
+    S2SQL_RATIO_SHAPE_INVALID 拒答——同一个问题时成时败。聚合列只从当前期
+    取值，不能进自连接对齐键，否则只会匹配到两期金额恰好相等的行。
+    """
+
+    translated = S2SqlSemanticTranslator().translate(
+        release=sales_release,
+        dataset_id="sales_dataset",
+        corrected_s2sql=(
+            'SELECT DATE_TRUNC(\'month\', "下单日期") AS "_月份_", '
+            'SUM("净收入") AS "_净收入_", '
+            'RATIO_OVER("净收入") AS "_同比_" '
+            'FROM "销售经营" GROUP BY DATE_TRUNC(\'month\', "下单日期")'
+        ),
+    )
+
+    sql = translated.physical_query.sql
+    assert "__kf_ratio_base" in sql.lower()
+    # 聚合列从当前期投影，不作为对齐键。
+    assert '"__kf_previous"."_净收入_"' not in sql
+    assert '"__kf_current"."_净收入_"' in sql
+
+
+def test_period_ratio_still_rejects_ungrouped_non_aggregate_projection(
+    sales_release,
+) -> None:
+    with pytest.raises(SemanticParsingError) as raised:
+        S2SqlSemanticTranslator().translate(
+            release=sales_release,
+            dataset_id="sales_dataset",
+            corrected_s2sql=(
+                'SELECT DATE_TRUNC(\'month\', "下单日期") AS "_月份_", "渠道", '
+                'RATIO_OVER("净收入") AS "_同比_" '
+                'FROM "销售经营" GROUP BY DATE_TRUNC(\'month\', "下单日期")'
+            ),
+        )
+
+    assert raised.value.code == "S2SQL_RATIO_SHAPE_INVALID"

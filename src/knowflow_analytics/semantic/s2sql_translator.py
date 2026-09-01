@@ -533,6 +533,10 @@ class _MetricRatioParser:
         base.set("order", None)
         base.set("limit", None)
         projection_aliases: list[str] = []
+        # 与比率并列的聚合列（「按年看净金额和它的同比」）只从当前期取值，
+        # 不参与自连接对齐——把聚合值当对齐键，只会匹配到两期金额恰好
+        # 相等的行，等于悄悄丢数据。
+        aggregate_projections: set[int] = set()
         ratio_by_projection = {item.projection_index: item for item in calls}
         for index, projection in enumerate(tuple(base.expressions)):
             call = ratio_by_projection.get(index)
@@ -545,10 +549,13 @@ class _MetricRatioParser:
                 continue
             expression = projection.this if isinstance(projection, exp.Alias) else projection
             if not any(expression.sql() == item.sql() for item in group_expressions):
-                raise _invalid(
-                    "period ratio projections must be grouped dimensions or ratio metrics",
-                    code="S2SQL_RATIO_SHAPE_INVALID",
-                )
+                if expression.find(exp.AggFunc) is None:
+                    raise _invalid(
+                        "period ratio projections must be grouped dimensions, "
+                        "aggregates, or ratio metrics",
+                        code="S2SQL_RATIO_SHAPE_INVALID",
+                    )
+                aggregate_projections.add(index)
             alias = projection.alias or f"__kf_ratio_group_{index}"
             base.expressions[index].replace(exp.alias_(expression.copy(), alias, quoted=True))
             projection_aliases.append(alias)
@@ -577,7 +584,11 @@ class _MetricRatioParser:
             previous_time = f"DATE_TRUNC('week', {previous_time})"
         join_parts = [f"{_quote(previous_alias)}.{_quote(time_alias)} = {previous_time}"]
         for index, alias in enumerate(projection_aliases):
-            if index == time_projection or index in ratio_by_projection:
+            if (
+                index == time_projection
+                or index in ratio_by_projection
+                or index in aggregate_projections
+            ):
                 continue
             join_parts.append(
                 f"{_quote(previous_alias)}.{_quote(alias)} IS NOT DISTINCT FROM "

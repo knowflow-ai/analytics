@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import suppress
 from enum import StrEnum
 from typing import Any, Literal
 
@@ -303,6 +304,43 @@ class QueryTraceStep(FrozenModel):
     stage: QueryStage
     status: Literal["started", "completed", "failed", "clarification"]
     detail: dict[str, Any] = Field(default_factory=dict)
+
+
+class ObservedTrace(list):
+    """实时通知观察者的 trace 列表；不改变任何既有 trace 语义。
+
+    流水线在几十处直接 `trace.append(...)` / `trace[-1] = ...` 记录阶段，
+    没有单一记录函数。用列表子类接管这两个写入口，是让调用方实时看到阶段
+    推进、又完全不动决策代码的唯一方式；观察者只读，异常一律吞掉——可观察
+    性不得影响查询结果。
+    """
+
+    def __init__(
+        self,
+        iterable: Any = (),
+        *,
+        observer: Any = None,
+    ) -> None:
+        super().__init__(iterable)
+        self._observer = observer
+        for item in self:
+            self._notify(item)
+
+    def _notify(self, item: Any) -> None:
+        if self._observer is None:
+            return
+        # 可观察性不得影响查询结果：观察者抛什么都吞掉。
+        with suppress(Exception):
+            self._observer(item)
+
+    def append(self, item: Any) -> None:
+        super().append(item)
+        self._notify(item)
+
+    def __setitem__(self, index: Any, item: Any) -> None:
+        super().__setitem__(index, item)
+        if not isinstance(index, slice):
+            self._notify(item)
 
 
 class QueryError(FrozenModel):

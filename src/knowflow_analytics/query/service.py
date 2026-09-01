@@ -8,6 +8,7 @@ import secrets
 import time
 import uuid
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from itertools import product
@@ -48,6 +49,7 @@ from knowflow_analytics.query.contracts import (
     MappingEvidenceChannel,
     MappingResult,
     MatchMethod,
+    ObservedTrace,
     ParsedSemanticCandidate,
     QueryDiagnosis,
     QueryDiagnosticCategory,
@@ -211,11 +213,15 @@ class AnalyticsQueryService:
         *,
         now: datetime | None = None,
         actor_id: str | None = None,
+        on_trace: Callable[[QueryTraceStep], None] | None = None,
     ) -> QueryResponse:
         query_id = request.query_id or f"q_{uuid.uuid4().hex}"
         tenant_id = str(actor_id or "").strip()
         decision_now = datetime.now(UTC)
-        trace: list[QueryTraceStep] = [QueryTraceStep(stage=QueryStage.PRECHECK, status="started")]
+        # 阶段推进对调用方实时可见（流式问数用它替代转圈等待）；观察者只读。
+        trace: list[QueryTraceStep] = ObservedTrace(
+            [QueryTraceStep(stage=QueryStage.PRECHECK, status="started")], observer=on_trace
+        )
         parse_events: list[dict[str, object]] = []
         diagnostic_context: dict[str, object] = {}
         published: PublishedRelease | None = None

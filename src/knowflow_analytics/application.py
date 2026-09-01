@@ -180,6 +180,7 @@ from knowflow_analytics.query.contracts import (
     QueryRequest,
     QueryResponse,
     QueryState,
+    QueryTraceStep,
     StructuredQueryRequest,
 )
 from knowflow_analytics.query.corrector import LlmPhysicalSqlCorrector
@@ -3464,8 +3465,9 @@ class AnalyticsApplication:
         *,
         actor_id: str | None = None,
         permission_scope_hash: str | None = None,
+        on_trace: Callable[[QueryTraceStep], None] | None = None,
     ) -> QueryResponse:
-        response = self._query_service.query(request, actor_id=actor_id)
+        response = self._query_service.query(request, actor_id=actor_id, on_trace=on_trace)
         self._save_query_diagnostic_best_effort(
             request=request,
             response=response,

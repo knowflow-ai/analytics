@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -779,3 +780,115 @@ def test_release_ask_context_projects_only_governed_vocabulary(sales_release):
     # 无建模产物、物理表列与 SQL。
     for internal in ("modeling_catalog", "schema_name", "table", "column", "sql"):
         assert f"'{internal}'" not in rendered
+
+
+class _StreamingApplication(_FakeApplication):
+    """按真实流水线顺序推进阶段，并在响应里放上内部产物。"""
+
+    def query(self, request, *, actor_id=None, permission_scope_hash=None, on_trace=None):
+        from knowflow_analytics.contracts import QueryResult, SemanticQuery
+        from knowflow_analytics.query.contracts import (
+            CompletedQueryResponse,
+            QueryInterpretation,
+            QueryStage,
+            QueryTraceStep,
+        )
+
+        for stage, status in (
+            (QueryStage.PRECHECK, "started"),
+            (QueryStage.PRECHECK, "completed"),
+            (QueryStage.CANDIDATE_DISCOVERY, "completed"),
+            (QueryStage.EXECUTING, "completed"),
+        ):
+            if on_trace is not None:
+                on_trace(
+                    QueryTraceStep(
+                        stage=stage,
+                        status=status,
+                        # 内部产物一律不得随阶段事件外泄。
+                        detail={"corrected_s2sql": 'SELECT "净收入"', "release_id": "release-1"},
+                    )
+                )
+        semantic_query = SemanticQuery(
+            dataset_id="sales_dataset",
+            metric_ids=("net_revenue",),
+            dimension_ids=(),
+        )
+        return CompletedQueryResponse(
+            query_id="q-1",
+            release_id="release-1",
+            spec_hash="sha256:spec",
+            index_snapshot_id="idx-1",
+            semantic_query=semantic_query,
+            interpretation=QueryInterpretation(
+                dataset_id="sales_dataset",
+                query_type=semantic_query.query_type,
+                metrics=("净收入",),
+                dimensions=(),
+                filters=(),
+            ),
+            data=QueryResult(columns=("净收入",), rows=((1,),), row_count=1),
+            visualization={"type": "table", "x": None, "y": ()},
+            trace=(),
+            parsed_s2sql='SELECT "净收入"',
+            corrected_s2sql='SELECT "净收入"',
+            physical_sql="SELECT 1",
+        )
+
+
+def _stream_events(response):
+    events = []
+    for block in response.text.split("\n\n"):
+        if not block.strip():
+            continue
+        lines = block.splitlines()
+        name = next(line[len("event: ") :] for line in lines if line.startswith("event: "))
+        data = next(line[len("data: ") :] for line in lines if line.startswith("data: "))
+        events.append((name, json.loads(data)))
+    return events
+
+
+def test_streaming_query_reports_stages_without_leaking_internals():
+    """问数要跑几十秒，前端靠阶段事件替代转圈；事件本身不得带内部产物。"""
+
+    client = _client(_StreamingApplication())
+
+    response = client.post(
+        "/v1/analytics/query:stream",
+        headers=_HEADERS,
+        json={"project_id": "sales", "question": "净收入是多少"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    events = _stream_events(response)
+    assert [item[1]["stage"] for item in events if item[0] == "stage"] == [
+        "PRECHECK",
+        "PRECHECK",
+        "CANDIDATE_DISCOVERY",
+        "EXECUTING",
+    ]
+    # 阶段事件只有中性标识与状态：没有 SQL、语义 ID、Scope、版本。
+    assert {key for item in events if item[0] == "stage" for key in item[1]} == {
+        "stage",
+        "status",
+    }
+    result = [item[1] for item in events if item[0] == "result"]
+    assert len(result) == 1
+    assert result[0]["state"] == "COMPLETED"
+    # 终局事件就是 /query 的同一份普通投影：业务名，无 SQL。
+    assert result[0]["interpretation"]["metrics"] == ["净收入"]
+    assert "physical_sql" not in result[0]
+    assert "corrected_s2sql" not in result[0]
+
+
+def test_streaming_query_rejects_a_foreign_project():
+    client = _client(_StreamingApplication())
+
+    response = client.post(
+        "/v1/analytics/query:stream",
+        headers=_HEADERS,
+        json={"project_id": "other", "question": "净收入是多少"},
+    )
+
+    assert response.status_code == 403

@@ -1,4 +1,6 @@
+import json
 import logging
+import queue
 import secrets
 import threading
 import time
@@ -9,7 +11,7 @@ from datetime import date, datetime
 from typing import Annotated, Any, Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Path, Query, Request, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from knowflow_analytics.application import AnalyticsApplication
@@ -2354,6 +2356,61 @@ def create_api(
                 permission_scope_hash=request_context.permission_scope_hash,
                 value=payload.value,
             )
+        )
+
+    @app.post("/v1/analytics/query:stream")
+    def query_stream(payload: QueryRequest, request_context: Context):
+        """与 /query 同一条链路，只是把阶段推进实时吐出来。
+
+        问数要跑几十秒，前端不该只有一个转圈。事件是纯观察：`stage` 只带
+        中性阶段标识与状态，不带任何 detail（普通 wire 仍然零 Scope/语义 ID/
+        SQL 泄漏），产品面的用户语言由前端映射；`result` 就是 /query 的同一份
+        投影。阶段名不构成新语义，也不影响任何决策。
+        """
+
+        if request_context.project_id != payload.project_id:
+            raise HTTPException(status_code=403, detail="project scope mismatch")
+        expensive(request_context)
+        request = payload.model_copy(
+            update={"include_diagnostics": True, "include_debug_sql": allow_debug_sql}
+        )
+        events: queue.Queue[tuple[str, Any] | None] = queue.Queue()
+
+        def run() -> None:
+            try:
+                response = application.query(
+                    request,
+                    actor_id=request_context.actor_id,
+                    permission_scope_hash=request_context.permission_scope_hash,
+                    on_trace=lambda step: events.put(
+                        ("stage", {"stage": step.stage.value, "status": step.status})
+                    ),
+                )
+                events.put(("result", _ordinary_query_projection(response)))
+            except AnalyticsError as exc:
+                events.put(("error", {"code": exc.code, "message": str(exc)}))
+            except Exception:  # noqa: BLE001 - the stream must always terminate
+                LOGGER.exception("analytics streaming query failed")
+                events.put(
+                    ("error", {"code": "ANALYTICS_QUERY_FAILED", "message": "问数服务处理失败"})
+                )
+            finally:
+                events.put(None)
+
+        def emit() -> Any:
+            worker = threading.Thread(target=run, daemon=True)
+            worker.start()
+            while True:
+                item = events.get()
+                if item is None:
+                    break
+                name, data = item
+                yield f"event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+        return StreamingResponse(
+            emit(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
     @app.post("/v1/analytics/query")

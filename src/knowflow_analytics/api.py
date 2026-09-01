@@ -5,7 +5,7 @@ import time
 from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated, Any, Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Path, Query, Request, status
@@ -160,6 +160,12 @@ def _ordinary_query_projection(response: QueryResponse) -> dict[str, Any]:
         )
         seen[label] = seen.get(label, 0) + 1
         columns.append(label if seen[label] == 1 else f"{label} ({seen[label]})")
+    grains = dict(zip(response.data.columns, response.column_grains, strict=False))
+    grain_by_index = [grains.get(column) for column in response.data.columns]
+    rows = [
+        [_format_grain_value(value, grain_by_index[index]) for index, value in enumerate(row)]
+        for row in response.data.rows
+    ]
     payload.update(
         {
             "interpretation": {
@@ -170,7 +176,9 @@ def _ordinary_query_projection(response: QueryResponse) -> dict[str, Any]:
                 "applied_defaults": (),
             },
             "data": {
-                **response.data.model_dump(mode="json"),
+                **response.data.model_copy(update={"rows": tuple(map(tuple, rows))}).model_dump(
+                    mode="json"
+                ),
                 "columns": columns,
             },
             # 与 data.columns 逐位对齐；上游二次投影（BFF）据此透传而非重猜。
@@ -193,6 +201,29 @@ def _ordinary_query_projection(response: QueryResponse) -> dict[str, Any]:
         }
     )
     return payload
+
+
+_GRAIN_FORMATS = {
+    "YEAR": "%Y",
+    "MONTH": "%Y-%m",
+    "DAY": "%Y-%m-%d",
+    "WEEK": "%Y-%m-%d",
+}
+
+
+def _format_grain_value(value: Any, grain: str | None) -> Any:
+    """把 DATE_TRUNC 的 timestamptz 收敛到分组粒度。
+
+    按年分组的结果值仍是「2026-01-01T00:00:00+08:00」，展示成「2026」才是
+    用户问的那个粒度。季度没有 strftime 记号，单独算。
+    """
+
+    if not grain or not isinstance(value, (datetime, date)):
+        return value
+    if grain == "QUARTER":
+        return f"{value.year} Q{(value.month - 1) // 3 + 1}"
+    pattern = _GRAIN_FORMATS.get(grain)
+    return value.strftime(pattern) if pattern else value
 
 
 def _ordinary_visualization(

@@ -617,7 +617,8 @@ class _MetricRatioParser:
             f"FROM {_quote('__kf_ratio_base')} AS {_quote(current_alias)} "
             f"LEFT JOIN {_quote('__kf_ratio_base')} AS {_quote(previous_alias)} "
             f"ON {' AND '.join(join_parts)} "
-            f"ORDER BY {_quote(current_alias)}.{_quote(time_alias)} DESC"
+            # 时序升序：同比/环比是趋势，图和表都按时间从早到晚读。
+            f"ORDER BY {_quote(current_alias)}.{_quote(time_alias)} ASC"
         )
         statement.tree = sqlglot.parse_one(ratio_sql, read="postgres")
 
@@ -1815,10 +1816,32 @@ def _output_columns(statement: _QueryStatement) -> tuple[OutputColumn, ...]:
                     element_id=element_id,
                     name=projection.alias or f"计算列{index + 1}",
                     kind=kind_value,
+                    time_grain=(
+                        _projection_time_grain(original_projection)
+                        if derived_dimension
+                        else None
+                    ),
                 )
             )
             used_ids.add(element_id)
     return tuple(results)
+
+
+def _projection_time_grain(projection: exp.Expression) -> str | None:
+    """派生时间列的 DATE_TRUNC 粒度；不是时间截断则返回 None。"""
+
+    expression = projection.this if isinstance(projection, exp.Alias) else projection
+    # postgres 方言把 DATE_TRUNC 解析成 TimestampTrunc（与 _ratio_time_groups 一致）。
+    trunc = (
+        expression
+        if isinstance(expression, (exp.TimestampTrunc, exp.DateTrunc))
+        else expression.find(exp.TimestampTrunc, exp.DateTrunc)
+    )
+    if trunc is None:
+        return None
+    unit = trunc.args.get("unit")
+    grain = str(getattr(unit, "name", None) or getattr(unit, "this", "")).upper()
+    return grain if grain in {"DAY", "WEEK", "MONTH", "QUARTER", "YEAR"} else None
 
 
 def _is_direct_semantic_projection(projection: exp.Expression) -> bool:

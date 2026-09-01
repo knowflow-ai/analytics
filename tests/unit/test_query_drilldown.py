@@ -8,6 +8,8 @@ these tests freeze issuance, binding, expiry, and the continuation semantics.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
 from knowflow_analytics.catalog.store import PublishedRelease
@@ -543,3 +545,36 @@ def test_ratio_column_alone_is_percent_formatted_not_the_metric_beside_it(
     assert AnalyticsQueryService._column_labels(
         release, translated.physical_query.columns
     ) == ("年", "净收入", "同比")
+
+
+def test_time_column_is_projected_at_its_group_grain(sales_release):
+    """按年分组的结果值仍是 timestamptz，展示要收敛到「2026」。"""
+
+    from knowflow_analytics.api import _format_grain_value
+    from knowflow_analytics.semantic.s2sql_translator import S2SqlSemanticTranslator
+
+    dataset = sales_release.datasets[0].model_copy(
+        update={"default_time_dimension_id": "order_date"}
+    )
+    release = sales_release.model_copy(update={"datasets": (dataset,)})
+    for grain, expected in (
+        ("year", "2026"),
+        ("month", "2026-08"),
+        ("day", "2026-08-01"),
+    ):
+        s2sql = (
+            f"SELECT DATE_TRUNC('{grain}', \"下单日期\") AS \"_期_\", "
+            'RATIO_OVER("净收入") AS "_同比_" '
+            f"FROM \"销售经营\" GROUP BY DATE_TRUNC('{grain}', \"下单日期\")"
+        )
+        translated = S2SqlSemanticTranslator().translate(
+            release=release, dataset_id="sales_dataset", corrected_s2sql=s2sql
+        )
+        grains = AnalyticsQueryService._column_grains(translated.physical_query.columns)
+        assert grains[0] == grain.upper()
+        assert grains[1] is None
+        assert (
+            _format_grain_value(datetime(2026, 8, 1, tzinfo=UTC), grains[0]) == expected
+        )
+        # 趋势按时间升序：图与表都从早读到晚。
+        assert "ASC" in translated.physical_query.sql.upper()

@@ -1850,6 +1850,7 @@ class AnalyticsQueryService:
                     release, translated.audit_query, corrected.corrected_s2sql, physical.columns
                 ),
                 column_labels=self._column_labels(release, physical.columns),
+                column_grains=self._column_grains(physical.columns),
                 semantic_query=translated.audit_query,
                 resolved_by_llm=resolved_by_llm,
                 semantic_decisions=semantic_decisions,
@@ -2109,6 +2110,7 @@ class AnalyticsQueryService:
                     release, corrected.semantic_query, corrected.canonical_s2sql, physical.columns
                 ),
                 column_labels=self._column_labels(release, physical.columns),
+                column_grains=self._column_grains(physical.columns),
                 semantic_query=corrected.semantic_query,
                 drilldown=self._drilldown_options(
                     release=release,
@@ -4901,6 +4903,14 @@ class AnalyticsQueryService:
             # 与 y 逐位对齐的数值形态：number 常规、percent 占比、delta 增长率。
             "y_formats": y_formats,
         }
+
+    @staticmethod
+    def _column_grains(
+        output_columns: tuple[OutputColumn, ...],
+    ) -> tuple[str | None, ...]:
+        """结果列的时间粒度，与结果列逐位对齐；非派生时间列为 None。"""
+
+        return tuple(item.time_grain for item in output_columns)
 
     @staticmethod
     def _column_labels(

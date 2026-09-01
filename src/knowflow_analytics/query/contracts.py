@@ -435,6 +435,9 @@ class CompletedQueryResponse(QueryResponseBase):
     # column (``RATIO_OVER("净收入") AS "同比"`` yields ``同比``), so mapping
     # result columns through semantic IDs alone degrades them to "结果列 N".
     column_labels: tuple[str, ...] = ()
+    # 与 data.columns 逐位对齐的时间粒度；DATE_TRUNC 派生列非空。按年分组的
+    # 结果值仍是 timestamptz，展示前要收敛到该粒度。
+    column_grains: tuple[str | None, ...] = ()
     parsed_s2sql: str
     corrected_s2sql: str
     physical_sql: str | None = None

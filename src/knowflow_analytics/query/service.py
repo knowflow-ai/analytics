@@ -5227,6 +5227,17 @@ def _shipped_diagnosis(
 
 def _error_diagnosis(exc: AnalyticsError) -> QueryDiagnosis:
     stage = _stage_or_precheck(exc.stage)
+    if exc.code == "UNSUPPORTED_ANALYTIC_OPERATION":
+        # 入口闸门已经写清了「不支持什么、改怎么问」，按阶段套用通用文案会把它
+        # 换成「没能理解这个问题」——用户既不知道被拒的原因，也拿不到替代说法。
+        return QueryDiagnosis(
+            category=QueryDiagnosticCategory.MAPPING,
+            stage=QueryStage.CANDIDATE_DISCOVERY.value,
+            severity="error",
+            summary="问题要求了当前版本没有开放的分析能力",
+            recommendation="确认该能力是否在受治理函数范围内；不要降级成普通聚合。",
+            user_hint=str(exc),
+        )
     if exc.code == "CROSS_FACT_METRICS_UNSUPPORTED":
         return QueryDiagnosis(
             category=QueryDiagnosticCategory.ROUTING,

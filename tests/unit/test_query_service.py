@@ -1221,6 +1221,10 @@ def test_unsupported_analysis_is_rejected_instead_of_silently_querying_total(
     assert response.state is QueryState.FAILED
     assert response.error.code == "UNSUPPORTED_ANALYTIC_OPERATION"
     assert executor.last_query is None
+    # 拒绝理由必须原样到用户面前：套用阶段通用文案会退化成「没能理解这个问题」，
+    # 用户既不知道为什么被拒，也拿不到可照做的替代说法。
+    assert response.diagnostics is not None
+    assert response.diagnostics.user_hint == response.error.message
 
 
 class _OrFilterModelGateway:

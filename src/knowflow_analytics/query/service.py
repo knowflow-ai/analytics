@@ -4870,16 +4870,20 @@ class AnalyticsQueryService:
         if output_columns:
             dimension_columns = [item for item in output_columns if item.kind == "dimension"]
             value_columns = [
-                item for item in output_columns if item.kind in {"metric", "calculation"}
+                item
+                for item in output_columns
+                if item.kind in {"metric", "calculation", "ratio"}
             ]
             x_id = dimension_columns[0].element_id if dimension_columns else None
             y_ids = [item.element_id for item in value_columns]
             y_units = [units.get(item.element_id) for item in value_columns]
+            # 只有比率列按百分比展示。与它并列的 SUM(指标) 也是 calculation，
+            # 若一并标成 delta，380 会显示成 +38000%。
             y_formats = [
                 "delta"
-                if is_period_ratio and item.kind == "calculation"
+                if item.kind == "ratio" and is_period_ratio
                 else "percent"
-                if is_share and item.kind == "calculation"
+                if item.kind == "ratio" and is_share
                 else "number"
                 for item in value_columns
             ]

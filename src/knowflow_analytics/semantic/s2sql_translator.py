@@ -1773,6 +1773,9 @@ def _output_columns(statement: _QueryStatement) -> tuple[OutputColumn, ...]:
         semantic_ids_by_projection.append(tuple(semantic_ids))
 
     single_counts = Counter(items[0] for items in semantic_ids_by_projection if len(items) == 1)
+    # 比率投影的位置由解析阶段确定：同一查询里 SUM(指标) 与 RATIO_OVER(指标)
+    # 引用同一个指标，只看表达式区分不出哪列是比率。
+    ratio_indexes = {call.projection_index for call in statement.ratio_calls}
     results: list[OutputColumn] = []
     used_ids: set[str] = set()
     for index, projection in enumerate(translated_select.expressions):
@@ -1801,11 +1804,17 @@ def _output_columns(statement: _QueryStatement) -> tuple[OutputColumn, ...]:
                 and all(pair[0] == "dimension" for pair in semantic_ids)
                 and original_projection.find(exp.AggFunc) is None
             )
+            if index in ratio_indexes:
+                kind_value = "ratio"
+            elif derived_dimension:
+                kind_value = "dimension"
+            else:
+                kind_value = "calculation"
             results.append(
                 OutputColumn(
                     element_id=element_id,
                     name=projection.alias or f"计算列{index + 1}",
-                    kind="dimension" if derived_dimension else "calculation",
+                    kind=kind_value,
                 )
             )
             used_ids.add(element_id)

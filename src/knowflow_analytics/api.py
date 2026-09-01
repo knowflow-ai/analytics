@@ -173,6 +173,8 @@ def _ordinary_query_projection(response: QueryResponse) -> dict[str, Any]:
                 **response.data.model_dump(mode="json"),
                 "columns": columns,
             },
+            # 与 data.columns 逐位对齐；上游二次投影（BFF）据此透传而非重猜。
+            "column_labels": columns,
             "visualization": _ordinary_visualization(response, columns),
             "resolved_by_llm": [item.model_dump(mode="json") for item in response.resolved_by_llm],
             "semantic_decisions": [

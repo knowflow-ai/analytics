@@ -986,7 +986,9 @@ class SemanticQuery(FrozenModel):
 class OutputColumn(FrozenModel):
     element_id: str
     name: str
-    kind: Literal["metric", "dimension", "calculation"]
+    # ratio 是期间比/占比这类比率列：值域与普通聚合不同（可负、可超 100%），
+    # 下游据此决定百分比展示，不能与 calculation 混为一谈。
+    kind: Literal["metric", "dimension", "calculation", "ratio"]
 
 
 class PhysicalQuery(FrozenModel):

@@ -504,3 +504,42 @@ def test_period_ratio_projection_keeps_aliased_columns_and_marks_delta(
     assert projected["visualization"]["x"] == "月份"
     assert projected["visualization"]["y"] == ["同比"]
     assert projected["visualization"]["y_formats"] == ["delta"]
+
+
+def test_ratio_column_alone_is_percent_formatted_not_the_metric_beside_it(
+    sales_release,
+):
+    """SUM(指标) 与 RATIO_OVER(指标) 并列时，只有比率列按百分比展示。
+
+    两列引用同一个指标、都不是直接语义投影，只看表达式区分不出谁是比率。
+    曾把两列都标成 delta —— 380 会渲染成 +38000%，比不格式化更糟。
+    """
+
+    from knowflow_analytics.semantic.s2sql_translator import S2SqlSemanticTranslator
+
+    dataset = sales_release.datasets[0].model_copy(
+        update={"default_time_dimension_id": "order_date"}
+    )
+    release = sales_release.model_copy(update={"datasets": (dataset,)})
+    s2sql = (
+        'SELECT DATE_TRUNC(\'year\', "下单日期") AS "_年_", '
+        'SUM("净收入") AS "_净收入_", '
+        'RATIO_OVER("净收入") AS "_同比_" '
+        'FROM "销售经营" GROUP BY DATE_TRUNC(\'year\', "下单日期")'
+    )
+    translated = S2SqlSemanticTranslator().translate(
+        release=release, dataset_id="sales_dataset", corrected_s2sql=s2sql
+    )
+
+    kinds = {item.element_id: item.kind for item in translated.physical_query.columns}
+    assert kinds == {"_年_": "dimension", "_净收入_": "calculation", "_同比_": "ratio"}
+
+    visualization = AnalyticsQueryService._visualization(
+        release, translated.audit_query, s2sql, translated.physical_query.columns
+    )
+    assert visualization["y"] == ("_净收入_", "_同比_")
+    assert visualization["y_formats"] == ["number", "delta"]
+    # 别名的包裹下划线不进展示名。
+    assert AnalyticsQueryService._column_labels(
+        release, translated.physical_query.columns
+    ) == ("年", "净收入", "同比")

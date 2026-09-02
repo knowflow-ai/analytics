@@ -300,6 +300,8 @@ def _release_ask_context(release) -> dict[str, Any]:
             }
             for item in release.datasets
         ],
+        # 实体清单：列级权限按实体授权，配置界面要按名字选，所以名字得随着 ID 出来。
+        "models": [{"id": item.id, "name": item.name} for item in release.models],
         "metrics": [
             {
                 "id": item.id,

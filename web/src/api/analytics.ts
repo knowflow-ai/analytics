@@ -712,6 +712,65 @@ export interface GrantSubjectOption {
   name: string;
 }
 
+// --- 数据范围（行列级权限）-------------------------------------------------
+// 与授权分两层：授权决定能不能进这个项目，数据范围决定进来之后看得到哪些实体、
+// 哪些行。两项都空 = 不收窄。
+
+export interface DataScopeRowFilter {
+  dimension_id: string;
+  operator: 'eq' | 'in';
+  value: string;
+}
+
+export interface DataScope {
+  visible_model_ids: string[];
+  row_filters: DataScopeRowFilter[];
+}
+
+export interface DataScopeOptions {
+  models: Array<{ id: string; name: string }>;
+  dimensions: Array<{ id: string; name: string; model_id: string }>;
+}
+
+export const fetchDataScopeOptions = async (
+  projectId: string,
+): Promise<DataScopeOptions> => {
+  const data = hostPayload(
+    await request<unknown>(
+      `${HOST_GRANT_BASE}/analytics_project_data_scope_options?project_id=${encodeURIComponent(projectId)}`,
+    ),
+  ) as Partial<DataScopeOptions> | null;
+  return { models: data?.models ?? [], dimensions: data?.dimensions ?? [] };
+};
+
+export const fetchDataScope = async (
+  projectId: string,
+  subject: { subject_type: GrantSubjectType; subject_id: string },
+): Promise<DataScope> => {
+  const query = new URLSearchParams({
+    project_id: projectId,
+    subject_type: subject.subject_type,
+    subject_id: subject.subject_id,
+  });
+  const data = hostPayload(
+    await request<unknown>(`${HOST_GRANT_BASE}/analytics_project_data_scope?${query}`),
+  ) as Partial<DataScope> | null;
+  return {
+    visible_model_ids: data?.visible_model_ids ?? [],
+    row_filters: data?.row_filters ?? [],
+  };
+};
+
+export const saveDataScope = (
+  projectId: string,
+  subject: { subject_type: GrantSubjectType; subject_id: string },
+  scope: DataScope,
+) =>
+  request<boolean>(`${HOST_GRANT_BASE}/analytics_project_data_scope_set`, {
+    method: 'POST',
+    body: { project_id: projectId, ...subject, ...scope },
+  });
+
 /** 宿主接口统一是 `{code, data, message}`；核心接口没有信封。 */
 function hostPayload(response: unknown): unknown {
   if (response && typeof response === 'object' && 'code' in response) {

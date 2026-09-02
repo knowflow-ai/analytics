@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Trash2 } from 'lucide-react';
+import { SlidersHorizontal, Trash2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import {
   grantProject,
@@ -21,6 +21,7 @@ import {
   Spinner,
 } from '@analytics/components/ui';
 import { describeError } from '@analytics/lib/labels';
+import { ProjectDataScopePanel } from './project-data-scope';
 
 const SUBJECT_TABS: ReadonlyArray<{ key: GrantSubjectType; label: string }> = [
   { key: 'user', label: '用户' },
@@ -59,6 +60,12 @@ export function ProjectAuthorizeDialog({
   const [keyword, setKeyword] = useState('');
   const [role, setRole] = useState<ProjectRole>('viewer');
   const [error, setError] = useState<string | null>(null);
+  // 正在配置数据范围的主体；null = 回到授权列表。
+  const [scopeTarget, setScopeTarget] = useState<{
+    subject_type: GrantSubjectType;
+    subject_id: string;
+    name: string;
+  } | null>(null);
 
   const grantsKey = ['analytics-project-grants', projectId];
   const grants = useQuery({
@@ -138,6 +145,27 @@ export function ProjectAuthorizeDialog({
   );
 
   const busy = add.isPending || remove.isPending;
+
+  if (scopeTarget) {
+    return (
+      <Dialog
+        open={open}
+        title={`数据范围「${projectName}」`}
+        onClose={() => setScopeTarget(null)}
+        width="max-w-2xl"
+      >
+        <ProjectDataScopePanel
+          projectId={projectId}
+          subject={{
+            subject_type: scopeTarget.subject_type,
+            subject_id: scopeTarget.subject_id,
+          }}
+          subjectName={scopeTarget.name}
+          onClose={() => setScopeTarget(null)}
+        />
+      </Dialog>
+    );
+  }
 
   return (
     <Dialog open={open} title={`授权「${projectName}」`} onClose={onClose} width="max-w-2xl">
@@ -251,14 +279,30 @@ export function ProjectAuthorizeDialog({
                         row.role_code}
                     </span>
                   </span>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    disabled={busy}
-                    onClick={() => remove.mutate(row)}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
+                  <span className="flex items-center gap-1">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() =>
+                        setScopeTarget({
+                          subject_type: row.subject_type,
+                          subject_id: row.subject_id,
+                          name: row.name,
+                        })
+                      }
+                      title="配置数据范围"
+                    >
+                      <SlidersHorizontal className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={busy}
+                      onClick={() => remove.mutate(row)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </span>
                 </li>
               ))}
             </ul>

@@ -15,7 +15,7 @@ from knowflow_analytics.modeling.catalog_contracts import (
     DimensionContract,
     ModelRelationContract,
 )
-from knowflow_analytics.modeling.introspector import PostgreSqlIntrospector
+from knowflow_analytics.modeling.introspector import SchemaIntrospector
 from knowflow_analytics.semantic.index import EmbeddingBatch
 from tests.support import create_sales_fixture
 
@@ -43,7 +43,7 @@ def test_api_first_modeling_uses_explicit_table_and_dataset_commands():
     executor = SqlExecutor(database_url)
     application = AnalyticsApplication(
         catalog=catalog,
-        introspector=PostgreSqlIntrospector(datasource_engine),
+        introspector=SchemaIntrospector(datasource_engine),
         executor=executor,
         embedding_gateway=_EmbeddingGateway(),
     )

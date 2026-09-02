@@ -5,17 +5,33 @@ from datetime import date
 
 from knowflow_analytics.contracts import DEFAULT_DATE_FORMAT, Aggregation
 
+# 类型名同时覆盖 PostgreSQL 与 MySQL。
+#
+# 这里判错不会报错，只会让一列**悄悄没被建模**：MySQL 的 DOUBLE 判不成数值，金额
+# 列就走不到度量；DATETIME 判不成时间，时间维度和同比全没了。实测 20 个 MySQL 类型
+# 里原来判错 8 个（TINYINT / MEDIUMINT / DOUBLE / DATETIME / YEAR / LONGTEXT /
+# BOOLEAN / ENUM）。
 _NUMERIC_TYPE = re.compile(
-    r"^(?:smallint|integer|bigint|decimal|numeric|real|double\s+precision|"
-    r"smallserial|serial|bigserial|money|float\d*|int[248]?)(?:\b|\s*\()",
+    # MySQL：tinyint、mediumint，以及不带 precision 的 double。
+    # MySQL 的 BOOLEAN 在元数据里就是 TINYINT，两者分辨不出来，一并当数值。
+    r"^(?:smallint|integer|bigint|tinyint|mediumint|decimal|numeric|real|"
+    r"double(?:\s+precision)?|smallserial|serial|bigserial|money|float\d*|"
+    r"int[248]?)(?:\b|\s*\()",
     re.IGNORECASE,
 )
 _TEMPORAL_TYPE = re.compile(
-    r"^(?:date|time|timestamp)(?:\b|\s*\()",
+    # datetime 必须单列：正则锚在行首，``date`` 后面跟着 ``t`` 过不了 \b，
+    # 也不会回溯去试 ``time``，所以 MySQL 的 DATETIME 原来一个都匹配不上。
+    #
+    # MySQL 的 YEAR **刻意不算时间类型**：它只是个年份，按日/周/月截断没有意义，
+    # 归进来会让它变成一个截不动的时间维度。宁可不分类，让它走后面的规则。
+    r"^(?:datetime|date|time|timestamp)(?:\b|\s*\()",
     re.IGNORECASE,
 )
 _TEXT_TYPE = re.compile(
-    r"^(?:text|citext|character(?:\s+varying)?|varchar|char)(?:\b|\s*\()",
+    # MySQL：长短文本变体，以及 enum/set 这类取值受限的分类列。
+    r"^(?:tinytext|mediumtext|longtext|text|citext|character(?:\s+varying)?|"
+    r"varchar|char|enum|set)(?:\b|\s*\()",
     re.IGNORECASE,
 )
 

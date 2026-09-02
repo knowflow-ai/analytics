@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import os
+
+import pytest
 from sqlalchemy import create_engine
+from sqlalchemy.engine import make_url
 
 from knowflow_analytics.contracts import QueryFilter, SemanticQuery, SemanticRelease
 from knowflow_analytics.evaluation.contracts import GoldenSuite
@@ -64,7 +68,30 @@ def _single_dataset(dataset_ids: tuple[str, ...]) -> str:
     return dataset_ids[0]
 
 
+# 允许被建表夹具擦写的库。默认只认本地开发库名。
+#
+# 这两个夹具会 DROP 并重建 analytics_v0 里的表。它们本意是给一次性测试库用，但
+# KNOWFLOW_ANALYTICS_TEST_DATABASE_URL 常常就指着开发者自己在用的那个库——已经
+# 两次把演示数据（跨年那行订单）擦掉，而症状出现在报表页，离原因很远。
+#
+# 想指向别的库：设 KNOWFLOW_ANALYTICS_TEST_ALLOW_DESTRUCTIVE=1 明确表态。
+_DESTRUCTIVE_ALLOWED_DATABASES = frozenset({"analytics_test", "knowflow_analytics_test"})
+
+
+def _guard_destructive(database_url: str) -> None:
+    if os.getenv("KNOWFLOW_ANALYTICS_TEST_ALLOW_DESTRUCTIVE") == "1":
+        return
+    database = make_url(database_url).database or ""
+    if database.rsplit("/", 1)[-1] in _DESTRUCTIVE_ALLOWED_DATABASES:
+        return
+    pytest.skip(
+        f"跳过会擦写数据的夹具：{database!r} 不在允许列表内。"
+        "指向一次性测试库，或设 KNOWFLOW_ANALYTICS_TEST_ALLOW_DESTRUCTIVE=1。"
+    )
+
+
 def create_sales_fixture(database_url: str) -> None:
+    _guard_destructive(database_url)
     engine = create_engine(database_url)
     statements = (
         "CREATE SCHEMA IF NOT EXISTS analytics_v0",
@@ -118,6 +145,7 @@ def create_sales_fixture_mysql(database_url: str) -> None:
     方言而不是数据。
     """
 
+    _guard_destructive(database_url)
     engine = create_engine(database_url)
     statements = (
         "DROP TABLE IF EXISTS order_items",

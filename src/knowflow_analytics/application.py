@@ -131,7 +131,7 @@ from knowflow_analytics.modeling.dimension_dictionary_eligibility import (
 )
 from knowflow_analytics.modeling.domain import DomainGovernance, DomainLifecycle
 from knowflow_analytics.modeling.drift import SchemaDriftAnalyzer, SchemaDriftReport
-from knowflow_analytics.modeling.introspector import PostgreSqlIntrospector
+from knowflow_analytics.modeling.introspector import SchemaIntrospector
 from knowflow_analytics.modeling.jobs import (
     ModelingJob,
     ModelingJobProgress,
@@ -160,15 +160,15 @@ from knowflow_analytics.modeling.product import (
     ScopeRecommendationSet,
 )
 from knowflow_analytics.modeling.profile import ColumnProfiler, TableProfile
-from knowflow_analytics.modeling.profiler import PostgreSqlSemanticProfiler
+from knowflow_analytics.modeling.profiler import DimensionValueProfiler
 from knowflow_analytics.modeling.proposal_defaults import (
     default_decisions,
     physical_comments_for,
 )
 from knowflow_analytics.modeling.quality import (
     MetricPreviewDecision,
+    ModelingQualityProfiler,
     ModelingQualityReport,
-    PostgreSqlModelingQualityProfiler,
     modeling_quality_report_is_stale,
 )
 from knowflow_analytics.modeling.relation_candidates import (
@@ -483,14 +483,14 @@ class AnalyticsApplication:
         self,
         *,
         catalog: CatalogStore,
-        introspector: PostgreSqlIntrospector,
+        introspector: SchemaIntrospector,
         executor: SqlExecutor,
         embedding_gateway: EmbeddingGateway,
         ai_modeller: AiSemanticModeller | None = None,
         dimension_alias_suggester: DimensionValueAliasSuggester | None = None,
-        semantic_profiler: PostgreSqlSemanticProfiler | None = None,
+        semantic_profiler: DimensionValueProfiler | None = None,
         column_profiler: ColumnProfiler | None = None,
-        quality_profiler: PostgreSqlModelingQualityProfiler | None = None,
+        quality_profiler: ModelingQualityProfiler | None = None,
         llm_parser: LlmS2SqlParser | None = None,
         textual_corrector: TextualS2SqlCorrector | None = None,
         physical_sql_corrector: LlmPhysicalSqlCorrector | None = None,
@@ -3637,9 +3637,7 @@ class AnalyticsApplication:
         # 诊断里的 request 记实际执行的 continuation；链式下钻的语义恢复
         # 走 artifact.response.semantic_query，不依赖这里。
         executed_query = (
-            response.semantic_query
-            if isinstance(response, CompletedQueryResponse)
-            else base_query
+            response.semantic_query if isinstance(response, CompletedQueryResponse) else base_query
         )
         self._save_query_diagnostic_best_effort(
             request=StructuredQueryRequest(

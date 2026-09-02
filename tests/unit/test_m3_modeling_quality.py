@@ -10,15 +10,15 @@ from knowflow_analytics.modeling.quality import (
     MetricPreview,
     MetricPreviewDecision,
     ModelingQualityError,
+    ModelingQualityProfiler,
     ModelingQualityReport,
     ModelingQualityReportStatus,
-    PostgreSqlModelingQualityProfiler,
     QualityStatus,
 )
 
 
 def test_metric_dimension_matrix_exposes_safe_and_fanout_paths(sales_release):
-    cells = PostgreSqlModelingQualityProfiler._reachability_matrix(sales_release)
+    cells = ModelingQualityProfiler._reachability_matrix(sales_release)
     index = {(item.metric_id, item.dimension_id): item for item in cells}
 
     assert index[("net_revenue", "customer_segment")].status is QualityStatus.PASSED
@@ -46,8 +46,8 @@ def test_reachability_is_invariant_to_business_name_changes(sales_release):
         }
     )
 
-    original = PostgreSqlModelingQualityProfiler._reachability_matrix(sales_release)
-    changed = PostgreSqlModelingQualityProfiler._reachability_matrix(renamed)
+    original = ModelingQualityProfiler._reachability_matrix(sales_release)
+    changed = ModelingQualityProfiler._reachability_matrix(renamed)
 
     assert [
         (item.metric_id, item.dimension_id, item.status, item.reason_code) for item in changed
@@ -93,7 +93,7 @@ def test_metric_sample_review_requires_one_decision_per_preview(sales_release):
         metric_previews=previews,
         created_at=datetime(2026, 8, 17, tzinfo=UTC),
     )
-    profiler = PostgreSqlModelingQualityProfiler(Mock(), Mock())
+    profiler = ModelingQualityProfiler(Mock(), Mock())
 
     with pytest.raises(ModelingQualityError) as exc_info:
         profiler.review(
@@ -154,7 +154,7 @@ def test_metric_sample_review_cannot_override_execution_failure(sales_release):
         ),
         created_at=datetime(2026, 8, 17, tzinfo=UTC),
     )
-    profiler = PostgreSqlModelingQualityProfiler(Mock(), Mock())
+    profiler = ModelingQualityProfiler(Mock(), Mock())
 
     with pytest.raises(ModelingQualityError) as exc_info:
         profiler.review(

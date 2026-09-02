@@ -18,8 +18,8 @@ from knowflow_analytics.catalog.store import CatalogStore
 from knowflow_analytics.execution.executor import SqlExecutor
 from knowflow_analytics.gateways.embedding import HttpEmbeddingGateway
 from knowflow_analytics.gateways.model import HttpModelGateway
-from knowflow_analytics.modeling.introspector import PostgreSqlIntrospector
-from knowflow_analytics.modeling.profiler import PostgreSqlSemanticProfiler
+from knowflow_analytics.modeling.introspector import SchemaIntrospector
+from knowflow_analytics.modeling.profiler import DimensionValueProfiler
 from knowflow_analytics.query.parser import LlmS2SqlParser
 from tests.integration.test_modeling_http_loop import (
     _PROJECT_ID,
@@ -74,8 +74,8 @@ def test_small_query_baseline_uses_the_api_built_release():
     )
     application = AnalyticsApplication(
         catalog=catalog,
-        introspector=PostgreSqlIntrospector(datasource_engine),
-        semantic_profiler=PostgreSqlSemanticProfiler(datasource_engine),
+        introspector=SchemaIntrospector(datasource_engine),
+        semantic_profiler=DimensionValueProfiler(datasource_engine),
         executor=executor,
         embedding_gateway=embedding_gateway,
         llm_parser=LlmS2SqlParser(model_gateway),

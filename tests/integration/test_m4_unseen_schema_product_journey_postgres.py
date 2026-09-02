@@ -17,8 +17,8 @@ from knowflow_analytics.api import create_api
 from knowflow_analytics.application import AnalyticsApplication
 from knowflow_analytics.catalog.store import CatalogStore
 from knowflow_analytics.execution.executor import SqlExecutor
-from knowflow_analytics.modeling.introspector import PostgreSqlIntrospector
-from knowflow_analytics.modeling.profiler import PostgreSqlSemanticProfiler
+from knowflow_analytics.modeling.introspector import SchemaIntrospector
+from knowflow_analytics.modeling.profiler import DimensionValueProfiler
 from knowflow_analytics.semantic.index import EmbeddingBatch
 
 _SECRET = "m4-unseen-schema-product-journey-secret"
@@ -165,8 +165,8 @@ def _run_product_journey(case: _JourneyCase) -> dict[str, Any]:
     executor = SqlExecutor(database_url)
     application = AnalyticsApplication(
         catalog=CatalogStore(catalog_engine),
-        introspector=PostgreSqlIntrospector(datasource_engine),
-        semantic_profiler=PostgreSqlSemanticProfiler(datasource_engine),
+        introspector=SchemaIntrospector(datasource_engine),
+        semantic_profiler=DimensionValueProfiler(datasource_engine),
         executor=executor,
         embedding_gateway=_EmbeddingGateway(),
         minimum_evaluation_cases=1,
@@ -315,8 +315,8 @@ def _run_product_journey(case: _JourneyCase) -> dict[str, Any]:
         restarted_catalog_engine = _catalog_engine(database_url, catalog_schema)
         restarted = AnalyticsApplication(
             catalog=CatalogStore(restarted_catalog_engine),
-            introspector=PostgreSqlIntrospector(datasource_engine),
-            semantic_profiler=PostgreSqlSemanticProfiler(datasource_engine),
+            introspector=SchemaIntrospector(datasource_engine),
+            semantic_profiler=DimensionValueProfiler(datasource_engine),
             executor=executor,
             embedding_gateway=_EmbeddingGateway(),
             minimum_evaluation_cases=1,

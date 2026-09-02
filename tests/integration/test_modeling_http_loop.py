@@ -21,8 +21,8 @@ from knowflow_analytics.modeling.coverage import (
     ProductChainEvidence,
     build_modeling_coverage_report,
 )
-from knowflow_analytics.modeling.introspector import PostgreSqlIntrospector
-from knowflow_analytics.modeling.profiler import PostgreSqlSemanticProfiler
+from knowflow_analytics.modeling.introspector import SchemaIntrospector
+from knowflow_analytics.modeling.profiler import DimensionValueProfiler
 from knowflow_analytics.semantic.index import EmbeddingBatch
 from tests.support import create_sales_fixture
 
@@ -93,12 +93,12 @@ def test_real_postgres_is_modeled_published_and_reloaded_only_through_http(tmp_p
     catalog = CatalogStore(catalog_engine)
     catalog.create_schema()
     executor = SqlExecutor(database_url)
-    introspector = PostgreSqlIntrospector(datasource_engine)
+    introspector = SchemaIntrospector(datasource_engine)
     gateway = _EmbeddingGateway()
     application = AnalyticsApplication(
         catalog=catalog,
         introspector=introspector,
-        semantic_profiler=PostgreSqlSemanticProfiler(datasource_engine),
+        semantic_profiler=DimensionValueProfiler(datasource_engine),
         executor=executor,
         embedding_gateway=gateway,
         require_evaluation_for_publish=False,

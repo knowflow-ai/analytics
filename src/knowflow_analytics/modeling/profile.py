@@ -19,6 +19,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from knowflow_analytics.contracts import FrozenModel
 from knowflow_analytics.errors import AnalyticsError
+from knowflow_analytics.execution.dialect import SqlDialect, to_dialect_sql
 from knowflow_analytics.modeling.contracts import SchemaColumnSnapshot, TableSnapshot
 from knowflow_analytics.modeling.type_system import is_numeric_type, is_temporal_type
 
@@ -80,7 +81,7 @@ def _quote(identifier: str) -> str:
     return '"' + identifier.replace('"', '""') + '"'
 
 
-class PostgreSqlColumnProfiler:
+class ColumnStatisticsProfiler:
     """一张表一条 SQL：COUNT(*) + 每列 COUNT(col) / COUNT(DISTINCT col) / MIN / MAX。
 
     大表用 TABLESAMPLE SYSTEM 把扫描量压到上限附近 —— 分类只需要量级
@@ -94,11 +95,13 @@ class PostgreSqlColumnProfiler:
         sample_rows: int = 200_000,
         statement_timeout_ms: int = 10_000,
         sample_values: bool = True,
+        dialect: SqlDialect = SqlDialect.POSTGRES,
     ) -> None:
         self._engine = engine
         self._sample_rows = sample_rows
         self._statement_timeout_ms = statement_timeout_ms
         self._sample_values_enabled = sample_values
+        self._dialect = dialect
 
     def profile_table(self, table: TableSnapshot) -> TableProfile:
         source = f"{_quote(table.schema_name)}.{_quote(table.name)}"
@@ -108,8 +111,11 @@ class PostgreSqlColumnProfiler:
             sample_source = source
             if truncated:
                 # SYSTEM 采样按页，很快；百分比留 20% 余量保证至少采到目标行数。
+                # MySQL 没有 TABLESAMPLE，方言层会退化成有界 LIMIT（见其注释）。
                 percent = min(100.0, 100.0 * self._sample_rows / row_count * 1.2)
-                sample_source = f"{source} TABLESAMPLE SYSTEM ({percent:.4f})"
+                sample_source = self._dialect.sampled_source_sql(
+                    source, percent=percent, rows=self._sample_rows
+                )
             stats = self._column_stats(sample_source, table.columns)
             samples = (
                 self._sample_values(sample_source, table.columns, stats)
@@ -144,13 +150,20 @@ class PostgreSqlColumnProfiler:
         )
 
     def _execute(self, query: str, params: dict | None = None):
+        """画像语句按内部记法（PostgreSQL 写法）拼，在这里统一落到数据源的方言。
+
+        底下那些 SQL 是手写字符串，绕过了翻译器；不在这一处收口的话，MySQL 数据源
+        连建模都进不去——``::bigint`` 是语法错、``FILTER`` 是语法错。
+        """
+
         with self._engine.connect() as connection, connection.begin():
-            connection.exec_driver_sql("SET TRANSACTION READ ONLY")
-            connection.exec_driver_sql(
-                f"SET LOCAL statement_timeout = {self._statement_timeout_ms}"
-            )
-            connection.exec_driver_sql("SET LOCAL lock_timeout = 1000")
-            return connection.execute(text(query), params or {}).all()
+            for statement in self._dialect.read_only_session_sql(
+                statement_timeout_ms=self._statement_timeout_ms, lock_timeout_ms=1_000
+            ):
+                connection.exec_driver_sql(statement)
+            return connection.execute(
+                text(to_dialect_sql(query, self._dialect)), params or {}
+            ).all()
 
     def _row_count(self, source: str) -> int:
         rows = self._execute(f"SELECT COUNT(*)::bigint AS n FROM {source}")

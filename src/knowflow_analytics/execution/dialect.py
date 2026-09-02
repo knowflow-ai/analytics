@@ -44,7 +44,12 @@ from sqlglot import exp
 from knowflow_analytics.contracts import TimeGranularity
 from knowflow_analytics.errors import TranslationError
 
-__all__ = ["SqlDialect", "count_where_sql", "render_physical_sql"]
+__all__ = [
+    "SqlDialect",
+    "count_where_sql",
+    "render_physical_sql",
+    "to_dialect_sql",
+]
 
 
 # 不含 ``%``（见模块注释第 2 条），且都 CAST 回 DATE 以保住类型契约（第 1 条）。
@@ -92,6 +97,22 @@ class SqlDialect(StrEnum):
         if self is SqlDialect.POSTGRES:
             return numerator_sql
         return f"CAST({numerator_sql} AS DOUBLE)"
+
+    def sampled_source_sql(self, source_sql: str, *, percent: float, rows: int) -> str:
+        """大表画像时的采样来源。
+
+        ``TABLESAMPLE SYSTEM`` 是 PostgreSQL 专有的，MySQL 没有等价物。不处理的话
+        超过采样上限的 MySQL 表会整条画像语句失败，而画像器**吞异常返回空 profile**
+        （设计如此：画像是证据不是门禁），于是表现为"这张大表没什么统计量"。
+
+        MySQL 退化成有界的 ``LIMIT`` 子查询：不是随机采样，取的是前 N 行，所以在
+        按某列物理有序的表上会低估基数。这是明确的取舍——有偏但有界的统计量，好过
+        一份空的。结果仍标 ``truncated``，下游据此知道这不是全表统计。
+        """
+
+        if self is SqlDialect.POSTGRES:
+            return f"{source_sql} TABLESAMPLE SYSTEM ({percent:.4f})"
+        return f"(SELECT * FROM {source_sql} LIMIT {rows}) AS __kf_sample"
 
     def explain_sql(self, sql: str) -> str:
         """查询计划语句。两边语法不同，且 MySQL 不认 PostgreSQL 的括号写法。
@@ -170,6 +191,9 @@ def render_physical_sql(expression: exp.Expression, dialect: SqlDialect) -> str:
     rendered = expression.copy()
     for order in rendered.find_all(exp.Order):
         _rewrite_null_ordering(order)
+    # 顺序不能反：行构造器要先展开成并列参数，FILTER 改写才会给**每一个**参数各套
+    # 一个 CASE。反过来的话 CASE 里裹着 (a, b)，MySQL 同样以 1241 拒绝（实测）。
+    rendered = rendered.transform(_rewrite_distinct_row_constructor, copy=False)
     rendered = rendered.transform(_rewrite_aggregate_filter, copy=False)
 
     def replace(node: exp.Expression) -> exp.Expression:
@@ -283,3 +307,39 @@ def _rewrite_aggregate_filter(node: exp.Expression) -> exp.Expression:
     else:
         rewritten.set("this", guarded(target))
     return rewritten
+
+
+def _rewrite_distinct_row_constructor(node: exp.Expression) -> exp.Expression:
+    """``COUNT(DISTINCT (a, b))`` → ``COUNT(DISTINCT a, b)``。
+
+    多列去重计数在 PostgreSQL 里写成行构造器，MySQL 不接受——实测直接以
+    ``1241 Operand should contain 1 column(s)`` 拒绝，而 sqlglot 原样透传。MySQL
+    自己的写法是逗号并列，两者算出的数相同（实测）。
+
+    发布前质量报告用它统计主标识的唯一率，是复合主键那条路径；不改的话，MySQL
+    数据源上"主标识唯一吗"这项检查根本跑不起来。
+    """
+
+    if not isinstance(node, exp.Distinct):
+        return node
+    expressions = node.expressions
+    if len(expressions) != 1 or not isinstance(expressions[0], exp.Tuple):
+        return node
+    node.set("expressions", [item.copy() for item in expressions[0].expressions])
+    return node
+
+
+def to_dialect_sql(sql: str, dialect: SqlDialect) -> str:
+    """把一段按内部记法（PostgreSQL 写法）写死的 SQL 落到目标方言。
+
+    建模期的画像、取值分布、质量报告都是手写 SQL 字符串，绕过了翻译器。它们同样
+    要跟着数据源走，否则 MySQL 数据源连不上建模——``::bigint`` 是语法错，
+    ``FILTER`` 是语法错，行构造器被 1241 拒绝。
+
+    PostgreSQL 原样返回：这些语句本来就是按它写的，重渲染只会平添与既有产物的
+    差异，而且没有任何收益。
+    """
+
+    if dialect is SqlDialect.POSTGRES:
+        return sql
+    return render_physical_sql(sqlglot.parse_one(sql, read="postgres"), dialect)

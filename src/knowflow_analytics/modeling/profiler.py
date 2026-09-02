@@ -11,6 +11,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from knowflow_analytics.contracts import SemanticRelease
 from knowflow_analytics.errors import AnalyticsError
+from knowflow_analytics.execution.dialect import SqlDialect, to_dialect_sql
 from knowflow_analytics.hashing import content_hash
 from knowflow_analytics.modeling.contracts import (
     DimensionDataProfile,
@@ -26,7 +27,7 @@ class SemanticProfileError(AnalyticsError):
         super().__init__(message, code=code, stage="MODELING_PROFILING")
 
 
-class PostgreSqlSemanticProfiler:
+class DimensionValueProfiler:
     """Read governed categorical evidence for a reviewed semantic specification.
 
     The value fetch groups a selected dimension over the full configured data
@@ -46,7 +47,9 @@ class PostgreSqlSemanticProfiler:
         statement_timeout_ms: int = 3_000,
         overall_timeout_ms: int = 30_000,
         max_value_length: int = 256,
+        dialect: SqlDialect = SqlDialect.POSTGRES,
     ) -> None:
+        self._dialect = dialect
         if not 1 <= max_values_per_dimension <= 500:
             raise ValueError("max_values_per_dimension must be between 1 and 500")
         if not 1 <= max_dimensions <= 1_000:
@@ -173,8 +176,11 @@ class PostgreSqlSemanticProfiler:
         field_id: str,
     ) -> tuple[DimensionDataProfile, tuple[str, ...]]:
         column = _quote_identifier(column_name)
+        # 按内部记法（PostgreSQL 写法）拼，交给方言层落地：``::bigint`` 与
+        # ``CAST(... AS text)`` 在 MySQL 上都是语法错。
         query = text(
-            f"""
+            to_dialect_sql(
+                f"""
             WITH frequencies AS (
                 SELECT {column} AS value, COUNT(*)::bigint AS frequency
                 FROM ({source_sql}) AS governed_profile_source
@@ -189,14 +195,15 @@ class PostgreSqlSemanticProfiler:
             FROM frequencies
             ORDER BY frequency DESC, CAST(value AS text)
             LIMIT :value_rows
-            """
+            """,
+                self._dialect,
+            )
         )
         with self._engine.connect() as connection, connection.begin():
-            connection.exec_driver_sql("SET TRANSACTION READ ONLY")
-            connection.exec_driver_sql(
-                f"SET LOCAL statement_timeout = {self._statement_timeout_ms}"
-            )
-            connection.exec_driver_sql("SET LOCAL lock_timeout = 1000")
+            for statement in self._dialect.read_only_session_sql(
+                statement_timeout_ms=self._statement_timeout_ms, lock_timeout_ms=1_000
+            ):
+                connection.exec_driver_sql(statement)
             rows = connection.execute(
                 query,
                 {**source_parameters, "value_rows": self._max_values + 1},

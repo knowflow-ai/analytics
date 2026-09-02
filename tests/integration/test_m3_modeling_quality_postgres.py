@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, text
 from knowflow_analytics.execution.executor import SqlExecutor
 from knowflow_analytics.modeling.contracts import ModelingRevision
 from knowflow_analytics.modeling.quality import (
-    PostgreSqlModelingQualityProfiler,
+    ModelingQualityProfiler,
     QualityStatus,
 )
 from tests.support import create_sales_fixture
@@ -56,7 +56,7 @@ def test_m3_profiles_grain_relations_metrics_and_dataset_matrix_against_postgres
     )
     engine = create_engine(database_url)
     executor = SqlExecutor(database_url)
-    profiler = PostgreSqlModelingQualityProfiler(engine, executor)
+    profiler = ModelingQualityProfiler(engine, executor)
     try:
         report = profiler.profile(revision)
     finally:
@@ -116,7 +116,7 @@ def test_relation_coverage_counts_null_join_keys_as_unmatched_rows(sales_release
         revision_id="revision-quality-null-join-key",
     )
     executor = SqlExecutor(database_url)
-    profiler = PostgreSqlModelingQualityProfiler(engine, executor)
+    profiler = ModelingQualityProfiler(engine, executor)
     try:
         report = profiler.profile(revision)
     finally:

@@ -26,10 +26,10 @@ from knowflow_analytics.catalog.store import CatalogStore
 from knowflow_analytics.execution.executor import SqlExecutor
 from knowflow_analytics.modeling.ai_modeller import AiSemanticModeller
 from knowflow_analytics.modeling.dimension_aliases import DimensionValueAliasSuggester
-from knowflow_analytics.modeling.introspector import PostgreSqlIntrospector
-from knowflow_analytics.modeling.profile import PostgreSqlColumnProfiler
-from knowflow_analytics.modeling.profiler import PostgreSqlSemanticProfiler
-from knowflow_analytics.modeling.quality import PostgreSqlModelingQualityProfiler
+from knowflow_analytics.modeling.introspector import SchemaIntrospector
+from knowflow_analytics.modeling.profile import ColumnStatisticsProfiler
+from knowflow_analytics.modeling.profiler import DimensionValueProfiler
+from knowflow_analytics.modeling.quality import ModelingQualityProfiler
 from knowflow_analytics.oss.config import ConfigStore, OssConfig, normalize_postgres_url
 from knowflow_analytics.oss.gateways import (
     OpenAiCompatibleEmbeddingGateway,
@@ -213,14 +213,14 @@ class OssRuntime:
         del config  # gateways already carry the endpoint configuration
         application = AnalyticsApplication(
             catalog=self.catalog,
-            introspector=PostgreSqlIntrospector(datasource_engine),
+            introspector=SchemaIntrospector(datasource_engine),
             executor=executor,
             embedding_gateway=embedding_gateway,
-            semantic_profiler=PostgreSqlSemanticProfiler(datasource_engine),
-            column_profiler=PostgreSqlColumnProfiler(
+            semantic_profiler=DimensionValueProfiler(datasource_engine),
+            column_profiler=ColumnStatisticsProfiler(
                 datasource_engine, sample_values=settings.modeling_sample_values
             ),
-            quality_profiler=PostgreSqlModelingQualityProfiler(datasource_engine, executor),
+            quality_profiler=ModelingQualityProfiler(datasource_engine, executor),
             ai_modeller=AiSemanticModeller(
                 model_gateway=model_gateway,
                 max_concurrency=settings.modeling_max_concurrency,

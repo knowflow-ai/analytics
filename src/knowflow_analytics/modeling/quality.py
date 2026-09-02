@@ -18,6 +18,7 @@ from knowflow_analytics.contracts import (
     SemanticRelease,
 )
 from knowflow_analytics.errors import AnalyticsError, TranslationError
+from knowflow_analytics.execution.dialect import SqlDialect, to_dialect_sql
 from knowflow_analytics.execution.executor import SqlExecutor
 from knowflow_analytics.hashing import content_hash, semantic_evidence_hash
 from knowflow_analytics.modeling.contracts import ModelingRevision
@@ -140,7 +141,7 @@ class ModelingQualityError(AnalyticsError):
         super().__init__(message, code=code, stage="MODELING_QUALITY")
 
 
-class PostgreSqlModelingQualityProfiler:
+class ModelingQualityProfiler:
     """Collect empirical modeling evidence from a read-only PostgreSQL source.
 
     Validating the configured resource shapes does not prove grain or
@@ -156,6 +157,7 @@ class PostgreSqlModelingQualityProfiler:
         statement_timeout_ms: int = 30_000,
         overall_timeout_ms: int = 180_000,
         max_metric_previews: int = 200,
+        dialect: SqlDialect = SqlDialect.POSTGRES,
     ) -> None:
         if not 100 <= statement_timeout_ms <= 300_000:
             raise ValueError("statement_timeout_ms must be between 100 and 300000")
@@ -168,6 +170,7 @@ class PostgreSqlModelingQualityProfiler:
         self._statement_timeout_ms = statement_timeout_ms
         self._overall_timeout_ms = overall_timeout_ms
         self._max_metric_previews = max_metric_previews
+        self._dialect = dialect
         self._translator = SemanticTranslator()
 
     def profile(self, revision: ModelingRevision) -> ModelingQualityReport:
@@ -574,17 +577,27 @@ class PostgreSqlModelingQualityProfiler:
             ) from exc
 
     def _execute_one(self, query: Any, parameters: dict[str, Any]) -> tuple[Any, ...]:
+        """质量检查的语句按内部记法拼，在这里统一落到数据源的方言。
+
+        这些语句里有三样 MySQL 不认的东西：``::bigint`` 转型、
+        ``COUNT(*) FILTER (WHERE ...)``、以及多列去重用的行构造器
+        ``COUNT(DISTINCT (a, b))``（实测以 1241 拒绝）。不收口的话，MySQL 数据源上
+        发布前质量报告一条都跑不出来。
+        """
+
+        statement = text(to_dialect_sql(str(query), self._dialect))
         try:
             with self._engine.connect() as connection, connection.begin():
-                connection.exec_driver_sql("SET TRANSACTION READ ONLY")
-                connection.exec_driver_sql(
-                    f"SET LOCAL statement_timeout = {self._statement_timeout_ms}"
-                )
-                connection.exec_driver_sql("SET LOCAL lock_timeout = 2000")
-                row = connection.execute(query, parameters).one()
+                for item in self._dialect.read_only_session_sql(
+                    statement_timeout_ms=self._statement_timeout_ms, lock_timeout_ms=2_000
+                ):
+                    connection.exec_driver_sql(item)
+                row = connection.execute(statement, parameters).one()
                 return tuple(row)
         except SQLAlchemyError as exc:
-            raise ModelingQualityError("PostgreSQL quality profile query failed") from exc
+            raise ModelingQualityError(
+                f"{self._dialect.value} quality profile query failed"
+            ) from exc
 
 
 def _quote_identifier(value: str | None) -> str:

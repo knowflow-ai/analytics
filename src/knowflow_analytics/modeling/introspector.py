@@ -7,6 +7,7 @@ from sqlalchemy import Engine, bindparam, inspect, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from knowflow_analytics.errors import AnalyticsError
+from knowflow_analytics.execution.dialect import SqlDialect
 from knowflow_analytics.modeling.contracts import (
     ForeignKeySnapshot,
     SchemaColumnSnapshot,
@@ -21,22 +22,38 @@ class SchemaIntrospectionError(AnalyticsError):
         super().__init__(message, code=code, stage="MODELING_INTROSPECTION")
 
 
-class PostgreSqlIntrospector:
+class SchemaIntrospector:
     """Read a bounded PostgreSQL schema snapshot without exposing credentials."""
 
-    def __init__(self, engine: Engine) -> None:
+    def __init__(self, engine: Engine, *, dialect: SqlDialect = SqlDialect.POSTGRES) -> None:
         self._engine = engine
+        self._dialect = dialect
 
     def connection_test(self) -> dict[str, str]:
+        """库名 + 服务端版本。
+
+        表结构读取走 SQLAlchemy 的通用 ``inspect()``，本来就跨引擎；**只有这一条是
+        自己写的 SQL**，而 ``current_database()`` / ``current_setting()`` 是
+        PostgreSQL 专有的——MySQL 上直接以 1305 报"函数不存在"。漏了这一处，
+        MySQL 数据源连"连上了吗"都答不出来。
+        """
+
+        if self._dialect is SqlDialect.POSTGRES:
+            probe = "SELECT current_database(), current_setting('server_version')"
+        else:
+            probe = "SELECT DATABASE(), VERSION()"
         try:
             with self._engine.connect() as connection, connection.begin():
-                connection.exec_driver_sql("SET TRANSACTION READ ONLY")
-                row = connection.execute(
-                    text("SELECT current_database(), current_setting('server_version')")
-                ).one()
+                for statement in self._dialect.read_only_session_sql(
+                    statement_timeout_ms=10_000, lock_timeout_ms=2_000
+                ):
+                    connection.exec_driver_sql(statement)
+                row = connection.execute(text(probe)).one()
             return {"database": str(row[0]), "server_version": str(row[1])}
         except SQLAlchemyError as exc:
-            raise SchemaIntrospectionError("PostgreSQL connection validation failed") from exc
+            raise SchemaIntrospectionError(
+                f"{self._dialect.value} connection validation failed"
+            ) from exc
 
     def list_schemas(self) -> tuple[str, ...]:
         """List user schemas without creating a modeling revision."""

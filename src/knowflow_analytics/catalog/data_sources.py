@@ -31,10 +31,10 @@ from knowflow_analytics.errors import AnalyticsError
 from knowflow_analytics.execution.dialect import SqlDialect
 from knowflow_analytics.execution.executor import SqlExecutor
 from knowflow_analytics.execution.guard import PhysicalSqlGuard
-from knowflow_analytics.modeling.introspector import PostgreSqlIntrospector
-from knowflow_analytics.modeling.profile import PostgreSqlColumnProfiler
-from knowflow_analytics.modeling.profiler import PostgreSqlSemanticProfiler
-from knowflow_analytics.modeling.quality import PostgreSqlModelingQualityProfiler
+from knowflow_analytics.modeling.introspector import SchemaIntrospector
+from knowflow_analytics.modeling.profile import ColumnStatisticsProfiler
+from knowflow_analytics.modeling.profiler import DimensionValueProfiler
+from knowflow_analytics.modeling.quality import ModelingQualityProfiler
 
 __all__ = [
     "DataSourceBinding",
@@ -59,10 +59,10 @@ class DataSourceBinding:
     # 未必握着引擎，所以可以没有。
     engine: Engine | None
     executor: SqlExecutor
-    introspector: PostgreSqlIntrospector
-    column_profiler: PostgreSqlColumnProfiler
-    semantic_profiler: PostgreSqlSemanticProfiler
-    quality_profiler: PostgreSqlModelingQualityProfiler
+    introspector: SchemaIntrospector
+    column_profiler: ColumnStatisticsProfiler
+    semantic_profiler: DimensionValueProfiler
+    quality_profiler: ModelingQualityProfiler
 
 
 class DataSourceRegistry:
@@ -141,12 +141,12 @@ class DataSourceRegistry:
             dialect=dialect,
             engine=engine,
             executor=executor,
-            introspector=PostgreSqlIntrospector(engine),
-            column_profiler=PostgreSqlColumnProfiler(
-                engine, sample_values=self._modeling_sample_values
+            introspector=SchemaIntrospector(engine, dialect=dialect),
+            column_profiler=ColumnStatisticsProfiler(
+                engine, sample_values=self._modeling_sample_values, dialect=dialect
             ),
-            semantic_profiler=PostgreSqlSemanticProfiler(engine),
-            quality_profiler=PostgreSqlModelingQualityProfiler(engine, executor),
+            semantic_profiler=DimensionValueProfiler(engine, dialect=dialect),
+            quality_profiler=ModelingQualityProfiler(engine, executor, dialect=dialect),
         )
         with self._lock:
             # 并发时可能已经有人建好了；用先到的那个，把自己刚建的引擎丢掉，

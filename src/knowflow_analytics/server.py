@@ -14,10 +14,10 @@ from knowflow_analytics.gateways.knowledge import HttpKnowledgeGateway
 from knowflow_analytics.gateways.model import HttpModelGateway
 from knowflow_analytics.modeling.ai_modeller import AiSemanticModeller
 from knowflow_analytics.modeling.dimension_aliases import DimensionValueAliasSuggester
-from knowflow_analytics.modeling.introspector import PostgreSqlIntrospector
-from knowflow_analytics.modeling.profile import PostgreSqlColumnProfiler
-from knowflow_analytics.modeling.profiler import PostgreSqlSemanticProfiler
-from knowflow_analytics.modeling.quality import PostgreSqlModelingQualityProfiler
+from knowflow_analytics.modeling.introspector import SchemaIntrospector
+from knowflow_analytics.modeling.profile import ColumnStatisticsProfiler
+from knowflow_analytics.modeling.profiler import DimensionValueProfiler
+from knowflow_analytics.modeling.quality import ModelingQualityProfiler
 from knowflow_analytics.query.corrector import LlmPhysicalSqlCorrector, LlmSqlCorrector
 from knowflow_analytics.query.exemplars import GoldenSuiteExemplarProvider
 from knowflow_analytics.query.intent_adjudicator import LlmIntentAdjudicator
@@ -68,14 +68,14 @@ def create_app() -> FastAPI:
     application = AnalyticsApplication(
         catalog=catalog,
         data_sources=data_sources,
-        introspector=PostgreSqlIntrospector(datasource_engine),
+        introspector=SchemaIntrospector(datasource_engine),
         executor=executor,
         embedding_gateway=embedding_gateway,
-        semantic_profiler=PostgreSqlSemanticProfiler(datasource_engine),
-        column_profiler=PostgreSqlColumnProfiler(
+        semantic_profiler=DimensionValueProfiler(datasource_engine),
+        column_profiler=ColumnStatisticsProfiler(
             datasource_engine, sample_values=settings.modeling_sample_values
         ),
-        quality_profiler=PostgreSqlModelingQualityProfiler(datasource_engine, executor),
+        quality_profiler=ModelingQualityProfiler(datasource_engine, executor),
         ai_modeller=AiSemanticModeller(
             model_gateway=model_gateway,
             knowledge_gateway=knowledge_gateway,

@@ -17,8 +17,8 @@ from knowflow_analytics.modeling.contracts import (
     DimensionDictionaryStatus,
     DimensionValueDecision,
 )
-from knowflow_analytics.modeling.introspector import PostgreSqlIntrospector
-from knowflow_analytics.modeling.profiler import PostgreSqlSemanticProfiler
+from knowflow_analytics.modeling.introspector import SchemaIntrospector
+from knowflow_analytics.modeling.profiler import DimensionValueProfiler
 from knowflow_analytics.modeling.revision import RevisionConflictError
 from knowflow_analytics.semantic.index import EmbeddingBatch
 
@@ -47,8 +47,8 @@ def test_dimension_dictionary_preview_is_reviewed_before_catalog_write():
     executor = SqlExecutor(database_url)
     application = AnalyticsApplication(
         catalog=catalog,
-        introspector=PostgreSqlIntrospector(datasource_engine),
-        semantic_profiler=PostgreSqlSemanticProfiler(datasource_engine),
+        introspector=SchemaIntrospector(datasource_engine),
+        semantic_profiler=DimensionValueProfiler(datasource_engine),
         executor=executor,
         embedding_gateway=_EmbeddingGateway(),
     )
@@ -114,7 +114,7 @@ def test_dimension_dictionary_preview_is_reviewed_before_catalog_write():
             for item in reviewed.semantic_spec.dimension_values
             if item.dimension_id == priority_dimension.id
         )
-        complete_profile = PostgreSqlSemanticProfiler(datasource_engine).profile(
+        complete_profile = DimensionValueProfiler(datasource_engine).profile(
             snapshot=snapshot,
             semantic_spec=reviewed.semantic_spec,
             dimension_ids=(priority_dimension.id,),

@@ -367,9 +367,9 @@ def test_column_profiler_flag_does_not_shadow_sampling_method() -> None:
     profile_table call raised ``'bool' object is not callable``."""
     from sqlalchemy import create_engine
 
-    from knowflow_analytics.modeling.profile import PostgreSqlColumnProfiler
+    from knowflow_analytics.modeling.profile import ColumnStatisticsProfiler
 
-    profiler = PostgreSqlColumnProfiler(
+    profiler = ColumnStatisticsProfiler(
         create_engine("postgresql+psycopg://u:p@h/d"), sample_values=True
     )
     assert callable(profiler._sample_values)

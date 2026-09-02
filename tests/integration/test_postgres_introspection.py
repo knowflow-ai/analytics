@@ -6,8 +6,8 @@ import pytest
 from sqlalchemy import create_engine
 
 from knowflow_analytics.modeling.introspector import (
-    PostgreSqlIntrospector,
     SchemaIntrospectionError,
+    SchemaIntrospector,
 )
 
 
@@ -19,7 +19,7 @@ def test_scans_columns_keys_and_foreign_keys_from_postgres():
     engine = create_engine(database_url)
     try:
         _create_fixture(engine)
-        snapshot = PostgreSqlIntrospector(engine).scan(
+        snapshot = SchemaIntrospector(engine).scan(
             schemas=("analytics_modeling_v0",),
             selected_tables={"analytics_modeling_v0": ("customers", "orders")},
         )
@@ -40,7 +40,7 @@ def test_scan_rejects_selected_tables_outside_the_declared_schema_scope():
     engine = create_engine(database_url)
     try:
         with pytest.raises(SchemaIntrospectionError) as exc_info:
-            PostgreSqlIntrospector(engine).scan(
+            SchemaIntrospector(engine).scan(
                 schemas=("analytics_modeling_v0",),
                 selected_tables={"another_schema": ("orders",)},
             )

@@ -234,3 +234,54 @@ class TestFailureIsActionable:
         assert "换一种说法" not in diagnosis.user_hint
         assert "数据范围" in diagnosis.user_hint
         assert "管理员" in diagnosis.user_hint
+
+
+def test_the_structured_integration_endpoint_carries_permissions():
+    """「集成方入口」也必须带行列级权限，否则它就是一扇后门。
+
+    `/v1/analytics/structured-query` 绕过 Mapper 与 LLM 直达 Translator。内部下钻
+    走的是同一个 query_structured 且早已带上权限，唯独这个 HTTP 端点漏了——
+    实施行列级权限当天没覆盖到，事后自查发现。
+    """
+
+    from fastapi.testclient import TestClient
+
+    from knowflow_analytics.api import create_api
+
+    secret = "s" * 32
+    seen: dict[str, object] = {}
+
+    class _Application:
+        def structured_query(self, request, **_kwargs):
+            seen["allowed"] = request.allowed_element_ids
+            seen["filters"] = request.row_filters
+            raise RuntimeError("stop after capturing the request")
+
+    client = TestClient(
+        create_api(application=_Application(), service_secret=secret),
+        raise_server_exceptions=False,
+    )
+    client.post(
+        "/v1/analytics/structured-query",
+        headers={
+            "X-KnowFlow-Service-Token": secret,
+            "X-KnowFlow-Actor-Id": "actor-1",
+            "X-KnowFlow-Project-Id": "sales",
+            "X-KnowFlow-Permission-Scope-Hash": "scope-hash",
+        },
+        json={
+            "project_id": "sales",
+            "semantic_query": {
+                "dataset_id": "ds",
+                "query_type": "aggregate",
+                "metric_ids": ["m1"],
+                "dimension_ids": ["d1"],
+                "limit": 100,
+            },
+            "allowed_element_ids": ["m1", "d1"],
+            "row_filters": [{"dimension_id": "d1", "values": ["华东"]}],
+        },
+    )
+
+    assert seen["allowed"] == ("m1", "d1")
+    assert seen["filters"] and seen["filters"][0].dimension_id == "d1"

@@ -2362,6 +2362,11 @@ def create_api(
         semantic_query: SemanticQuery
         query_id: str | None = Field(default=None, min_length=1, max_length=128)
         include_debug_sql: bool = False
+        # 行列级权限与自然语言入口同源。这条是"集成方入口"，绕过 Mapper 与 LLM
+        # 直达 Translator——不接这两个字段，任何集成方都能拿全量数据，等于给行列级
+        # 权限开了一扇后门。内部下钻路径走的是同一个 query_structured，早已带上。
+        allowed_element_ids: tuple[str, ...] | None = Field(default=None, max_length=5_000)
+        row_filters: tuple[QueryRowFilter, ...] | None = Field(default=None, max_length=100)
 
     @app.post("/v1/analytics/structured-query", response_model=QueryResponse)
     def structured_query(payload: ReleaseStructuredQueryRequest, request_context: Context):
@@ -2375,6 +2380,8 @@ def create_api(
                 semantic_query=payload.semantic_query,
                 query_id=payload.query_id,
                 include_debug_sql=payload.include_debug_sql and allow_debug_sql,
+                allowed_element_ids=payload.allowed_element_ids,
+                row_filters=payload.row_filters,
             ),
             actor_id=request_context.actor_id,
             permission_scope_hash=request_context.permission_scope_hash,

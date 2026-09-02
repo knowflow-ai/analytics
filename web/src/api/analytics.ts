@@ -71,7 +71,13 @@ export const versionOf = (revision: AnalyticsRevision): RevisionVersion => ({
 
 export const listProjects = () =>
   request<{ items: AnalyticsProject[] }>('/v1/analytics/projects', {
-    query: { id_prefix: PROJECT_ID_PREFIX, limit: 200 },
+    // 嵌入版不送 id_prefix：宿主的 /core/projects 根本不读这个查询参数，它按当前
+    // 登录用户圈范围（归属前缀 + RBAC 授权）。继续送 `prj_oss_` 只会让读代码的人
+    // 以为在按开源前缀过滤，而那个前缀在嵌入版里本来就是错的。
+    query:
+      EDITION === 'embedded'
+        ? { limit: 200 }
+        : { id_prefix: PROJECT_ID_PREFIX, limit: 200 },
   });
 
 export const createProject = (name: string) => {

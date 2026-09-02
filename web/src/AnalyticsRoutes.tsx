@@ -1,12 +1,24 @@
 import { useQuery } from '@tanstack/react-query';
+import { Suspense, lazy } from 'react';
 import { getOssStatus } from './api/oss';
 import { EDITION } from './api/client';
 import { Spinner } from './components/ui';
 import { useRoutes } from '@analytics/lib/router';
-import { AskPage } from './pages/ask';
 import { ProjectsPage } from './pages/projects';
-import { SettingsPage } from './pages/settings';
-import { WorkbenchPage } from './pages/workbench';
+
+// 项目列表是落地页，直接静态引入。其余三个懒加载。
+//
+// 此前四个页面全是静态导入，于是打开项目列表要先把整个建模工作台下载编译完——
+// pages/workbench 一个目录 40 个文件、6700 行，还带关系画布的图形库。实测（开发
+// 模式）：导航到发出第一个请求隔了 2199ms，其中最大的 vendor chunk 就占 536ms；
+// 而请求本身只要 783ms。等待的大头在"还没开始请求"。
+const WorkbenchPage = lazy(() =>
+  import('./pages/workbench').then((m) => ({ default: m.WorkbenchPage })),
+);
+const AskPage = lazy(() => import('./pages/ask').then((m) => ({ default: m.AskPage })));
+const SettingsPage = lazy(() =>
+  import('./pages/settings').then((m) => ({ default: m.SettingsPage })),
+);
 
 /**
  * 页面内容本体:只有路由表,不含 Router、登录门和外壳。
@@ -25,11 +37,18 @@ export function AnalyticsRoutes() {
         : getOssStatus,
   });
   const ready = status.data?.ready ?? false;
+  // 懒加载的页面各自包一层 Suspense：整表包一层的话，进入工作台时连项目列表
+  // 一起被替换成 Spinner，返回时又要重挂一次。
+  const lazily = (node: JSX.Element) => (
+    <Suspense fallback={<Spinner />}>{node}</Suspense>
+  );
   const element = useRoutes([
     { path: '/', element: <ProjectsPage ready={ready} /> },
-    ...(EDITION !== 'embedded' ? [{ path: '/settings', element: <SettingsPage /> }] : []),
-    { path: '/projects/:projectId', element: <WorkbenchPage /> },
-    { path: '/projects/:projectId/ask', element: <AskPage /> },
+    ...(EDITION !== 'embedded'
+      ? [{ path: '/settings', element: lazily(<SettingsPage />) }]
+      : []),
+    { path: '/projects/:projectId', element: lazily(<WorkbenchPage />) },
+    { path: '/projects/:projectId/ask', element: lazily(<AskPage />) },
     { path: '*', element: <ProjectsPage ready={ready} /> },
   ]);
   if (status.isPending) return <Spinner />;

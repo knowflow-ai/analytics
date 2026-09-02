@@ -122,7 +122,9 @@ def upsert_model_aggregate(
                 ),
                 name=measure.name,
                 biz_name=measure.biz_name,
-                description=measure.name,
+                # 口径优先。原先固定写成 measure.name，指标定义于是等于指标名，
+                # 一句同义反复——对模型是零信息，还让「定义已填」看起来是真的。
+                description=measure.description or "",
                 model_id=model.id,
                 metric_define_type=MetricDefineType.MEASURE,
                 metric_define_by_measure_params=MetricDefineByMeasureParamsContract(
@@ -289,6 +291,7 @@ def _apply_field_changes(
                 constraint=old_measure.constraint if old_measure else None,
                 alias=old_measure.alias if old_measure else None,
                 unit=changes.get("unit", field.unit),
+                description=description,
             )
         )
 

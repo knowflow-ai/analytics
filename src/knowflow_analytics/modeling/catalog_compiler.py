@@ -382,7 +382,15 @@ def _compile_model(
             semantic_expr=semantic_expr,
             unit=unit,
             default_aggregation=default_aggregation,
-            description=dimension.description if dimension is not None else "",
+            # 描述按字段实际角色取。此前只从 dimension 一侧取，度量字段一律拿到
+            # 空串——AI 被要求写的口径写了也传不过来。
+            description=(
+                dimension.description
+                if dimension is not None
+                else measure.description
+                if measure is not None
+                else ""
+            ),
             create_dimension=create_dimension,
             create_metric=bool(measure and measure.is_create_metric),
         )

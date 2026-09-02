@@ -1749,6 +1749,10 @@ def test_exact_model_schema_ai_classification_is_deterministically_materialized(
         "constraint": None,
         "alias": None,
         "unit": "元",
+        # 度量的业务口径。此前 MeasureContract 没有这个字段，AI 按提示词写出的
+        # 口径在这一步被整条丢掉，指标定义随之回落成名字本身（同义反复），
+        # 别名生成锚在空描述上只能产出名字变体。
+        "description": "订单净收入候选度量",
     }
     assert len(updated.semantic_catalog.metrics) == 1
     assert updated.semantic_catalog.metrics[0].name == "订单净金额"

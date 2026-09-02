@@ -247,6 +247,12 @@ class MeasureContract(CatalogContract):
     agg: str = Field(min_length=1, max_length=64)
     expr: str = Field(min_length=1, max_length=2_000)
     biz_name: str = Field(min_length=1, max_length=256)
+    # 度量的业务口径（「已扣退款」这类）。此前这个合同没有描述字段，于是 AI 按
+    # 提示词写出的口径在这一步被整条丢掉：维度传了 description、度量无处可放。
+    # 后果是指标定义回落成名字本身，别名生成锚在一个空描述上、又被「不得编造与
+    # 描述无关的业务含义」约束，只可能产出名字的同义变体——用户说的「销售额」
+    # 永远匹配不上。口径是问数准确率的主导变量，不是可选元数据。
+    description: str = Field(default="", max_length=4_000)
     is_create_metric: int = Field(default=0, ge=0, le=1)
     constraint: str | None = Field(default=None, max_length=2_000)
     alias: str | None = Field(default=None, max_length=2_000)

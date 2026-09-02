@@ -2221,6 +2221,26 @@ def create_api(
             ]
         }
 
+    @app.get("/v1/analytics/projects/{project_id}/query-card")
+    def query_card_definition(
+        project_id: str,
+        request_context: Context,
+        query_id: Annotated[str, Query(min_length=1, max_length=128)],
+    ):
+        """一次回答的可重跑定义，供调用方固定成概览卡片。
+
+        不进普通查询响应：那份投影不出语义 ID 是已评审合同。这里是明确索取，
+        且只发生在「钉卡片」这一个动作上。
+        """
+
+        require_project(project_id, request_context)
+        return application.query_card_definition(
+            project_id=project_id,
+            query_id=query_id,
+            actor_id=request_context.actor_id,
+            permission_scope_hash=request_context.permission_scope_hash,
+        )
+
     @app.get(
         "/v1/analytics/projects/{project_id}/query-diagnostics/export",
         response_model=QueryDiagnosticExport,

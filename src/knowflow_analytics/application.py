@@ -3576,6 +3576,53 @@ class AnalyticsApplication:
         )
         return response
 
+    def query_card_definition(
+        self,
+        *,
+        project_id: str,
+        query_id: str,
+        actor_id: str,
+        permission_scope_hash: str,
+    ) -> dict[str, object]:
+        """一次回答的**可重跑定义**：受治理语义查询 + 版本绑定。
+
+        给「把这次回答钉成概览卡片」用。卡片必须每次打开重算——钉结果就成了截图墙，
+        打开永远是钉的那天的数字。
+
+        为什么单开一个接口而不是加进普通查询响应：普通投影**不出语义 ID** 是已评审
+        的合同（`test_api_security` 逐个 ID 断言）。那条合同管的是问数界面，而这里是
+        调用方明确索取一份内部定义、且只在钉卡片这一个动作上发生。
+
+        取自诊断产物，与下钻恢复基础查询同一处（TTL 默认 7 天、每 actor/project
+        上限 100 条）。取不到即拒绝——旧回答钉不了，重新问一次即可；一旦钉上，
+        定义由调用方永久保存，不再依赖产物存活。
+        """
+
+        try:
+            artifact = self.catalog.get_query_diagnostic(
+                actor_id=actor_id,
+                project_id=project_id,
+                permission_scope_hash=permission_scope_hash,
+                query_id=query_id,
+            )
+        except CatalogError as exc:
+            raise SemanticParsingError(
+                "这次回答已经太久，无法固定成卡片，请重新提问后再试",
+                code="QUERY_CARD_UNAVAILABLE",
+            ) from exc
+        semantic_query = artifact.response.get("semantic_query")
+        if not isinstance(semantic_query, dict):
+            raise SemanticParsingError(
+                "这次回答没有可重跑的查询，无法固定成卡片",
+                code="QUERY_CARD_UNSUPPORTED",
+            )
+        return {
+            "query_id": query_id,
+            "semantic_query": semantic_query,
+            "release_id": artifact.release_id,
+            "spec_hash": artifact.spec_hash,
+        }
+
     def export_query_diagnostic(
         self,
         *,

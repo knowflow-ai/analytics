@@ -207,3 +207,30 @@ class TestRowEnforcement:
 
         values = set(physical.parameters.values())
         assert {"线上", "华东"} <= values
+
+
+class TestFailureIsActionable:
+    def test_an_unresolvable_row_scope_dimension_says_what_to_fix(self):
+        """拒绝要说对原因：这是管理员改配置的事，不是用户换说法的事。
+
+        套用 FINAL_PARSING 的通用文案会变成「没能理解这个问题，请换一种说法」。
+        用户换一百种说法也没用，而真正该动的人（管理员）根本不会看到这条。
+        实机发现：拒绝本身是对的，文案把它伪装成了理解失败。
+        """
+
+        from knowflow_analytics.query.contracts import QueryStage
+        from knowflow_analytics.query.errors import SemanticParsingError
+        from knowflow_analytics.query.service import _error_diagnosis
+
+        diagnosis = _error_diagnosis(
+            SemanticParsingError(
+                "数据范围里引用的维度在当前版本中不存在，请联系管理员更新该项目的数据范围配置。",
+                code="ROW_SCOPE_DIMENSION_UNRESOLVED",
+                stage=QueryStage.PRECHECK,
+            )
+        )
+
+        assert diagnosis.stage == QueryStage.PRECHECK.value
+        assert "换一种说法" not in diagnosis.user_hint
+        assert "数据范围" in diagnosis.user_hint
+        assert "管理员" in diagnosis.user_hint

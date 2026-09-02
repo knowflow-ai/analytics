@@ -164,6 +164,7 @@ def _resolve_row_filters(
             raise SemanticParsingError(
                 "数据范围里引用的维度在当前版本中不存在，请联系管理员更新该项目的数据范围配置。",
                 code="ROW_SCOPE_DIMENSION_UNRESOLVED",
+                stage=QueryStage.PRECHECK,
             )
         resolved.setdefault(dimension.model_id, []).append(
             FixedFilter(
@@ -5375,6 +5376,17 @@ def _error_diagnosis(exc: AnalyticsError) -> QueryDiagnosis:
             severity="error",
             summary="问题要求了当前版本没有开放的分析能力",
             recommendation="确认该能力是否在受治理函数范围内；不要降级成普通聚合。",
+            user_hint=str(exc),
+        )
+    if exc.code == "ROW_SCOPE_DIMENSION_UNRESOLVED":
+        # 数据范围引用的维度在当前版本里没有了。套用 FINAL_PARSING 的通用文案会
+        # 变成「换一种说法」——换说法永远解决不了，这是管理员要改配置的事。
+        return QueryDiagnosis(
+            category=QueryDiagnosticCategory.MODEL_VERSION,
+            stage=QueryStage.PRECHECK.value,
+            severity="error",
+            summary="该项目的数据范围引用了当前版本里不存在的维度",
+            recommendation="发布改名或删除维度后，需要同步更新受影响主体的数据范围配置。",
             user_hint=str(exc),
         )
     if exc.code == "CROSS_FACT_METRICS_UNSUPPORTED":

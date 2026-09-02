@@ -26,3 +26,4 @@ web/node_modules/
 web/dist/
 web/*.tsbuildinfo
 dist-embedded/
+.gstack/

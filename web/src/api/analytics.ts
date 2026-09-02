@@ -659,8 +659,19 @@ export interface ProjectGrants {
     username?: string;
     role_code: string;
   }>;
-  orgs: Array<{ org_unit_id: string; name?: string; role_code: string }>;
-  groups: Array<{ group_id: string; name?: string; role_code: string }>;
+  // 实机字段名是 org_name / group_name（不是 name）；两种都收。
+  orgs: Array<{
+    org_unit_id: string;
+    org_name?: string;
+    name?: string;
+    role_code: string;
+  }>;
+  groups: Array<{
+    group_id: string;
+    group_name?: string;
+    name?: string;
+    role_code: string;
+  }>;
 }
 
 const HOST_GRANT_BASE = '/v1/kb_folder';

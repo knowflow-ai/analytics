@@ -115,13 +115,13 @@ export function ProjectAuthorizeDialog({
       ...(data.orgs ?? []).map((item) => ({
         subject_type: 'org' as const,
         subject_id: item.org_unit_id,
-        name: item.name || item.org_unit_id,
+        name: item.org_name || item.name || item.org_unit_id,
         role_code: (item.role_code || 'viewer') as ProjectRole,
       })),
       ...(data.groups ?? []).map((item) => ({
         subject_type: 'group' as const,
         subject_id: item.group_id,
-        name: item.name || item.group_id,
+        name: item.group_name || item.name || item.group_id,
         role_code: (item.role_code || 'viewer') as ProjectRole,
       })),
     ];
@@ -156,7 +156,12 @@ export function ProjectAuthorizeDialog({
                 <button
                   key={tab.key}
                   type="button"
-                  onClick={() => setKind(tab.key)}
+                  onClick={() => {
+                    setKind(tab.key);
+                    // 关键词跟着 tab 走：三类主体各查各的接口，把上一个 tab 的
+                    // 搜索词带过来会让新 tab 直接空列表，看起来像"这里没有数据"。
+                    setKeyword('');
+                  }}
                   className={`rounded-md px-2.5 py-1 text-xs transition-colors ${
                     kind === tab.key
                       ? 'bg-blue-600 font-medium text-white'

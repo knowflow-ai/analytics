@@ -304,6 +304,23 @@ describe('问数项目授权（仅嵌入版可见，接口走宿主路径）', (
     expect(await searchGrantSubjects('user', '')).toEqual([{ id: 'u2', name: 'li' }]);
   });
 
+  it('已授权列表的三类主体各有各的名字字段：nickname / org_name / group_name', async () => {
+    // 实机字段名不是统一的 name，猜一个通用键会让组织/协作组只显示 id。
+    requestMock.mockResolvedValue({
+      code: 0,
+      data: {
+        users: [{ user_id: 'u1', nickname: '张三', role_code: 'viewer' }],
+        orgs: [{ org_unit_id: 'o1', org_name: '研发部', role_code: 'viewer' }],
+        groups: [{ group_id: 'g1', group_name: '数据组', role_code: 'viewer' }],
+      },
+    });
+
+    const grants = await listProjectGrants('prj_1');
+    expect(grants.users[0].nickname).toBe('张三');
+    expect(grants.orgs[0].org_name).toBe('研发部');
+    expect(grants.groups[0].group_name).toBe('数据组');
+  });
+
   it('用户与协作组从 list 里取，组织是树要递归拍平', async () => {
     requestMock.mockResolvedValue({
       list: [

@@ -495,6 +495,26 @@ class FailedQueryResponse(QueryResponseBase):
 QueryResponse = CompletedQueryResponse | ClarificationQueryResponse | FailedQueryResponse
 
 
+class QueryRowFilter(FrozenModel):
+    """行级权限的一条谓词，用**受治理维度 ID** 表达。
+
+    只接受 ``eq`` / ``in`` 两种结构化算子，不接受自由 SQL：自由 SQL 的行级过滤
+    是注入面，也无法在翻译期证明它落在正确的模型上。核心按 dimension_id 反查
+    field_id 与 model_id，注入到该模型的数据源包装里。
+    """
+
+    dimension_id: str = Field(min_length=1, max_length=128)
+    values: tuple[str, ...] = Field(min_length=1, max_length=1_000)
+
+    @field_validator("values")
+    @classmethod
+    def values_are_bounded(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        normalized = tuple(str(value or "") for value in values)
+        if any(len(value) > 512 for value in normalized):
+            raise ValueError("row filter value is too long")
+        return tuple(dict.fromkeys(normalized))
+
+
 class QueryRequest(FrozenModel):
     project_id: str
     question: str = Field(min_length=1, max_length=4_000)
@@ -507,6 +527,26 @@ class QueryRequest(FrozenModel):
     conversation_id: str | None = Field(default=None, min_length=1, max_length=128)
     include_debug_sql: bool = False
     include_diagnostics: bool = False
+    # 列级权限的成员白名单（受治理指标/维度 ID）。``None`` = 不收窄；空元组 =
+    # 一个成员都不可见（合法状态，来自"授权的实体已从目录删除"）。核心只负责
+    # **应用**这个约束，不做权限判断——判断在宿主 BFF，与 dataset_ids 同源。
+    allowed_element_ids: tuple[str, ...] | None = Field(default=None, max_length=5_000)
+    # 行级权限：按受治理维度限定可见行。``None`` 与空元组都表示"不限制行"——
+    # 行级与列级不同，没有"一行都看不到"这种由空集合表达的状态；要挡住整个项目
+    # 应该不授权，而不是发一份空的行过滤。
+    row_filters: tuple[QueryRowFilter, ...] | None = Field(default=None, max_length=100)
+
+    @field_validator("allowed_element_ids")
+    @classmethod
+    def element_whitelist_is_bounded(
+        cls, values: tuple[str, ...] | None
+    ) -> tuple[str, ...] | None:
+        if values is None:
+            return None
+        normalized = tuple(str(value or "").strip() for value in values)
+        if any(not value or len(value) > 256 for value in normalized):
+            raise ValueError("element whitelist is invalid")
+        return tuple(dict.fromkeys(normalized))
 
     @field_validator("dataset_ids")
     @classmethod
@@ -539,3 +579,8 @@ class StructuredQueryRequest(FrozenModel):
     semantic_query: SemanticQuery
     query_id: str | None = Field(default=None, min_length=1, max_length=128)
     include_debug_sql: bool = False
+    # 与 QueryRequest 同一套行列级权限输入。下钻走的就是这条路径：签名 token 绑了
+    # actor/project/release，但绑不住"授权此后被撤销"，所以权限必须每次请求重算
+    # 后传进来，而不是从 token 里恢复。
+    allowed_element_ids: tuple[str, ...] | None = Field(default=None, max_length=5_000)
+    row_filters: tuple[QueryRowFilter, ...] | None = Field(default=None, max_length=100)

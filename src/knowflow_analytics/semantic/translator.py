@@ -103,8 +103,27 @@ def _metric_time_axis_plan(
 class SemanticTranslator:
     """Translate a governed semantic query without exposing joins to the LLM."""
 
-    def translate(self, *, release: SemanticRelease, query: SemanticQuery) -> PhysicalQuery:
-        indexes = _ReleaseIndexes(release)
+    def translate(
+        self,
+        *,
+        release: SemanticRelease,
+        query: SemanticQuery,
+        visible_element_ids: frozenset[str] | None = None,
+        row_filters: Mapping[str, tuple[FixedFilter, ...]] | None = None,
+    ) -> PhysicalQuery:
+        """把受治理语义查询翻译成物理 SQL。
+
+        ``visible_element_ids`` 是列级权限白名单（``None`` = 无限制）：不可见成员
+        与不存在的成员走完全相同的拒绝路径。
+
+        ``row_filters`` 是行级权限，按 model_id 索引，与该模型自身的
+        ``ModelSpec.filters`` 一起在 ``_model_source_sql`` 处包进子查询。注在数据源
+        而不是语义查询的过滤列表上，是因为源包装是**唯一**的物理表出口：
+        RATIO_* 的自连接 CTE、UNION 各分支、指标作用域子查询读的都是同一个包装后
+        的源，一处注入即全覆盖，也不会被任何 S2SQL 改写绕开。
+        """
+
+        indexes = _ReleaseIndexes(release, visible_element_ids, row_filters)
         dataset = indexes.dataset(query.dataset_id)
         metrics = [indexes.metric_for_dataset(dataset, item) for item in query.metric_ids]
         measure_filter_metrics = [
@@ -506,10 +525,13 @@ class SemanticTranslator:
             if model.query_type == "sql_query"
             else _qualified_table(model)
         )
-        if not model.filters:
+        # 建模期声明的模型过滤 + 请求期注入的行级权限过滤，同一层包装、同一套
+        # 渲染语义（日期归一化、参数化）。两者都是 AND，权限只可能收窄。
+        applied = (*model.filters, *indexes.row_filters.get(model.id, ()))
+        if not applied:
             return source
         predicates = []
-        for fixed_filter in model.filters:
+        for fixed_filter in applied:
             field = indexes.fields[fixed_filter.field_id]
             predicates.append(
                 SemanticTranslator._filter_sql(
@@ -611,12 +633,37 @@ class SemanticTranslator:
 
 
 class _ReleaseIndexes:
-    def __init__(self, release: SemanticRelease) -> None:
+    """成员引用的确定性收口。
+
+    列级权限在这里兜底，而不是只在 Prompt 里收窄可见成员：Prompt 收窄是让模型
+    表达不出来，这里才是"表达出来也执行不了"。所有路径——自然语言 S2SQL、结构化
+    Playground、下钻、QueryRule——都经由这两个方法解析成员，一处 fail-closed 即
+    全覆盖。
+
+    不可见成员报的是与"不存在"**完全相同**的错误码和文案。区分"存在但你看不到"
+    与"不存在"本身就是信息泄漏：前者等于确认了该指标存在。
+    """
+
+    def __init__(
+        self,
+        release: SemanticRelease,
+        visible_element_ids: frozenset[str] | None = None,
+        row_filters: Mapping[str, tuple[FixedFilter, ...]] | None = None,
+    ) -> None:
         self.models = {item.id: item for item in release.models}
         self.fields = {item.id: item for item in release.fields}
         self.dimensions = {item.id: item for item in release.dimensions}
         self.metrics = {item.id: item for item in release.metrics}
         self.datasets = {item.id: item for item in release.datasets}
+        # None = 无列级限制。绝不用"全部成员的集合"表示无限制：Release 新增成员
+        # 后那份快照就会静默把新成员挡在外面。
+        self._visible = visible_element_ids
+        # 行级权限按 model_id 索引，挂在 indexes 上是因为 `_model_source_sql` 的
+        # 两个调用点（锚点表与每一条 JOIN）都已经拿着 indexes。
+        self.row_filters: Mapping[str, tuple[FixedFilter, ...]] = row_filters or {}
+
+    def _is_visible(self, item_id: str) -> bool:
+        return self._visible is None or item_id in self._visible
 
     def dataset(self, item_id: str) -> DatasetSpec:
         try:
@@ -625,12 +672,12 @@ class _ReleaseIndexes:
             raise TranslationError(f"unknown dataset: {item_id}", code="UNKNOWN_DATASET") from exc
 
     def metric_for_dataset(self, dataset: DatasetSpec, item_id: str) -> MetricSpec:
-        if item_id not in dataset.metric_ids:
+        if item_id not in dataset.metric_ids or not self._is_visible(item_id):
             raise TranslationError(f"metric is outside dataset: {item_id}", code="UNKNOWN_METRIC")
         return self.metrics[item_id]
 
     def dimension_for_dataset(self, dataset: DatasetSpec, item_id: str) -> DimensionSpec:
-        if item_id not in dataset.dimension_ids:
+        if item_id not in dataset.dimension_ids or not self._is_visible(item_id):
             raise TranslationError(
                 f"dimension is outside dataset: {item_id}", code="UNKNOWN_DIMENSION"
             )

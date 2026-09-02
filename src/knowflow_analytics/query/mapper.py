@@ -93,6 +93,7 @@ class SemanticMapper:
         selected_element_type: SemanticElementType | None = None,
         final_stage: bool = False,
         tenant_id: str = "",
+        allowed_element_ids: frozenset[str] | None = None,
     ) -> MappingResult:
         """Compatibility projection for one Scope.
 
@@ -109,6 +110,7 @@ class SemanticMapper:
             index=index,
             include_embeddings=include_embeddings,
             tenant_id=tenant_id,
+            allowed_element_ids=allowed_element_ids,
         )
         return self.project_evidence(
             evidence=evidence,
@@ -127,6 +129,7 @@ class SemanticMapper:
         index: SemanticIndexSnapshot,
         include_embeddings: bool = True,
         tenant_id: str = "",
+        allowed_element_ids: frozenset[str] | None = None,
     ) -> MappingEvidence:
         """Retrieve raw evidence once across the allowed QueryScope union.
 
@@ -148,6 +151,7 @@ class SemanticMapper:
                 dataset_ids=dataset_ids,
                 index=index,
                 include_embeddings=include_embeddings,
+                allowed_element_ids=allowed_element_ids,
             )
         if index.state is not IndexState.READY:
             raise ValueError("semantic index must be READY")
@@ -155,6 +159,28 @@ class SemanticMapper:
         allowed_dataset_ids = tuple(sorted(set(dataset_ids)))
         allowed = set(allowed_dataset_ids)
         entries = tuple(entry for entry in index.entries if allowed.intersection(entry.dataset_ids))
+        if allowed_element_ids is not None:
+            # 列级权限：不可见成员在**检索之前**就被移出候选，而不是在结果处过滤。
+            # 放在这里是因为关键词、术语、Embedding 三条通道都在这一行之后消费
+            # `entries`，一处过滤即全部覆盖；放到投影或结果层则会让不可见成员的
+            # 名字先出现在澄清卡、联想和下钻候选里——名称泄漏比数据泄漏更隐蔽。
+            #
+            # 索引本身仍是全量的一份：绝不按用户裁剪索引（那会变成每人一份，
+            # 成本与一致性双崩），只在消费侧收窄。
+            #
+            # 维度值条目挂在其所属维度上（element_id 是维度值自己的 ID），用
+            # dimension_id 判可见性；维度不可见时它的取值也不该被检索到。
+            #
+            # DATASET 条目不受成员白名单管辖：作用域名是确定性 Scope 锚点，它的
+            # 可见性已经由 dataset_ids 授权决定；列级权限约束的是**授权范围内的
+            # 成员**，不是再切一层作用域。把它一起过滤掉会让有列限制的用户失去
+            # 逐字点名作用域的能力。
+            entries = tuple(
+                entry
+                for entry in entries
+                if entry.element_type is SemanticElementType.DATASET
+                or (entry.dimension_id or entry.element_id) in allowed_element_ids
+            )
         normalized_question = normalize_text(question)
 
         raw_matches = self._collect_keyword_evidence(

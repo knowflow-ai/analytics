@@ -291,6 +291,7 @@ class LlmS2SqlParser:
         query_id: str,
         now: datetime | None = None,
         tenant_id: str = "",
+        visible_element_ids: frozenset[str] | None = None,
     ) -> ParsedSemanticCandidate:
         dataset = _dataset(release, mapping.dataset_id)
         output: _LlmS2SqlOutput | None = None
@@ -309,6 +310,7 @@ class LlmS2SqlParser:
             mapping,
             exemplars=exemplars,
             now=now,
+            visible_element_ids=visible_element_ids,
         )
 
         def _infer(attempt: int, prompt: list[dict[str, str]]) -> _LlmS2SqlOutput:
@@ -359,7 +361,15 @@ class LlmS2SqlParser:
             # 延迟乘 N,一票在网关上挂死还会堵住其余票。结果仍按票号归位,治理级
             # 错误取最小票号上抛,与串行语义一致且可复现。
             prompts = [
-                self._messages(question, release, dataset, mapping, exemplars=exemplars, now=now)
+                self._messages(
+                    question,
+                    release,
+                    dataset,
+                    mapping,
+                    exemplars=exemplars,
+                    now=now,
+                    visible_element_ids=visible_element_ids,
+                )
                 for _ in range(self._self_consistency_number)
             ]
             results: dict[int, _LlmS2SqlOutput] = {}
@@ -475,6 +485,7 @@ class LlmS2SqlParser:
         *,
         exemplars: tuple[ReviewedS2SqlExemplar, ...] = (),
         now: datetime | None,
+        visible_element_ids: frozenset[str] | None = None,
     ) -> list[dict[str, str]]:
         symbols = SemanticSymbolTable.from_release(release, dataset_id=dataset.id)
         dimensions_by_id = {item.id: item for item in release.dimensions}
@@ -508,6 +519,7 @@ class LlmS2SqlParser:
             item.id: symbols.canonical_name(item.id)
             for item in release.dimensions
             if item.id in dataset.dimension_ids
+            and (visible_element_ids is None or item.id in visible_element_ids)
         }
         # 最终 LLM 拿到选定 Scope 的全部成员，而不是 Mapper 命中的子集。
         # 过滤版让"召回失误"直接等于"模型表达不出来"：一次漏召回就是一个看起来
@@ -515,6 +527,9 @@ class LlmS2SqlParser:
         # 名称维度各自需要一条豁免补丁。Scope 本身已经被事实根和冻结路由约束到
         # 很窄，把它整个给模型比逐条打补丁更简单也更准。Mapper 的命中结果仍以
         # constraints 形式告诉模型"用户的话命中了哪些"。
+        def _visible(element_id: str) -> bool:
+            return visible_element_ids is None or element_id in visible_element_ids
+
         metrics = [
             _metric_payload_entry(
                 item,
@@ -523,9 +538,11 @@ class LlmS2SqlParser:
                 symbols=symbols,
             )
             for item in release.metrics
-            if item.id in dataset.metric_ids
+            if item.id in dataset.metric_ids and _visible(item.id)
         ]
-        dimensions = _dimension_payload(release, dataset, symbols=symbols)
+        dimensions = _dimension_payload(
+            release, dataset, symbols=symbols, visible_element_ids=visible_element_ids
+        )
         hierarchies = _hierarchy_payload(
             release,
             dataset,
@@ -910,6 +927,7 @@ def _dimension_payload(
     dataset: DatasetSpec,
     *,
     symbols: SemanticSymbolTable | None = None,
+    visible_element_ids: frozenset[str] | None = None,
 ) -> list[dict[str, Any]]:
     """构造送给模型的维度 schema：选定 Scope 的全部维度成员。
 
@@ -921,11 +939,18 @@ def _dimension_payload(
     丢掉 GROUP BY 返回总数）。时间维度、分区时间、事实根实体名称各自为此加过
     一条豁免。Scope 已被事实根与冻结路由约束到很窄，整个交给模型比逐条打补丁
     更简单也更准，三条豁免随之删除；"用户的话命中了哪些"仍由 constraints 表达。
+
+    列级权限是这条"全部成员"规则的**唯一**例外，而且方向相反：上面讲的是不该
+    因为召回失误而少给，这里是不可见成员必须一开始就不在模型的词汇表里。翻译层
+    另有确定性拒绝兜底（`_ReleaseIndexes`），这里收窄是为了不让模型写出一条注定
+    被拒的查询、把一次可答的提问变成失败。
     """
 
     payload: list[dict[str, Any]] = []
     for item in release.dimensions:
         if item.id not in dataset.dimension_ids:
+            continue
+        if visible_element_ids is not None and item.id not in visible_element_ids:
             continue
         canonical_name = symbols.canonical_name(item.id) if symbols is not None else item.name
         entry: dict[str, Any] = {

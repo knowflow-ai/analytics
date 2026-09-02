@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -88,6 +89,10 @@ class _QueryStatement:
     mixed_metric_filter_scopes: bool = False
     metric_time_axes: tuple[str, ...] = ()
     physical_query: PhysicalQuery | None = None
+    # 列级白名单与行级过滤随语句走：这条链路在五个地方各建一次 _ReleaseIndexes，
+    # 漏掉任何一个都是一条绕过权限的路径（RATIO 的自连接 CTE 就在其中之一）。
+    visible_element_ids: frozenset[str] | None = None
+    row_filters: Mapping[str, tuple[FixedFilter, ...]] = field(default_factory=dict)
 
 
 class _Parser(Protocol):
@@ -351,7 +356,9 @@ class _MetricExpressionParser:
                 if _column_aggregation(column) is None:
                     statement.bare_metric_ids.add(resolved.id)
         # 口径判定必须早于展开:_metric_expression 要据此决定是否下推 CASE WHEN。
-        indexes = _ReleaseIndexes(statement.release)
+        indexes = _ReleaseIndexes(
+            statement.release, statement.visible_element_ids, statement.row_filters
+        )
         selected = tuple(
             metrics[resolved.id]
             for resolved in statement.semantic_tokens.values()
@@ -631,7 +638,9 @@ class _OntologyQueryParser:
         if isinstance(statement.tree, exp.SetOperation):
             self._parse_set_operation(statement)
             return
-        indexes = _ReleaseIndexes(statement.release)
+        indexes = _ReleaseIndexes(
+            statement.release, statement.visible_element_ids, statement.row_filters
+        )
         metrics = [
             indexes.metric_for_dataset(statement.dataset, item) for item in statement.metric_ids
         ]
@@ -820,7 +829,9 @@ class _OntologyQueryParser:
             dataset_id=statement.dataset.id,
         )
         aliases = _alias_semantic_pairs(original, symbols)
-        indexes = _ReleaseIndexes(statement.release)
+        indexes = _ReleaseIndexes(
+            statement.release, statement.visible_element_ids, statement.row_filters
+        )
         parameters = _ParameterBuilder({})
         ontology_ctes: list[exp.CTE] = []
         relation_ids: list[str] = []
@@ -1020,6 +1031,8 @@ class S2SqlSemanticTranslator:
         release: SemanticRelease,
         dataset_id: str,
         corrected_s2sql: str,
+        visible_element_ids: frozenset[str] | None = None,
+        row_filters: Mapping[str, tuple[FixedFilter, ...]] | None = None,
     ) -> S2SqlTranslation:
         try:
             dataset = next(item for item in release.datasets if item.id == dataset_id)
@@ -1030,6 +1043,8 @@ class S2SqlSemanticTranslator:
             dataset=dataset,
             corrected_s2sql=corrected_s2sql,
             query_type=textual_query_type(corrected_s2sql),
+            visible_element_ids=visible_element_ids,
+            row_filters=dict(row_filters or {}),
         )
         trace: list[str] = []
         for parser in self._parsers:
@@ -1361,7 +1376,9 @@ def _metric_scoped_expression(
     if not filters or not statement.mixed_metric_filter_scopes:
         return expression
     translator = SemanticTranslator()
-    indexes = _ReleaseIndexes(statement.release)
+    indexes = _ReleaseIndexes(
+            statement.release, statement.visible_element_ids, statement.row_filters
+        )
     literals = _InlineLiteralBuilder({})
     conditions = [
         translator._fixed_filter_sql(

@@ -75,6 +75,7 @@ class CandidateOrchestrator:
         selected_element_type: SemanticElementType | None = None,
         selected_time_dimension_id: str | None = None,
         tenant_id: str = "",
+        allowed_element_ids: frozenset[str] | None = None,
     ) -> CandidateSet:
         attempts: list[MappingResult] = []
         candidates: list[ParsedSemanticCandidate] = []
@@ -90,6 +91,7 @@ class CandidateOrchestrator:
                     selected_element_id=selected_element_id,
                     selected_element_type=selected_element_type,
                     tenant_id=tenant_id,
+                    allowed_element_ids=allowed_element_ids,
                 )
                 attempts.append(mapping)
                 candidate, effective_mapping, clarification = self._parse_mapping(
@@ -169,6 +171,7 @@ class CandidateOrchestrator:
         dataset_ids: tuple[str, ...],
         index: SemanticIndexSnapshot,
         tenant_id: str = "",
+        allowed_element_ids: frozenset[str] | None = None,
     ) -> MappingEvidence:
         """Run the request's expensive semantic retrieval once across all Scopes."""
 
@@ -178,6 +181,7 @@ class CandidateOrchestrator:
             index=index,
             include_embeddings=True,
             tenant_id=tenant_id,
+            allowed_element_ids=allowed_element_ids,
         )
 
     def project_scope_evidence(
@@ -403,6 +407,7 @@ class CandidateOrchestrator:
         diagnostic_sink: Callable[[str, dict[str, object]], None] | None = None,
         tenant_id: str = "",
         mapping_evidence: MappingEvidence | None = None,
+        allowed_element_ids: frozenset[str] | None = None,
     ) -> ParsedSemanticCandidate:
         def emit(event: str, detail: dict[str, object]) -> None:
             if diagnostic_sink is not None:
@@ -442,6 +447,7 @@ class CandidateOrchestrator:
                     query_id=query_id,
                     now=now,
                     tenant_id=tenant_id,
+                    visible_element_ids=allowed_element_ids,
                 )
             except AnalyticsError as exc:
                 emit(
@@ -546,6 +552,7 @@ class CandidateOrchestrator:
                     query_id=query_id,
                     now=now,
                     tenant_id=tenant_id,
+                    visible_element_ids=allowed_element_ids,
                 )
             except AnalyticsError as exc:
                 emit(

@@ -17,6 +17,7 @@ from typing import Protocol
 from knowflow_analytics.catalog.store import PublishedRelease
 from knowflow_analytics.contracts import (
     FilterOperator,
+    FixedFilter,
     OutputColumn,
     QueryFilter,
     QueryResult,
@@ -58,6 +59,7 @@ from knowflow_analytics.query.contracts import (
     QueryInterpretation,
     QueryRequest,
     QueryResponse,
+    QueryRowFilter,
     QueryStage,
     QueryTraceStep,
     SchemaMatch,
@@ -138,6 +140,39 @@ class ReleaseProvider(Protocol):
 
 class QueryExecutor(Protocol):
     def execute(self, *, query: object, release: SemanticRelease) -> QueryResult: ...
+
+
+def _resolve_row_filters(
+    release: SemanticRelease,
+    row_filters: tuple[QueryRowFilter, ...] | None,
+) -> dict[str, tuple[FixedFilter, ...]]:
+    """把「受治理维度 = 这些值」翻成按模型索引的数据源过滤。
+
+    维度在当前 Release 里找不到时**整轮拒绝**，不是跳过这一条：静默丢掉一条行级
+    权限谓词就是静默放开了那部分行。发布改名/删维度后应该让管理员看到失败并去
+    修数据范围配置，而不是让被限制的人悄悄看到全部数据。
+    """
+
+    if not row_filters:
+        return {}
+    dimensions = {item.id: item for item in release.dimensions}
+    fields = {item.id: item for item in release.fields}
+    resolved: dict[str, list[FixedFilter]] = {}
+    for item in row_filters:
+        dimension = dimensions.get(item.dimension_id)
+        if dimension is None or dimension.field_id not in fields:
+            raise SemanticParsingError(
+                "数据范围里引用的维度在当前版本中不存在，请联系管理员更新该项目的数据范围配置。",
+                code="ROW_SCOPE_DIMENSION_UNRESOLVED",
+            )
+        resolved.setdefault(dimension.model_id, []).append(
+            FixedFilter(
+                field_id=dimension.field_id,
+                operator=FilterOperator.IN if len(item.values) > 1 else FilterOperator.EQ,
+                value=list(item.values) if len(item.values) > 1 else item.values[0],
+            )
+        )
+    return {model_id: tuple(items) for model_id, items in resolved.items()}
 
 
 class AnalyticsQueryService:
@@ -222,6 +257,16 @@ class AnalyticsQueryService:
         query_id = request.query_id or f"q_{uuid.uuid4().hex}"
         tenant_id = str(actor_id or "").strip()
         decision_now = datetime.now(UTC)
+        # 列级权限白名单：None = 不收窄。核心只负责应用，不做权限判断——
+        # 判断在宿主 BFF，与 dataset_ids 同源同一次请求传入。
+        allowed_element_ids = (
+            frozenset(request.allowed_element_ids)
+            if request.allowed_element_ids is not None
+            else None
+        )
+        # 行级权限在 PRECHECK 之前就要解析：维度不可解析必须整轮失败，而不是
+        # 让查询带着一份被悄悄丢掉的过滤跑完。
+        row_filters: dict[str, tuple[FixedFilter, ...]] = {}
         # 阶段推进对调用方实时可见（流式问数用它替代转圈等待）；观察者只读。
         trace: list[QueryTraceStep] = ObservedTrace(
             [QueryTraceStep(stage=QueryStage.PRECHECK, status="started")], observer=on_trace
@@ -260,6 +305,7 @@ class AnalyticsQueryService:
                 raise SemanticParsingError(
                     "语义模型与索引版本不一致", code="RELEASE_INDEX_MISMATCH"
                 )
+            row_filters = _resolve_row_filters(release, request.row_filters)
             available = {item.id for item in release.datasets}
             dataset_ids = request.dataset_ids or tuple(sorted(available))
             if not dataset_ids or not set(dataset_ids).issubset(available):
@@ -330,6 +376,7 @@ class AnalyticsQueryService:
                 index=index,
                 dataset_ids=dataset_ids,
                 tenant_id=tenant_id,
+                allowed_element_ids=allowed_element_ids,
             )
             trace.append(QueryTraceStep(stage=QueryStage.CANDIDATE_DISCOVERY, status="started"))
             global_evidence = None
@@ -344,6 +391,7 @@ class AnalyticsQueryService:
                     dataset_ids=dataset_ids,
                     index=index,
                     tenant_id=tenant_id,
+                    allowed_element_ids=allowed_element_ids,
                 )
                 if selected_metric_bundle_ids:
                     offered = self._weak_metric_confirmation(
@@ -525,6 +573,7 @@ class AnalyticsQueryService:
                             release,
                             unselected_scope.candidate_dataset_ids,
                             selection_context=selection_context,
+                            allowed_element_ids=allowed_element_ids,
                             carried_selection_id=self._semantic_selection_token(
                                 selected_element_id=selected_element_id,
                                 selected_element_type=selected_element_type,
@@ -1074,6 +1123,7 @@ class AnalyticsQueryService:
                             release,
                             scope_resolution.candidate_dataset_ids,
                             selection_context=selection_context,
+                            allowed_element_ids=allowed_element_ids,
                             carried_selection_id=self._semantic_selection_token(
                                 selected_element_id=effective_selected_element_id,
                                 selected_element_type=effective_selected_element_type,
@@ -1356,6 +1406,7 @@ class AnalyticsQueryService:
                     selected_element_type=selected_element_type,
                     selected_time_dimension_id=selected_time_dimension_id,
                     tenant_id=tenant_id,
+                    allowed_element_ids=allowed_element_ids,
                 )
             trace[-1] = QueryTraceStep(
                 stage=QueryStage.CANDIDATE_DISCOVERY,
@@ -1450,6 +1501,7 @@ class AnalyticsQueryService:
                 release,
                 offered_candidates,
                 selection_context=selection_context,
+                allowed_element_ids=allowed_element_ids,
             )
             offered_scope_ids = tuple(dict.fromkeys(item.dataset_id for item in offered_candidates))
             if (
@@ -1533,6 +1585,8 @@ class AnalyticsQueryService:
                     release=release,
                     dataset_id=candidate.dataset_id,
                     corrected_s2sql=candidate.corrected_s2sql,
+                    visible_element_ids=allowed_element_ids,
+                    row_filters=row_filters,
                 )
 
             corrected = self._orchestrator.final_parse(
@@ -1553,6 +1607,7 @@ class AnalyticsQueryService:
                 else None,
                 tenant_id=tenant_id,
                 mapping_evidence=global_evidence,
+                allowed_element_ids=allowed_element_ids,
             )
             rule_application = self._query_rule_engine.apply(
                 release=release,
@@ -1581,6 +1636,8 @@ class AnalyticsQueryService:
                     release=release,
                     dataset_id=corrected.dataset_id,
                     corrected_s2sql=corrected.corrected_s2sql,
+                    visible_element_ids=allowed_element_ids,
+                    row_filters=row_filters,
                 )
             # 异名歧义（生还人数 / 遇难人数）在发现阶段放行给了 LLM；这里按最终
             # 回绑出的 ID 复核：恰好用了一个才算裁决成功，0 个或 2 个都问人。放在
@@ -1844,6 +1901,7 @@ class AnalyticsQueryService:
                     project_id=request.project_id,
                     query_id=query_id,
                     actor_id=actor_id,
+                    allowed_element_ids=allowed_element_ids,
                 ),
                 parsed_s2sql=corrected.parsed_s2sql,
                 corrected_s2sql=corrected.corrected_s2sql,
@@ -2005,6 +2063,12 @@ class AnalyticsQueryService:
                 bound_release = published.release
                 index_snapshot_id = published.index_snapshot.id
             release = bound_release
+            structured_row_filters = _resolve_row_filters(release, request.row_filters)
+            structured_visible = (
+                frozenset(request.allowed_element_ids)
+                if request.allowed_element_ids is not None
+                else None
+            )
             if release.project_id != request.project_id:
                 raise SemanticParsingError(
                     "请求的语义模型不属于当前项目",
@@ -2041,6 +2105,8 @@ class AnalyticsQueryService:
             physical = self._translator.translate(
                 release=release,
                 query=corrected.semantic_query,
+                visible_element_ids=structured_visible,
+                row_filters=structured_row_filters,
             )
             trace[-1] = QueryTraceStep(
                 stage=QueryStage.ROUTE_BINDING,
@@ -2102,6 +2168,7 @@ class AnalyticsQueryService:
                     project_id=request.project_id,
                     query_id=query_id,
                     actor_id=actor_id,
+                    allowed_element_ids=structured_visible,
                 ),
                 parsed_s2sql=corrected.canonical_s2sql,
                 corrected_s2sql=corrected.canonical_s2sql,
@@ -3427,6 +3494,7 @@ class AnalyticsQueryService:
         index: SemanticIndexSnapshot,
         dataset_ids: tuple[str, ...],
         tenant_id: str,
+        allowed_element_ids: frozenset[str] | None = None,
     ) -> str:
         """追问改写：把上一轮的口径补进这一轮的问句，失败一律回退原问句。
 
@@ -3467,6 +3535,8 @@ class AnalyticsQueryService:
             dataset_ids=(previous.dataset_id,),
             index=index,
             tenant_id=tenant_id,
+            # 改写 Prompt 会带上命中的受治理成员名，同样受列级权限约束。
+            allowed_element_ids=allowed_element_ids,
         )
         projections = self._orchestrator.project_scope_evidence(
             evidence=evidence,
@@ -3820,6 +3890,7 @@ class AnalyticsQueryService:
         project_id: str,
         query_id: str,
         actor_id: str | None,
+        allowed_element_ids: frozenset[str] | None = None,
     ) -> tuple[DrilldownOption, ...]:
         """Sign follow-up cuts for a completed aggregate answer.
 
@@ -3835,8 +3906,16 @@ class AnalyticsQueryService:
         dataset = next((item for item in release.datasets if item.id == query.dataset_id), None)
         if dataset is None:
             return ()
-        dimension_names = {item.id: item.name for item in release.dimensions}
-        metric_names = {item.id: item.name for item in release.metrics}
+        # 下钻卡是**主动**向用户推销他没问过的成员名，是列级权限泄漏面最大的一处：
+        # 用户不需要猜就能看到「原来还有这些指标」。名字表在这里就收窄，下面所有
+        # 签发循环（新增维度、替换指标、移除、换值、换时间窗）自动跟着收窄。
+        def _visible(element_id: str) -> bool:
+            return allowed_element_ids is None or element_id in allowed_element_ids
+
+        dimension_names = {
+            item.id: item.name for item in release.dimensions if _visible(item.id)
+        }
+        metric_names = {item.id: item.name for item in release.metrics if _visible(item.id)}
         context_ref = self._drilldown_context_ref(
             project_id=project_id,
             actor_id=actor,
@@ -4010,6 +4089,8 @@ class AnalyticsQueryService:
         actor_id: str,
         value: str | None = None,
         now: datetime | None = None,
+        allowed_element_ids: tuple[str, ...] | None = None,
+        row_filters: tuple[QueryRowFilter, ...] | None = None,
     ) -> QueryResponse:
         """Continue a completed answer by one signed drilldown option.
 
@@ -4063,6 +4144,10 @@ class AnalyticsQueryService:
         request = StructuredQueryRequest(
             project_id=project_id,
             semantic_query=new_query,
+            # 下钻不从 token 恢复权限：token 的 TTL 内授权可能已被撤销，必须用
+            # 调用方本次请求重算出的范围。
+            allowed_element_ids=allowed_element_ids,
+            row_filters=row_filters,
         )
         return self.query_structured(request, now=now, actor_id=actor_id)
 
@@ -4107,6 +4192,7 @@ class AnalyticsQueryService:
         candidates: tuple[ParsedSemanticCandidate, ...],
         *,
         selection_context: _SelectionTokenContext,
+        allowed_element_ids: frozenset[str] | None = None,
     ) -> tuple[ClarificationOption, ...]:
         """Expose at most one candidate per materially different query scope.
 
@@ -4123,6 +4209,7 @@ class AnalyticsQueryService:
             release,
             tuple(first_by_dataset),
             selection_context=selection_context,
+            allowed_element_ids=allowed_element_ids,
         )
 
     def _bundle_semantic_scope_options(
@@ -4395,6 +4482,7 @@ class AnalyticsQueryService:
         *,
         selection_context: _SelectionTokenContext,
         carried_selection_id: str | None = None,
+        allowed_element_ids: frozenset[str] | None = None,
     ) -> tuple[ClarificationOption, ...]:
         models = {item.id: item for item in release.models}
         metrics = {item.id: item for item in release.metrics}
@@ -4417,9 +4505,14 @@ class AnalyticsQueryService:
             dataset_id = root_datasets[0]
             model = models[root_model_id]
             dataset = datasets[dataset_id]
-            metric_names = [metrics[item].name for item in dataset.metric_ids if item in metrics][
-                :8
-            ]
+            # 「可分析指标：A、B、C」是直接枚举 Release 的名字清单，不经过证据，
+            # 所以列级白名单必须在这里再挡一次。
+            metric_names = [
+                metrics[item].name
+                for item in dataset.metric_ids
+                if item in metrics
+                and (allowed_element_ids is None or item in allowed_element_ids)
+            ][:8]
             description_parts = [model.description or f"按{model.name}业务记录分析"]
             if metric_names:
                 description_parts.append(f"可分析指标：{'、'.join(metric_names)}")

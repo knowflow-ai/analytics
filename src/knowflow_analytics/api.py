@@ -57,6 +57,7 @@ from knowflow_analytics.query.contracts import (
     FailedQueryResponse,
     QueryRequest,
     QueryResponse,
+    QueryRowFilter,
     StructuredQueryRequest,
 )
 from knowflow_analytics.query.diagnostics import QueryDiagnosticExport
@@ -280,21 +281,53 @@ def _ordinary_visualization(
 
 
 def _release_ask_context(release) -> dict[str, Any]:
-    """Ask 消费者的最小 Release 投影：治理名与值字典，无建模产物与物理信息。"""
+    """Ask 消费者的最小 Release 投影：治理名与值字典，无建模产物与物理信息。
+
+    带上 ``id`` 与 ``model_id``：列级权限的白名单以受治理元素 ID 为键，按实体
+    （``model_id``）推导；只给名字的投影让调用方物理上无法过滤，联想词表与值
+    字典就只能整份铺开。这些是**建模侧标识**，不是普通问数 wire——问数响应的
+    零泄漏合同约束的是 `/v1/analytics/query` 的投影，不是本上下文接口。
+    """
 
     return {
         "release_id": release.id,
         "spec_hash": release.spec_hash,
-        "datasets": [{"id": item.id} for item in release.datasets],
+        "datasets": [
+            {
+                "id": item.id,
+                "metric_ids": list(item.metric_ids),
+                "dimension_ids": list(item.dimension_ids),
+            }
+            for item in release.datasets
+        ],
         "metrics": [
-            {"name": item.name, "aliases": list(item.aliases)} for item in release.metrics
+            {
+                "id": item.id,
+                "model_id": item.model_id,
+                "name": item.name,
+                "aliases": list(item.aliases),
+            }
+            for item in release.metrics
         ],
         "dimensions": [
-            {"id": item.id, "name": item.name, "aliases": list(item.aliases)}
+            {
+                "id": item.id,
+                "model_id": item.model_id,
+                "name": item.name,
+                "aliases": list(item.aliases),
+            }
             for item in release.dimensions
         ],
         "terms": [
-            {"name": item.name, "aliases": list(item.aliases)} for item in release.terms
+            {
+                "id": item.id,
+                "name": item.name,
+                "aliases": list(item.aliases),
+                # 术语绑定到受治理成员；成员不可见时该术语也不该出现在联想里。
+                "metric_ids": list(item.metric_ids),
+                "dimension_ids": list(item.dimension_ids),
+            }
+            for item in release.terms
         ],
         "dimension_values": [
             {
@@ -2351,6 +2384,10 @@ def create_api(
         token: str = Field(min_length=1, max_length=1_024)
         # refilter 续跑携带的业务值 literal（与自然语言问句中的词同等地位）。
         value: str | None = Field(default=None, min_length=1, max_length=512)
+        # 下钻的行列级权限与首轮同源、每次请求重算：token 的 TTL 内授权可能已被
+        # 撤销，从 token 恢复权限等于让旧令牌继续放行。
+        allowed_element_ids: tuple[str, ...] | None = Field(default=None, max_length=5_000)
+        row_filters: tuple[QueryRowFilter, ...] | None = Field(default=None, max_length=100)
 
     @app.post("/v1/analytics/query:drilldown")
     def drilldown_query(payload: DrilldownRequest, request_context: Context):
@@ -2366,6 +2403,8 @@ def create_api(
                 actor_id=request_context.actor_id,
                 permission_scope_hash=request_context.permission_scope_hash,
                 value=payload.value,
+                allowed_element_ids=payload.allowed_element_ids,
+                row_filters=payload.row_filters,
             )
         )
 

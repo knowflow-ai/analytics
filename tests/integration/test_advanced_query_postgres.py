@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import create_engine
 
 from knowflow_analytics.contracts import QueryRuleMode, QueryRuleSpec, QueryRuleType
-from knowflow_analytics.execution.postgres import PostgresExecutor
+from knowflow_analytics.execution.executor import SqlExecutor
 from knowflow_analytics.query.rules import QueryRuleEngine
 from knowflow_analytics.semantic.s2sql_translator import S2SqlSemanticTranslator
 from tests.support import create_sales_fixture
@@ -29,7 +29,7 @@ def test_advanced_s2sql_executes_against_one_postgres_snapshot(sales_release) ->
             """
         )
     engine.dispose()
-    executor = PostgresExecutor(database_url)
+    executor = SqlExecutor(database_url)
     translator = S2SqlSemanticTranslator()
     try:
         year_over_year = translator.translate(

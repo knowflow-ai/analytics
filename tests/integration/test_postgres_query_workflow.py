@@ -7,7 +7,7 @@ import pytest
 
 from knowflow_analytics.catalog.store import PublishedRelease
 from knowflow_analytics.contracts import AnalysisTopicRouteSpec
-from knowflow_analytics.execution import PostgresExecutor
+from knowflow_analytics.execution import SqlExecutor
 from knowflow_analytics.query.contracts import QueryRequest, QueryState
 from knowflow_analytics.query.mapper import SemanticMapper
 from knowflow_analytics.query.orchestrator import CandidateOrchestrator
@@ -43,7 +43,7 @@ def test_runs_natural_language_through_fixed_pipeline_against_postgres(sales_rel
     if not database_url:
         pytest.skip("KNOWFLOW_ANALYTICS_TEST_DATABASE_URL is not configured")
     create_sales_fixture(database_url)
-    executor = PostgresExecutor(database_url)
+    executor = SqlExecutor(database_url)
     try:
         service = AnalyticsQueryService(
             releases=_ReleaseProvider(sales_release, sales_index),
@@ -97,7 +97,7 @@ def test_executes_textual_calculation_without_query_struct_collapse(
             ),
         }
     )
-    executor = PostgresExecutor(database_url)
+    executor = SqlExecutor(database_url)
     try:
         service = AnalyticsQueryService(
             releases=_ReleaseProvider(release, sales_index),

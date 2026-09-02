@@ -6,7 +6,7 @@ from sqlalchemy import create_engine
 from knowflow_analytics.api import create_api
 from knowflow_analytics.application import AnalyticsApplication
 from knowflow_analytics.catalog.store import CatalogStore
-from knowflow_analytics.execution.postgres import PostgresExecutor
+from knowflow_analytics.execution.executor import SqlExecutor
 from knowflow_analytics.gateways.embedding import HttpEmbeddingGateway
 from knowflow_analytics.gateways.knowledge import HttpKnowledgeGateway
 from knowflow_analytics.gateways.model import HttpModelGateway
@@ -50,7 +50,7 @@ def create_app() -> FastAPI:
         base_url=settings.ragflow_base_url,
         service_token=gateway_token,
     )
-    executor = PostgresExecutor(settings.datasource_database_url.get_secret_value())
+    executor = SqlExecutor(settings.datasource_database_url.get_secret_value())
     exemplar_provider = GoldenSuiteExemplarProvider(
         catalog=catalog,
         embedding_gateway=embedding_gateway,

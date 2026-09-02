@@ -29,6 +29,7 @@ from knowflow_analytics.contracts import (
     SortDirection,
 )
 from knowflow_analytics.errors import TranslationError
+from knowflow_analytics.execution.dialect import SqlDialect, render_physical_sql
 from knowflow_analytics.modeling.analysis_topics import route_relation_ids_for_models
 from knowflow_analytics.modeling.semantic_expression import render_semantic_expression
 from knowflow_analytics.query.errors import SemanticParsingError
@@ -93,6 +94,9 @@ class _QueryStatement:
     # 漏掉任何一个都是一条绕过权限的路径（RATIO 的自连接 CTE 就在其中之一）。
     visible_element_ids: frozenset[str] | None = None
     row_filters: Mapping[str, tuple[FixedFilter, ...]] = field(default_factory=dict)
+    # 数据源的执行方言。整条链路上只有最后落成物理 SQL 的两处会读它——中间所有
+    # sqlglot 调用处理的都是内部 S2SQL，那层必须固定在 postgres 记法上。
+    dialect: SqlDialect = SqlDialect.POSTGRES
 
 
 class _Parser(Protocol):
@@ -798,7 +802,7 @@ class _OntologyQueryParser:
             statement.tree.set("with_", exp.With(expressions=[ontology_cte]))
         else:
             with_clause.set("expressions", [ontology_cte, *with_clause.expressions])
-        sql = statement.tree.sql(dialect="postgres")
+        sql = render_physical_sql(statement.tree, statement.dialect)
         sql = re.sub(r"%\((p\d+)\)s", r":\1", sql)
         statement.physical_query = PhysicalQuery(
             release_id=statement.release.id,
@@ -883,7 +887,9 @@ class _OntologyQueryParser:
             statement.tree.set("with_", exp.With(expressions=ontology_ctes))
         else:
             with_clause.set("expressions", [*ontology_ctes, *with_clause.expressions])
-        sql = re.sub(r"%\((p\d+)\)s", r":\1", statement.tree.sql(dialect="postgres"))
+        sql = re.sub(
+            r"%\((p\d+)\)s", r":\1", render_physical_sql(statement.tree, statement.dialect)
+        )
         statement.physical_query = PhysicalQuery(
             release_id=statement.release.id,
             dataset_id=statement.dataset.id,
@@ -1033,6 +1039,7 @@ class S2SqlSemanticTranslator:
         corrected_s2sql: str,
         visible_element_ids: frozenset[str] | None = None,
         row_filters: Mapping[str, tuple[FixedFilter, ...]] | None = None,
+        dialect: SqlDialect = SqlDialect.POSTGRES,
     ) -> S2SqlTranslation:
         try:
             dataset = next(item for item in release.datasets if item.id == dataset_id)
@@ -1045,6 +1052,7 @@ class S2SqlSemanticTranslator:
             query_type=textual_query_type(corrected_s2sql),
             visible_element_ids=visible_element_ids,
             row_filters=dict(row_filters or {}),
+            dialect=dialect,
         )
         trace: list[str] = []
         for parser in self._parsers:

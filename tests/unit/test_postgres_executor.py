@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from knowflow_analytics.execution.postgres import PostgresExecutor
+from knowflow_analytics.execution.executor import SqlExecutor
 
 
 class _Transaction:
@@ -61,7 +61,7 @@ class _Guard:
 
 def test_explain_uses_the_same_read_only_timeouts_as_execution() -> None:
     connection = _Connection()
-    executor = PostgresExecutor(
+    executor = SqlExecutor(
         "postgresql://unused",
         engine=_Engine(connection),
         guard=_Guard(),

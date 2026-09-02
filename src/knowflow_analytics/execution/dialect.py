@@ -38,9 +38,13 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from knowflow_analytics.contracts import TimeGranularity
+import sqlglot
+from sqlglot import exp
 
-__all__ = ["SqlDialect", "count_where_sql"]
+from knowflow_analytics.contracts import TimeGranularity
+from knowflow_analytics.errors import TranslationError
+
+__all__ = ["SqlDialect", "count_where_sql", "render_physical_sql"]
 
 
 # 不含 ``%``（见模块注释第 2 条），且都 CAST 回 DATE 以保住类型契约（第 1 条）。
@@ -89,6 +93,17 @@ class SqlDialect(StrEnum):
             return numerator_sql
         return f"CAST({numerator_sql} AS DOUBLE)"
 
+    def explain_sql(self, sql: str) -> str:
+        """查询计划语句。两边语法不同，且 MySQL 不认 PostgreSQL 的括号写法。
+
+        实测 MySQL 对 ``EXPLAIN (FORMAT JSON) ...`` 直接报 1064 语法错。返回值形状
+        也不同：PostgreSQL 给结构化的 JSON，MySQL 给一段 JSON **字符串**。
+        """
+
+        if self is SqlDialect.POSTGRES:
+            return f"EXPLAIN (FORMAT JSON) {sql}"
+        return f"EXPLAIN FORMAT=JSON {sql}"
+
     def read_only_session_sql(
         self, *, statement_timeout_ms: int, lock_timeout_ms: int
     ) -> tuple[str, ...]:
@@ -131,3 +146,140 @@ def count_where_sql(predicate_sql: str) -> str:
     """
 
     return f"SUM(CASE WHEN {predicate_sql} THEN 1 ELSE 0 END)"
+
+
+def render_physical_sql(expression: exp.Expression, dialect: SqlDialect) -> str:
+    """把翻译器产出的 AST 渲染成目标引擎真正能跑的 SQL。
+
+    **物理 SQL 的唯一收口。** 翻译链路里那几十处 ``read="postgres"`` 处理的是内部
+    S2SQL——一种建立在受治理业务名之上的中间语言，不是任何数据库的方言。它必须
+    保持固定：LLM 按它写、黄金集按它存、确认记忆按它绑定，跟着数据源变会让同一个
+    问题在 MySQL 上产出不同的 S2SQL 文本，把这些全部作废。
+
+    真正需要随数据源变的只有最后这一步：AST → 发给数据库的字符串。所以整条链路上
+    只有这一个函数认识目标引擎。
+
+    ``DATE_TRUNC`` 必须在这里换掉而不是交给 sqlglot：它给 MySQL 的渲染返回字符串
+    而不是日期（详见模块注释第 1 条）。未受治理的粒度一律拒绝——按小时截断在
+    PostgreSQL 上能跑、在 MySQL 上没有对应写法，静默出一列错的时间比报错糟得多。
+    """
+
+    if dialect is SqlDialect.POSTGRES:
+        return expression.sql(dialect=dialect.value)
+
+    rendered = expression.copy()
+    for order in rendered.find_all(exp.Order):
+        _rewrite_null_ordering(order)
+    rendered = rendered.transform(_rewrite_aggregate_filter, copy=False)
+
+    def replace(node: exp.Expression) -> exp.Expression:
+        if not isinstance(node, exp.TimestampTrunc):
+            return node
+        unit = node.args.get("unit")
+        raw_unit = (unit.name if isinstance(unit, exp.Expression) else str(unit or "")).lower()
+        try:
+            grain = TimeGranularity(raw_unit)
+        except ValueError as exc:
+            raise TranslationError(
+                f"time granularity is not supported on {dialect.value}: {raw_unit or '(empty)'}",
+                code="UNSUPPORTED_TIME_GRANULARITY",
+            ) from exc
+        inner_sql = node.this.sql(dialect=dialect.value)
+        return sqlglot.parse_one(dialect.date_trunc_sql(inner_sql, grain), read=dialect.value)
+
+    return rendered.transform(replace, copy=False).sql(dialect=dialect.value)
+
+
+def _rewrite_null_ordering(order: exp.Order) -> None:
+    """在**别名**上补偿 NULL 排序差异，而不是让 sqlglot 展开成表达式。
+
+    两件事叠在一起才成为问题：
+
+    1. 两个引擎对 NULL 的默认位置相反（实测 ``ORDER BY x ASC``：PostgreSQL 把 NULL
+       排最后，MySQL 排最前）。所以补偿是**必需**的，不能省——省了就是静默换了一种
+       排序。
+    2. sqlglot 做这个补偿时，会把 ``ORDER BY "t"`` 里的 select 别名解析成它背后的
+       完整表达式。而按时间粒度分组时那个表达式是 ``CAST(MAKEDATE(...) ...)``，
+       于是 ORDER BY 里出现了 ``CASE WHEN CAST(...) IS NULL ...``——MySQL 的
+       ``ONLY_FULL_GROUP_BY`` 认不出它就是 GROUP BY 的那个表达式，直接以 1055 拒绝。
+       实测：按月/周/季/年聚合**全部跑不起来**。
+
+    自己补偿就没有第 2 个问题：``CASE WHEN `t` IS NULL ...`` 用的是别名，MySQL 在
+    ``ONLY_FULL_GROUP_BY`` 下接受（实测）。补完把 ``nulls_first`` 设成 MySQL 的原生
+    默认值，sqlglot 看到「要的就是默认行为」便不再重复补偿。
+    """
+
+    terms: list[exp.Expression] = []
+    for ordered in order.expressions:
+        if not isinstance(ordered, exp.Ordered):
+            terms.append(ordered)
+            continue
+        descending = bool(ordered.args.get("desc"))
+        wanted = ordered.args.get("nulls_first")
+        if wanted is None:
+            # PostgreSQL 的默认：DESC 时 NULL 在前，ASC 时在后。
+            wanted = descending
+        # MySQL 的原生行为：ASC 时 NULL 在前，DESC 时在后。
+        native = not descending
+        if bool(wanted) != native:
+            nulls_rank = 0 if wanted else 1
+            terms.append(
+                exp.Ordered(
+                    this=exp.Case(
+                        ifs=[
+                            exp.If(
+                                this=exp.Is(this=ordered.this.copy(), expression=exp.Null()),
+                                true=exp.Literal.number(nulls_rank),
+                            )
+                        ],
+                        default=exp.Literal.number(1 - nulls_rank),
+                    ),
+                    desc=False,
+                    nulls_first=True,
+                )
+            )
+        ordered.set("nulls_first", native)
+        terms.append(ordered)
+    order.set("expressions", terms)
+
+
+def _rewrite_aggregate_filter(node: exp.Expression) -> exp.Expression:
+    """``AGG(x) FILTER (WHERE p)`` → ``AGG(CASE WHEN p THEN x END)``。
+
+    这条是三处例外里最要命的：子集占比（``RATIO_TO_TOTAL(指标, 维度, 值)``）生成的
+    物理 SQL 里就带着 ``FILTER``，MySQL 不支持，而 **sqlglot 和 SQLAlchemy 都原样
+    把它吐过去**（都实测过）——占比类问题在 MySQL 数据源上会直接语法错。
+
+    改写是把条件推进聚合的参数里。九种聚合形态在真 PostgreSQL 上逐值验证过等价，
+    包括两个容易想当然的边界：无匹配行时 ``SUM`` 返 NULL 而 ``COUNT`` 返 0，
+    ``CASE`` 写法两边的这个区别也保持一致。
+
+    ``COUNT(*)`` 单独处理：星号不能塞进 ``CASE``，改数 1。
+    ``COUNT(DISTINCT x)`` 的 ``CASE`` 要推到 ``DISTINCT`` 里面而不是外面。
+    """
+
+    if not isinstance(node, exp.Filter):
+        return node
+    aggregate = node.this
+    predicate = node.args.get("expression")
+    if isinstance(predicate, exp.Where):
+        predicate = predicate.this
+    if not isinstance(aggregate, exp.AggFunc) or predicate is None:
+        return node
+
+    def guarded(value: exp.Expression) -> exp.Expression:
+        return exp.Case(
+            ifs=[exp.If(this=predicate.copy(), true=value)],
+            default=None,
+        )
+
+    rewritten = aggregate.copy()
+    target = rewritten.this
+    if isinstance(target, exp.Distinct):
+        target.set("expressions", [guarded(item) for item in target.expressions])
+    elif isinstance(target, exp.Star):
+        # COUNT(*)：星号进不了 CASE，改数 1。行为一致——满足条件的行各计一次。
+        rewritten.set("this", guarded(exp.Literal.number(1)))
+    else:
+        rewritten.set("this", guarded(target))
+    return rewritten

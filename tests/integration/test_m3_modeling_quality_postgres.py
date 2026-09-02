@@ -5,7 +5,7 @@ import os
 import pytest
 from sqlalchemy import create_engine, text
 
-from knowflow_analytics.execution.postgres import PostgresExecutor
+from knowflow_analytics.execution.executor import SqlExecutor
 from knowflow_analytics.modeling.contracts import ModelingRevision
 from knowflow_analytics.modeling.quality import (
     PostgreSqlModelingQualityProfiler,
@@ -55,7 +55,7 @@ def test_m3_profiles_grain_relations_metrics_and_dataset_matrix_against_postgres
         revision_id="revision-quality-postgres",
     )
     engine = create_engine(database_url)
-    executor = PostgresExecutor(database_url)
+    executor = SqlExecutor(database_url)
     profiler = PostgreSqlModelingQualityProfiler(engine, executor)
     try:
         report = profiler.profile(revision)
@@ -115,7 +115,7 @@ def test_relation_coverage_counts_null_join_keys_as_unmatched_rows(sales_release
         sales_release,
         revision_id="revision-quality-null-join-key",
     )
-    executor = PostgresExecutor(database_url)
+    executor = SqlExecutor(database_url)
     profiler = PostgreSqlModelingQualityProfiler(engine, executor)
     try:
         report = profiler.profile(revision)

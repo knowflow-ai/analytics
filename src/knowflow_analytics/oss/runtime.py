@@ -23,7 +23,7 @@ from sqlalchemy.engine import Engine, make_url
 from knowflow_analytics.api import create_api
 from knowflow_analytics.application import AnalyticsApplication
 from knowflow_analytics.catalog.store import CatalogStore
-from knowflow_analytics.execution.postgres import PostgresExecutor
+from knowflow_analytics.execution.executor import SqlExecutor
 from knowflow_analytics.modeling.ai_modeller import AiSemanticModeller
 from knowflow_analytics.modeling.dimension_aliases import DimensionValueAliasSuggester
 from knowflow_analytics.modeling.introspector import PostgreSqlIntrospector
@@ -88,7 +88,7 @@ class CoreBundle:
     api: FastAPI
     application: AnalyticsApplication
     datasource_engine: Engine
-    executor: PostgresExecutor
+    executor: SqlExecutor
     model_gateway: OpenAiCompatibleModelGateway
     embedding_gateway: OpenAiCompatibleEmbeddingGateway
 
@@ -185,7 +185,7 @@ class OssRuntime:
         settings = self.settings
         datasource_url = config.datasource_database_url.get_secret_value()
         datasource_engine = create_engine(datasource_url, pool_pre_ping=True)
-        executor = PostgresExecutor(datasource_url)
+        executor = SqlExecutor(datasource_url)
         model_gateway = OpenAiCompatibleModelGateway(
             config.chat_model, timeout_seconds=settings.model_timeout_seconds
         )
@@ -205,7 +205,7 @@ class OssRuntime:
         self,
         config: OssConfig,
         datasource_engine: Engine,
-        executor: PostgresExecutor,
+        executor: SqlExecutor,
         model_gateway: OpenAiCompatibleModelGateway,
         embedding_gateway: OpenAiCompatibleEmbeddingGateway,
     ) -> CoreBundle:

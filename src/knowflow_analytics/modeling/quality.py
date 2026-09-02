@@ -18,7 +18,7 @@ from knowflow_analytics.contracts import (
     SemanticRelease,
 )
 from knowflow_analytics.errors import AnalyticsError, TranslationError
-from knowflow_analytics.execution.postgres import PostgresExecutor
+from knowflow_analytics.execution.executor import SqlExecutor
 from knowflow_analytics.hashing import content_hash, semantic_evidence_hash
 from knowflow_analytics.modeling.contracts import ModelingRevision
 from knowflow_analytics.modeling.source_query import compile_governed_model_source
@@ -151,7 +151,7 @@ class PostgreSqlModelingQualityProfiler:
     def __init__(
         self,
         engine: Engine,
-        executor: PostgresExecutor,
+        executor: SqlExecutor,
         *,
         statement_timeout_ms: int = 30_000,
         overall_timeout_ms: int = 180_000,

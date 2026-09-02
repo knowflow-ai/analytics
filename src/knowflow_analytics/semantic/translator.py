@@ -28,6 +28,7 @@ from knowflow_analytics.contracts import (
     SemanticRelease,
 )
 from knowflow_analytics.errors import TranslationError
+from knowflow_analytics.execution.dialect import SqlDialect, render_physical_sql
 from knowflow_analytics.modeling.analysis_topics import route_relation_ids_for_models
 from knowflow_analytics.modeling.semantic_expression import render_semantic_expression
 from knowflow_analytics.modeling.sql_model import compile_sql_model_source
@@ -110,6 +111,7 @@ class SemanticTranslator:
         query: SemanticQuery,
         visible_element_ids: frozenset[str] | None = None,
         row_filters: Mapping[str, tuple[FixedFilter, ...]] | None = None,
+        dialect: SqlDialect = SqlDialect.POSTGRES,
     ) -> PhysicalQuery:
         """把受治理语义查询翻译成物理 SQL。
 
@@ -455,9 +457,17 @@ class SemanticTranslator:
         sql_parts.append(f" LIMIT {limit + 1}")
         sql = "".join(sql_parts)
         try:
-            sqlglot.parse_one(sql, read="postgres")
+            tree = sqlglot.parse_one(sql, read="postgres")
         except sqlglot.errors.ParseError as exc:
             raise TranslationError("translator produced invalid PostgreSQL SQL") from exc
+        if dialect is not SqlDialect.POSTGRES:
+            # 上面一路是**手工拼串**（受治理业务名 + PostgreSQL 记法），到这里才落到
+            # 数据源真正的方言。物理 SQL 的唯一收口。
+            #
+            # PostgreSQL 刻意不走这条：拿 AST 重渲染会把手工串重排，实测参数占位符
+            # 会从 `:p0` 变成 `%(p0)s`。现存的黄金集、诊断产物、契约测试全绑在当前
+            # 产出的字符串上，这条路径必须逐字节不变。
+            sql = render_physical_sql(tree, dialect)
 
         return PhysicalQuery(
             release_id=release.id,

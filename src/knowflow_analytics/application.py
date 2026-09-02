@@ -37,7 +37,7 @@ from knowflow_analytics.evaluation.contracts import (
     GoldenSuiteRecord,
 )
 from knowflow_analytics.evaluation.evaluator import GoldenEvaluator
-from knowflow_analytics.execution.postgres import PostgresExecutor
+from knowflow_analytics.execution.executor import SqlExecutor
 from knowflow_analytics.hashing import content_hash, semantic_evidence_hash
 from knowflow_analytics.modeling.ai_artifacts import (
     OneClickModelingArtifactService,
@@ -478,7 +478,7 @@ class AnalyticsApplication:
         *,
         catalog: CatalogStore,
         introspector: PostgreSqlIntrospector,
-        executor: PostgresExecutor,
+        executor: SqlExecutor,
         embedding_gateway: EmbeddingGateway,
         ai_modeller: AiSemanticModeller | None = None,
         dimension_alias_suggester: DimensionValueAliasSuggester | None = None,

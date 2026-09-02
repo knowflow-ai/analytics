@@ -5,7 +5,7 @@ import os
 import pytest
 
 from knowflow_analytics.contracts import QueryOrder, SemanticQuery, SortDirection
-from knowflow_analytics.execution import PostgresExecutor
+from knowflow_analytics.execution import SqlExecutor
 from knowflow_analytics.semantic import SemanticTranslator
 from tests.support import create_sales_fixture
 
@@ -26,7 +26,7 @@ def test_executes_translated_query_against_postgres(sales_release):
             limit=10,
         ),
     )
-    executor = PostgresExecutor(database_url)
+    executor = SqlExecutor(database_url)
     try:
         result = executor.execute(query=physical, release=sales_release)
         plan = executor.explain(query=physical, release=sales_release)
@@ -54,7 +54,7 @@ def test_reports_when_postgres_results_are_truncated(sales_release):
             limit=1,
         ),
     )
-    executor = PostgresExecutor(database_url)
+    executor = SqlExecutor(database_url)
     try:
         result = executor.execute(query=physical, release=sales_release)
     finally:

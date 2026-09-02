@@ -5,7 +5,7 @@
 
 from decimal import Decimal
 
-from knowflow_analytics.execution.postgres import _normalize_cell
+from knowflow_analytics.execution.executor import _normalize_cell
 
 
 def test_trailing_zeros_are_stripped_without_scientific_notation():

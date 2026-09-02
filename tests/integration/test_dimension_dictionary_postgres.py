@@ -8,7 +8,7 @@ from sqlalchemy import create_engine
 from knowflow_analytics.application import AnalyticsApplication
 from knowflow_analytics.catalog.store import CatalogStore
 from knowflow_analytics.errors import SemanticValidationError
-from knowflow_analytics.execution.postgres import PostgresExecutor
+from knowflow_analytics.execution.executor import SqlExecutor
 from knowflow_analytics.modeling.catalog_contracts import (
     ModelDimensionContract,
     ModelDimensionType,
@@ -44,7 +44,7 @@ def test_dimension_dictionary_preview_is_reviewed_before_catalog_write():
     catalog_engine = create_engine("sqlite+pysqlite:///:memory:")
     catalog = CatalogStore(catalog_engine)
     catalog.create_schema()
-    executor = PostgresExecutor(database_url)
+    executor = SqlExecutor(database_url)
     application = AnalyticsApplication(
         catalog=catalog,
         introspector=PostgreSqlIntrospector(datasource_engine),

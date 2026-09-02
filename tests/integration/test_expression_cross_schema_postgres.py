@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import create_engine
 
 from knowflow_analytics.contracts import SemanticQuery
-from knowflow_analytics.execution.postgres import PostgresExecutor
+from knowflow_analytics.execution.executor import SqlExecutor
 from knowflow_analytics.modeling.catalog_compiler import compile_semantic_catalog
 from knowflow_analytics.modeling.catalog_contracts import (
     ModelDefineType,
@@ -131,7 +131,7 @@ def test_computed_dimensions_composite_metrics_and_filters_hold_across_schema_na
         pytest.skip("KNOWFLOW_ANALYTICS_TEST_DATABASE_URL is not configured")
     schema_name = f"support_expression_{uuid.uuid4().hex}"
     engine = create_engine(database_url)
-    executor = PostgresExecutor(database_url)
+    executor = SqlExecutor(database_url)
     try:
         with engine.begin() as connection:
             connection.exec_driver_sql(f'CREATE SCHEMA "{schema_name}"')

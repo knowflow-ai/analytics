@@ -15,7 +15,7 @@ from sqlalchemy.schema import CreateSchema, DropSchema
 from knowflow_analytics.api import create_api
 from knowflow_analytics.application import AnalyticsApplication
 from knowflow_analytics.catalog.store import CatalogStore
-from knowflow_analytics.execution.postgres import PostgresExecutor
+from knowflow_analytics.execution.executor import SqlExecutor
 from knowflow_analytics.gateways.embedding import HttpEmbeddingGateway
 from knowflow_analytics.gateways.model import HttpModelGateway
 from knowflow_analytics.modeling.introspector import PostgreSqlIntrospector
@@ -56,7 +56,7 @@ def test_small_query_baseline_uses_the_api_built_release():
     datasource_engine = create_engine(settings["database_url"])
     catalog = CatalogStore(catalog_engine)
     catalog.create_schema()
-    executor = PostgresExecutor(settings["database_url"])
+    executor = SqlExecutor(settings["database_url"])
     http_model_gateway = HttpModelGateway(
         base_url=settings["ragflow_base_url"],
         service_token=settings["service_token"],

@@ -16,7 +16,7 @@ from sqlalchemy.schema import CreateSchema, DropSchema
 from knowflow_analytics.api import create_api
 from knowflow_analytics.application import AnalyticsApplication
 from knowflow_analytics.catalog.store import CatalogStore
-from knowflow_analytics.execution.postgres import PostgresExecutor
+from knowflow_analytics.execution.executor import SqlExecutor
 from knowflow_analytics.modeling.introspector import PostgreSqlIntrospector
 from knowflow_analytics.modeling.profiler import PostgreSqlSemanticProfiler
 from knowflow_analytics.semantic.index import EmbeddingBatch
@@ -162,7 +162,7 @@ def _run_product_journey(case: _JourneyCase) -> dict[str, Any]:
         connection.execute(CreateSchema(catalog_schema))
     catalog_engine = _catalog_engine(database_url, catalog_schema)
     restarted_catalog_engine = None
-    executor = PostgresExecutor(database_url)
+    executor = SqlExecutor(database_url)
     application = AnalyticsApplication(
         catalog=CatalogStore(catalog_engine),
         introspector=PostgreSqlIntrospector(datasource_engine),

@@ -16,10 +16,15 @@ from datetime import date, datetime
 from decimal import Decimal
 
 import pytest
+import sqlglot
 from sqlalchemy import create_engine, text
 
 from knowflow_analytics.contracts import TimeGranularity
-from knowflow_analytics.execution.dialect import SqlDialect, count_where_sql
+from knowflow_analytics.execution.dialect import (
+    SqlDialect,
+    count_where_sql,
+    render_physical_sql,
+)
 
 _TABLE = "dialect_parity_orders"
 
@@ -30,6 +35,8 @@ _ROWS = (
     (4, "华东", Decimal("200.00"), date(2025, 8, 1)),
     # 跨周边界：用 DAYOFWEEK() 而不是 WEEKDAY() 会让这一行整体差一天。
     (5, "华南", Decimal("50.00"), date(2026, 8, 9)),
+    # NULL 维度：两个引擎对 NULL 的默认排序位置相反，没有这一行就测不出补偿是否正确。
+    (6, None, Decimal("30.00"), date(2026, 8, 5)),
 )
 
 
@@ -46,31 +53,27 @@ def _seed(pg, my):
         connection.execute(text(f"DROP TABLE IF EXISTS {_TABLE}"))
         connection.execute(
             text(
-                f"CREATE TABLE {_TABLE} (id BIGINT NOT NULL, region TEXT NOT NULL, "
+                f"CREATE TABLE {_TABLE} (id BIGINT NOT NULL, region TEXT, "
                 "net_amount NUMERIC NOT NULL, order_date DATE NOT NULL)"
             )
         )
         for row in _ROWS:
             connection.execute(
-                text(
-                    f"INSERT INTO {_TABLE} VALUES (:id, :region, :amount, :order_date)"
-                ),
+                text(f"INSERT INTO {_TABLE} VALUES (:id, :region, :amount, :order_date)"),
                 {"id": row[0], "region": row[1], "amount": row[2], "order_date": row[3]},
             )
     with my.begin() as connection:
         connection.execute(text(f"DROP TABLE IF EXISTS {_TABLE}"))
         connection.execute(
             text(
-                f"CREATE TABLE {_TABLE} (id BIGINT NOT NULL, region VARCHAR(64) NOT NULL, "
+                f"CREATE TABLE {_TABLE} (id BIGINT NOT NULL, region VARCHAR(64), "
                 "net_amount DECIMAL(18,2) NOT NULL, order_date DATE NOT NULL) "
                 "DEFAULT CHARSET=utf8mb4"
             )
         )
         for row in _ROWS:
             connection.execute(
-                text(
-                    f"INSERT INTO {_TABLE} VALUES (:id, :region, :amount, :order_date)"
-                ),
+                text(f"INSERT INTO {_TABLE} VALUES (:id, :region, :amount, :order_date)"),
                 {"id": row[0], "region": row[1], "amount": row[2], "order_date": row[3]},
             )
 
@@ -149,6 +152,10 @@ def test_ratio_precision_matches_postgres(engines):
 
     不转 DOUBLE 的话 MySQL 的 DECIMAL 除法只留 6 位小数（0.862069），
     PostgreSQL 给的是 0.8620689655172413。
+
+    这里刻意排除 NULL 分组：这条裸 SQL 不经过 ``render_physical_sql``，没有 NULL
+    排序补偿，留着 NULL 会让两边的行序不同，把精度问题淹掉。NULL 排序本身由
+    ``test_rendered_physical_sql_agrees_across_engines`` 覆盖。
     """
 
     pg, my = engines
@@ -161,7 +168,8 @@ def test_ratio_precision_matches_postgres(engines):
             for row in connection.execute(
                 text(
                     f"SELECT {SqlDialect.POSTGRES.ratio_numerator_sql(numerator)} "
-                    f"/ {denominator} AS p FROM {_TABLE} GROUP BY region ORDER BY region"
+                    f"/ {denominator} AS p FROM {_TABLE} WHERE region IS NOT NULL "
+                    "GROUP BY region ORDER BY region"
                 )
             )
         ]
@@ -171,7 +179,8 @@ def test_ratio_precision_matches_postgres(engines):
             for row in connection.execute(
                 text(
                     f"SELECT {SqlDialect.MYSQL.ratio_numerator_sql(numerator)} "
-                    f"/ {denominator} AS p FROM {_TABLE} GROUP BY region ORDER BY region"
+                    f"/ {denominator} AS p FROM {_TABLE} WHERE region IS NOT NULL "
+                    "GROUP BY region ORDER BY region"
                 )
             )
         ]
@@ -242,3 +251,208 @@ def test_read_only_does_not_leak_to_later_transactions(engines):
                 text(f"INSERT INTO {_TABLE} VALUES (:id, 'x', 1, '2026-01-01')"), {"id": 99}
             )
             connection.execute(text(f"DELETE FROM {_TABLE} WHERE id = :id"), {"id": 99})
+
+
+# 翻译器实际会产出的形状。每一条都要在两个真库上跑出**逐行相同**的结果——
+# 这是 render_physical_sql 能不能用的唯一判据。
+_PARITY_CASES = {
+    "按日聚合": (
+        'SELECT DATE_TRUNC(\'day\', "order_date") AS "t", SUM("net_amount") AS "v" '
+        'FROM {tbl} GROUP BY DATE_TRUNC(\'day\', "order_date") ORDER BY "t" ASC LIMIT 101'
+    ),
+    "按周聚合": (
+        'SELECT DATE_TRUNC(\'week\', "order_date") AS "t", COUNT(*) AS "n" '
+        'FROM {tbl} GROUP BY DATE_TRUNC(\'week\', "order_date") ORDER BY "t" ASC LIMIT 101'
+    ),
+    "按月聚合": (
+        'SELECT DATE_TRUNC(\'month\', "order_date") AS "t", SUM("net_amount") AS "v" '
+        'FROM {tbl} GROUP BY DATE_TRUNC(\'month\', "order_date") ORDER BY "t" ASC LIMIT 101'
+    ),
+    "按季聚合": (
+        'SELECT DATE_TRUNC(\'quarter\', "order_date") AS "t", SUM("net_amount") AS "v" '
+        'FROM {tbl} GROUP BY DATE_TRUNC(\'quarter\', "order_date") ORDER BY "t" ASC LIMIT 101'
+    ),
+    "按年聚合": (
+        'SELECT DATE_TRUNC(\'year\', "order_date") AS "t", SUM("net_amount") AS "v" '
+        'FROM {tbl} GROUP BY DATE_TRUNC(\'year\', "order_date") ORDER BY "t" ASC LIMIT 101'
+    ),
+    "NULL维度升序": (
+        'SELECT "region" AS "g", SUM("net_amount") AS "v" '
+        'FROM {tbl} GROUP BY "region" ORDER BY "g" ASC LIMIT 101'
+    ),
+    "NULL维度降序": (
+        'SELECT "region" AS "g", SUM("net_amount") AS "v" '
+        'FROM {tbl} GROUP BY "region" ORDER BY "g" DESC LIMIT 101'
+    ),
+    "NULL显式FIRST": (
+        'SELECT "region" AS "g", SUM("net_amount") AS "v" '
+        'FROM {tbl} GROUP BY "region" ORDER BY "g" ASC NULLS FIRST LIMIT 101'
+    ),
+    "多列混合升降序": (
+        'SELECT "region" AS "g", SUM("net_amount") AS "v" '
+        'FROM {tbl} GROUP BY "region" ORDER BY "v" DESC, "g" ASC LIMIT 101'
+    ),
+    "带参数过滤": (
+        'SELECT "region" AS "g", SUM("net_amount") AS "v" FROM {tbl} '
+        'WHERE "net_amount" >= :p0 GROUP BY "region" ORDER BY "g" ASC LIMIT 101'
+    ),
+    "同比自连接CTE": (
+        'WITH "b" AS (SELECT DATE_TRUNC(\'year\', "order_date") AS "t", '
+        'SUM("net_amount") AS "v" FROM {tbl} '
+        "GROUP BY DATE_TRUNC('year', \"order_date\")) "
+        'SELECT "c"."t", "c"."v", ("c"."v" - "p"."v") / NULLIF("p"."v", 0) AS "r" '
+        'FROM "b" AS "c" LEFT JOIN "b" AS "p" ON "p"."t" = "c"."t" - INTERVAL \'1 year\' '
+        'ORDER BY "c"."t" ASC'
+    ),
+    "排序取TopN": (
+        'SELECT "region" AS "g", SUM("net_amount") AS "v" '
+        'FROM {tbl} GROUP BY "region" ORDER BY "v" DESC LIMIT 2'
+    ),
+}
+
+
+def _normalize(rows):
+    out = []
+    for row in rows:
+        out.append(
+            tuple(
+                value.date()
+                if isinstance(value, datetime)
+                else float(value)
+                if isinstance(value, Decimal)
+                else value
+                for value in row
+            )
+        )
+    return out
+
+
+def _finish(sql: str) -> str:
+    # 生产代码在渲染后做的参数占位符归一。
+    import re
+
+    return re.sub(r"%\((p\d+)\)s", r":\1", sql)
+
+
+@pytest.mark.mysql
+@pytest.mark.postgres
+@pytest.mark.parametrize("name", list(_PARITY_CASES))
+def test_rendered_physical_sql_agrees_across_engines(engines, name: str):
+    """同一棵 AST，两个引擎跑出逐行相同的结果。
+
+    覆盖五种时间粒度、NULL 双向排序、显式 NULLS FIRST、多列混合升降序、参数化过滤、
+    同比自连接 CTE、以及排序取 TopN。少测哪一类，哪一类就会在用户那里静默出错。
+    """
+
+    pg, my = engines
+    template = _PARITY_CASES[name]
+    pg_sql = _finish(
+        render_physical_sql(
+            sqlglot.parse_one(template.format(tbl=f'"{_TABLE}"'), read="postgres"),
+            SqlDialect.POSTGRES,
+        )
+    )
+    my_sql = _finish(
+        render_physical_sql(
+            sqlglot.parse_one(template.format(tbl=f'"{_TABLE}"'), read="postgres"),
+            SqlDialect.MYSQL,
+        )
+    )
+    parameters = {"p0": 100} if ":p0" in template else {}
+
+    with pg.connect() as connection:
+        expected = _normalize(connection.execute(text(pg_sql), parameters).fetchall())
+    with my.connect() as connection:
+        actual = _normalize(connection.execute(text(my_sql), parameters).fetchall())
+
+    assert actual == expected
+
+
+@pytest.mark.mysql
+@pytest.mark.postgres
+@pytest.mark.parametrize("grain", list(TimeGranularity))
+def test_grouped_time_query_runs_under_only_full_group_by(engines, grain: TimeGranularity):
+    """按粒度分组 + 按该列排序，必须能在 ONLY_FULL_GROUP_BY 下跑起来。
+
+    单独立一条是因为这个失败模式很特别：SQL 语法完全合法，只有开着
+    ONLY_FULL_GROUP_BY（MySQL 8 的默认）的库才会以 1055 拒绝。用默认关掉该模式的
+    环境测会全绿，上线才发现按月/周/季/年聚合全部打不开。
+    """
+
+    _, my = engines
+    with my.connect() as connection:
+        assert "ONLY_FULL_GROUP_BY" in connection.execute(text("SELECT @@sql_mode")).scalar_one()
+
+    template = (
+        f'SELECT DATE_TRUNC(\'{grain.value}\', "order_date") AS "t", '
+        f'SUM("net_amount") AS "v" FROM "{_TABLE}" '
+        f'GROUP BY DATE_TRUNC(\'{grain.value}\', "order_date") ORDER BY "t" ASC'
+    )
+    my_sql = render_physical_sql(sqlglot.parse_one(template, read="postgres"), SqlDialect.MYSQL)
+
+    with my.connect() as connection:
+        assert connection.execute(text(my_sql)).fetchall()
+
+
+# AGG(x) FILTER (WHERE p) 的九种形态。每一条都要在两个真库上给出同一个值——
+# 尤其是无匹配行时 SUM 返 NULL 而 COUNT 返 0 这个区别，改写不能把它抹平。
+_FILTER_CASES = {
+    "SUM": 'SUM("net_amount") FILTER (WHERE "region" = \'华东\')',
+    "SUM无匹配": 'SUM("net_amount") FILTER (WHERE "region" = \'不存在\')',
+    "COUNT星": "COUNT(*) FILTER (WHERE \"region\" = '华东')",
+    "COUNT星无匹配": "COUNT(*) FILTER (WHERE \"region\" = '不存在')",
+    "COUNT列": 'COUNT("region") FILTER (WHERE "net_amount" > 50)',
+    "COUNT去重": 'COUNT(DISTINCT "region") FILTER (WHERE "net_amount" > 50)',
+    "MIN": 'MIN("net_amount") FILTER (WHERE "region" = \'华东\')',
+    "MAX": 'MAX("net_amount") FILTER (WHERE "region" = \'华东\')',
+    "子集占比": (
+        'CAST(SUM("net_amount") FILTER (WHERE "region" = \'华东\') AS DOUBLE PRECISION) '
+        '/ NULLIF(SUM("net_amount"), 0)'
+    ),
+}
+
+
+@pytest.mark.mysql
+@pytest.mark.postgres
+@pytest.mark.parametrize("name", list(_FILTER_CASES))
+def test_aggregate_filter_rewrite_agrees_across_engines(engines, name: str):
+    """改写后的 CASE 写法与 PostgreSQL 的 FILTER 给出同一个值。
+
+    ``SUM无匹配`` 与 ``COUNT星无匹配`` 是这里最重要的两条：前者必须是 NULL、后者必须
+    是 0。改写时给 CASE 加个 ``ELSE 0`` 就会把 NULL 变成 0——"没有数据"被悄悄换成
+    "金额为零"，是典型的静默错答。
+    """
+
+    pg, my = engines
+    template = f'SELECT {_FILTER_CASES[name]} AS "x" FROM "{_TABLE}" LIMIT 1'
+    pg_sql = render_physical_sql(sqlglot.parse_one(template, read="postgres"), SqlDialect.POSTGRES)
+    my_sql = render_physical_sql(sqlglot.parse_one(template, read="postgres"), SqlDialect.MYSQL)
+
+    assert "FILTER" in pg_sql
+    assert "FILTER" not in my_sql
+
+    with pg.connect() as connection:
+        expected = connection.execute(text(pg_sql)).scalar_one()
+    with my.connect() as connection:
+        actual = connection.execute(text(my_sql)).scalar_one()
+
+    if expected is None:
+        assert actual is None
+    else:
+        assert actual is not None
+        assert float(actual) == pytest.approx(float(expected), rel=1e-9)
+
+
+@pytest.mark.mysql
+def test_filter_really_is_a_syntax_error_on_mysql(engines):
+    """把「为什么必须改写」钉住。
+
+    如果哪天 MySQL 支持了 FILTER，这条会红——那时才可以考虑去掉改写。在那之前，
+    任何"交给 sqlglot 就行"的说法都是错的。
+    """
+
+    from sqlalchemy.exc import SQLAlchemyError
+
+    _, my = engines
+    with my.connect() as connection, pytest.raises(SQLAlchemyError):
+        connection.execute(text(f"SELECT COUNT(*) FILTER (WHERE `region` IS NULL) FROM `{_TABLE}`"))

@@ -188,3 +188,21 @@ class TestTheMetricDefinitionIsNotATautology:
             item for item in materialized.metrics if item.biz_name == "gross_margin"
         )
         assert metric.description == ""
+
+
+def test_the_business_meaning_reaches_the_published_metric(sales_catalog):
+    """端到端：口径要一路到 Release 的 MetricSpec，那才是问数真正读的那一层。
+
+    中间任何一段断掉，前面几条测试都还是绿的，但线上依然拿不到口径——
+    这条是把整条链当成一个东西来验。
+    """
+
+    materialized = upsert_model_aggregate(
+        sales_catalog,
+        _orders(_with_a_new_measure(sales_catalog, description=_KOU_JING)),
+    )
+
+    release = compile_semantic_catalog(materialized)
+
+    metric = next(item for item in release.metrics if item.name == "毛利")
+    assert metric.description == _KOU_JING

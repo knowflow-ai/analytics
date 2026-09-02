@@ -61,6 +61,7 @@ from knowflow_analytics.query.contracts import (
     StructuredQueryRequest,
 )
 from knowflow_analytics.query.diagnostics import QueryDiagnosticExport
+from knowflow_analytics.query.service import apply_relative_time_window
 
 LOGGER = logging.getLogger(__name__)
 _MAX_ALIAS_REVIEW_CHARS = 1_000_000
@@ -2387,6 +2388,14 @@ def create_api(
         # 权限开了一扇后门。内部下钻路径走的是同一个 query_structured，早已带上。
         allowed_element_ids: tuple[str, ...] | None = Field(default=None, max_length=5_000)
         row_filters: tuple[QueryRowFilter, ...] | None = Field(default=None, max_length=100)
+        # 滚动时间窗：概览卡片要"每次打开跟着今天走"。
+        #
+        # 为什么必须由调用方显式给：语义查询里的时间过滤是**绝对下界**——解析阶段
+        # 拿着 now 把「最近 30 天」算成了具体日期，与「8 月 3 日以来」在结构上完全
+        # 一样，事后分辨不出。猜错的代价是卡片安静地显示旧窗口，不报错不空白，
+        # 比报错更危险。所以钉卡片时问一次，之后按这个窗口重算。
+        time_window_dimension_id: str | None = Field(default=None, min_length=1, max_length=128)
+        time_window_days: int | None = Field(default=None, ge=1, le=3_650)
 
     @app.post("/v1/analytics/structured-query", response_model=QueryResponse)
     def structured_query(payload: ReleaseStructuredQueryRequest, request_context: Context):
@@ -2394,10 +2403,17 @@ def create_api(
 
         require_project(payload.project_id, request_context)
         expensive(request_context)
+        semantic_query = payload.semantic_query
+        if payload.time_window_dimension_id is not None:
+            semantic_query = apply_relative_time_window(
+                semantic_query,
+                payload.time_window_dimension_id,
+                payload.time_window_days,
+            )
         return application.structured_query(
             StructuredQueryRequest(
                 project_id=payload.project_id,
-                semantic_query=payload.semantic_query,
+                semantic_query=semantic_query,
                 query_id=payload.query_id,
                 include_debug_sql=payload.include_debug_sql and allow_debug_sql,
                 allowed_element_ids=payload.allowed_element_ids,

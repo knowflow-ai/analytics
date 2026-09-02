@@ -4134,7 +4134,7 @@ class AnalyticsQueryService:
                     "下钻选项已失效，请重新提问",
                     code="CANDIDATE_NOT_FOUND",
                 )
-            new_query = _apply_retime(
+            new_query = apply_relative_time_window(
                 base_query,
                 time_dimension_id,
                 self._DRILLDOWN_TIME_WINDOWS[element_id][1],
@@ -5228,7 +5228,7 @@ def _apply_refilter(base: SemanticQuery, dimension_id: str, value: str) -> Seman
     )
 
 
-def _apply_retime(
+def apply_relative_time_window(
     base: SemanticQuery,
     time_dimension_id: str,
     days: int | None,
@@ -5240,6 +5240,9 @@ def _apply_retime(
     ``days=None`` means "all time": the window filters are simply dropped.
     The bound is an ISO date literal; the translator's ``render_time_bound``
     adapts it to the physical column type downstream.
+
+    两个调用方共用这一处日期算法：下钻的「换时间窗」，与概览卡片的「跟着今天走」。
+    卡片那条不能在调用方自己算——同一个语义里出现两份日期逻辑，迟早漂移。
     """
 
     kept = tuple(item for item in base.filters if item.dimension_id != time_dimension_id)

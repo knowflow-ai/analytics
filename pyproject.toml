@@ -41,6 +41,7 @@ pythonpath = ["src"]
 addopts = ["-q", "--strict-markers"]
 markers = [
   "postgres: requires the local PostgreSQL fixture",
+  "mysql: requires a local MySQL fixture (KNOWFLOW_ANALYTICS_TEST_MYSQL_URL)",
 ]
 
 [tool.coverage.run]

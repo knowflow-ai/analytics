@@ -766,7 +766,7 @@ def create_api(
     allow_debug_sql: bool = False,
     request_body_limit_bytes: int = 1_048_576,
     requests_per_minute: int = 120,
-    expensive_requests_per_minute: int = 10,
+    expensive_requests_per_minute: int = 60,
 ) -> FastAPI:
     if len(service_secret) < 32:
         raise ValueError("analytics service secret must contain at least 32 characters")

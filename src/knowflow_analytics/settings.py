@@ -61,7 +61,11 @@ class AnalyticsSettings(BaseSettings):
     modeling_sample_values: bool = True
     request_body_limit_bytes: int = Field(default=1_048_576, ge=1_024, le=10_485_760)
     requests_per_minute: int = Field(default=120, ge=1, le=10_000)
-    expensive_requests_per_minute: int = Field(default=10, ge=1, le=1_000)
+    # 一次报表看板加载 = 一张卡一次 structured-query。上游产品允许一块看板挂 50
+    # 张卡，而这里原来是 10——满编看板永远加载不完，且失败面目全非（FastAPI 的
+    # 429 体是 `{"detail": ...}`，不带 error.code，调用方只能报"请求失败"）。
+    # 60 与 OSS runtime 一致，可放行一整块看板并留出提问余量。
+    expensive_requests_per_minute: int = Field(default=60, ge=1, le=1_000)
     minimum_evaluation_cases: int = Field(default=30, ge=1, le=10_000)
     minimum_accuracy: float = Field(default=1.0, ge=0.0, le=1.0)
 

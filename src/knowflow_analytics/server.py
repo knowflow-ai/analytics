@@ -5,6 +5,8 @@ from sqlalchemy import create_engine
 
 from knowflow_analytics.api import create_api
 from knowflow_analytics.application import AnalyticsApplication
+from knowflow_analytics.catalog.data_sources import DataSourceRegistry
+from knowflow_analytics.catalog.secrets import DataSourceSecretBox
 from knowflow_analytics.catalog.store import CatalogStore
 from knowflow_analytics.execution.executor import SqlExecutor
 from knowflow_analytics.gateways.embedding import HttpEmbeddingGateway
@@ -51,12 +53,21 @@ def create_app() -> FastAPI:
         service_token=gateway_token,
     )
     executor = SqlExecutor(settings.datasource_database_url.get_secret_value())
+    # 数据源解析器。没绑数据源的项目回落到这个进程级默认库——存量项目一个绑定行
+    # 都没有，不回落的话这次升级会让它们当场问不了数。
+    data_sources = DataSourceRegistry(
+        catalog=catalog,
+        secret_box=DataSourceSecretBox(settings.service_secret.get_secret_value()),
+        default_database_url=settings.datasource_database_url.get_secret_value(),
+        modeling_sample_values=settings.modeling_sample_values,
+    )
     exemplar_provider = GoldenSuiteExemplarProvider(
         catalog=catalog,
         embedding_gateway=embedding_gateway,
     )
     application = AnalyticsApplication(
         catalog=catalog,
+        data_sources=data_sources,
         introspector=PostgreSqlIntrospector(datasource_engine),
         executor=executor,
         embedding_gateway=embedding_gateway,

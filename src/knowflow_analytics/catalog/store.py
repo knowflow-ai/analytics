@@ -64,6 +64,34 @@ projects = Table(
     Column("created_at", DateTime(timezone=True), nullable=False),
 )
 
+data_sources = Table(
+    "analytics_data_source",
+    metadata,
+    Column("id", String(128), primary_key=True),
+    Column("name", String(256), nullable=False),
+    # SqlDialect 的取值。列名叫 engine 而不是 dialect：对用户来说这是"连的哪种库"，
+    # dialect 是它带来的内部后果。
+    Column("engine", String(32), nullable=False),
+    # 加密后的连接串。明文一个字节都不落库，见 catalog/secrets.py。
+    Column("secret", String(4096), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+
+# 项目与数据源的绑定单独一张表，而不是给 analytics_project 加一列。
+#
+# 本仓没有任何迁移机制——建表只有 ``metadata.create_all``，它能新建表但**不会给
+# 已有表加列**。加列就得先引入一套迁移设施，那是比多一张表大得多的承诺。单独一张
+# 表还顺带把"这个项目还没绑数据源"表达成"没有这行"，不需要一个可空列再配一套
+# 空值语义。
+project_data_sources = Table(
+    "analytics_project_data_source",
+    metadata,
+    Column("project_id", String(128), primary_key=True),
+    Column("data_source_id", String(128), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+
 domain_governance = Table(
     "analytics_domain_governance",
     metadata,
@@ -326,6 +354,21 @@ class ProjectRecord(FrozenModel):
     latest_revision_id: str | None = None
 
 
+class DataSourceRecord(FrozenModel):
+    """一个数据源。
+
+    **不带连接串。** 这个类型是列表、详情、绑定这些地方的返回值，一旦带上明文，
+    任何一处忘了脱敏就会把别人数据库的密码送到浏览器。要连库时单独调
+    ``CatalogStore.read_data_source_dsn``，那是唯一一条能拿到明文的路径，方便审计。
+    """
+
+    id: str
+    name: str
+    engine: str
+    created_at: datetime
+    updated_at: datetime
+
+
 class ReleaseSummary(FrozenModel):
     """发布历史里的一行。不带 SemanticRelease 正文 —— 列表只需要知道有哪些版本。"""
 
@@ -382,6 +425,158 @@ class CatalogStore:
     def create_schema(self) -> None:
         metadata.create_all(self._engine)
 
+    # ---- 数据源 -------------------------------------------------------------
+    #
+    # 连接串只在 ``read_data_source_dsn`` 一处露出明文。其余方法一律返回
+    # ``DataSourceRecord``（不含连接串），这样"忘了脱敏"就不再是一种可能的错误。
+
+    def create_data_source(
+        self, *, name: str, engine: str, secret: str, data_source_id: str | None = None
+    ) -> DataSourceRecord:
+        now = datetime.now(UTC)
+        record = DataSourceRecord(
+            id=data_source_id or f"ds_{uuid.uuid4().hex}",
+            name=name,
+            engine=engine,
+            created_at=now,
+            updated_at=now,
+        )
+        with self._engine.begin() as connection:
+            connection.execute(
+                insert(data_sources).values(
+                    id=record.id,
+                    name=record.name,
+                    engine=record.engine,
+                    secret=secret,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+        return record
+
+    def list_data_sources(self) -> tuple[DataSourceRecord, ...]:
+        with self._engine.connect() as connection:
+            rows = connection.execute(
+                select(
+                    data_sources.c.id,
+                    data_sources.c.name,
+                    data_sources.c.engine,
+                    data_sources.c.created_at,
+                    data_sources.c.updated_at,
+                ).order_by(data_sources.c.created_at.desc(), data_sources.c.id)
+            ).all()
+        return tuple(
+            DataSourceRecord(
+                id=row.id,
+                name=row.name,
+                engine=row.engine,
+                created_at=row.created_at,
+                updated_at=row.updated_at,
+            )
+            for row in rows
+        )
+
+    def get_data_source(self, data_source_id: str) -> DataSourceRecord | None:
+        for record in self.list_data_sources():
+            if record.id == data_source_id:
+                return record
+        return None
+
+    def read_data_source_dsn(self, data_source_id: str) -> str | None:
+        """取出加密的连接串。**唯一能拿到凭据的入口。**
+
+        返回的仍是密文；解密要另外过 ``DataSourceSecretBox``，所以"能读到这一行"
+        和"能解开它"是两道分开的关卡。
+        """
+
+        with self._engine.connect() as connection:
+            row = connection.execute(
+                select(data_sources.c.secret).where(data_sources.c.id == data_source_id)
+            ).first()
+        return row.secret if row is not None else None
+
+    def update_data_source(
+        self, *, data_source_id: str, name: str | None = None, secret: str | None = None
+    ) -> DataSourceRecord | None:
+        """改名或换连接串。
+
+        ``engine`` 不可改：语义模型是按那个引擎的表结构建的，换引擎等于换了一套
+        物理世界，已发布的模型、冻结的路由、确认记忆全部对不上。要换就新建一个。
+        """
+
+        values: dict[str, object] = {"updated_at": datetime.now(UTC)}
+        if name is not None:
+            values["name"] = name
+        if secret is not None:
+            values["secret"] = secret
+        with self._engine.begin() as connection:
+            result = connection.execute(
+                update(data_sources).where(data_sources.c.id == data_source_id).values(**values)
+            )
+            if result.rowcount == 0:
+                return None
+        return self.get_data_source(data_source_id)
+
+    def delete_data_source(self, data_source_id: str) -> bool:
+        """删除数据源，同时解除它的全部项目绑定。
+
+        留着悬空绑定的话，那些项目会在下一次提问时才发现数据源没了——报错点离原因
+        很远。绑定和数据源在同一个事务里一起消失。
+        """
+
+        with self._engine.begin() as connection:
+            connection.execute(
+                delete(project_data_sources).where(
+                    project_data_sources.c.data_source_id == data_source_id
+                )
+            )
+            result = connection.execute(
+                delete(data_sources).where(data_sources.c.id == data_source_id)
+            )
+        return result.rowcount > 0
+
+    def bind_project_data_source(self, *, project_id: str, data_source_id: str) -> None:
+        now = datetime.now(UTC)
+        with self._engine.begin() as connection:
+            updated = connection.execute(
+                update(project_data_sources)
+                .where(project_data_sources.c.project_id == project_id)
+                .values(data_source_id=data_source_id, updated_at=now)
+            )
+            if updated.rowcount == 0:
+                connection.execute(
+                    insert(project_data_sources).values(
+                        project_id=project_id,
+                        data_source_id=data_source_id,
+                        updated_at=now,
+                    )
+                )
+
+    def unbind_project_data_source(self, project_id: str) -> bool:
+        with self._engine.begin() as connection:
+            result = connection.execute(
+                delete(project_data_sources).where(project_data_sources.c.project_id == project_id)
+            )
+        return result.rowcount > 0
+
+    def get_project_data_source_id(self, project_id: str) -> str | None:
+        with self._engine.connect() as connection:
+            row = connection.execute(
+                select(project_data_sources.c.data_source_id).where(
+                    project_data_sources.c.project_id == project_id
+                )
+            ).first()
+        return row.data_source_id if row is not None else None
+
+    def list_projects_using_data_source(self, data_source_id: str) -> tuple[str, ...]:
+        with self._engine.connect() as connection:
+            rows = connection.execute(
+                select(project_data_sources.c.project_id)
+                .where(project_data_sources.c.data_source_id == data_source_id)
+                .order_by(project_data_sources.c.project_id)
+            ).all()
+        return tuple(row.project_id for row in rows)
+
     def create_project(self, *, name: str, project_id: str | None = None) -> ProjectRecord:
         now = datetime.now(UTC)
         record = ProjectRecord(
@@ -434,11 +629,7 @@ class CatalogStore:
                         projects.c.active_release_id,
                         projects.c.created_at,
                     )
-                    .where(
-                        projects.c.id.like(f"{id_prefix}%")
-                        if id_prefix
-                        else sa_true()
-                    )
+                    .where(projects.c.id.like(f"{id_prefix}%") if id_prefix else sa_true())
                     .order_by(projects.c.created_at.desc())
                     .limit(limit)
                 )

@@ -10,6 +10,9 @@ license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.12,<3.15"
 dependencies = [
+  # 数据源连接串要加密入库。Fernet（AES-CBC + HMAC）而不是上游 SuperSonic 的
+  # AES-ECB：ECB 对结构化明文会泄露模式，且没有完整性校验。
+  "cryptography>=43.0.0,<47.0.0",
   "fastapi==0.140.1",
   "httpx==0.28.1",
   "jsonschema>=4.23.0,<5.0.0",

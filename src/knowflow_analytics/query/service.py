@@ -26,6 +26,8 @@ from knowflow_analytics.contracts import (
     SemanticRelease,
 )
 from knowflow_analytics.errors import AnalyticsError
+from knowflow_analytics.execution.dialect import SqlDialect
+from knowflow_analytics.execution.targets import ExecutionTargetProvider
 from knowflow_analytics.hashing import content_hash
 from knowflow_analytics.query.ambiguity import (
     SemanticDecisionObligation,
@@ -176,6 +178,24 @@ def _resolve_row_filters(
     return {model_id: tuple(items) for model_id, items in resolved.items()}
 
 
+@dataclass(frozen=True)
+class _FixedExecutionTarget:
+    """把一个固定执行器包成"按项目解析"的形状。
+
+    在数据源变成实体之前，整个服务只连一个库；那种装配方式仍然合法（测试、OSS
+    单库部署都在用），所以这里给它一个与多数据源同形的外壳。
+
+    这不是第二条代码路径——服务内部只认 ``self._targets``，这里只是默认装配，
+    与执行器里 ``guard or PhysicalSqlGuard()`` 同一个套路。
+    """
+
+    executor: object
+    dialect: SqlDialect = SqlDialect.POSTGRES
+
+    def for_project(self, project_id: str) -> _FixedExecutionTarget:  # noqa: ARG002
+        return self
+
+
 class AnalyticsQueryService:
     def __init__(
         self,
@@ -185,6 +205,7 @@ class AnalyticsQueryService:
         translator: SemanticTranslator,
         s2sql_translator: S2SqlSemanticTranslator | None = None,
         physical_sql_corrector: LlmPhysicalSqlCorrector | None = None,
+        execution_targets: ExecutionTargetProvider | None = None,
         executor: QueryExecutor,
         multi_turn_rewriter: MultiTurnRewriter | None = None,
         query_history: QueryHistoryStore | None = None,
@@ -213,6 +234,8 @@ class AnalyticsQueryService:
         self._s2sql_translator = s2sql_translator or S2SqlSemanticTranslator()
         self._physical_sql_corrector = physical_sql_corrector or LlmPhysicalSqlCorrector()
         self._executor = executor
+        # 按项目解析执行器与方言。没传就是单数据源装配。
+        self._targets = execution_targets or _FixedExecutionTarget(executor)
         self._multi_turn_rewriter = multi_turn_rewriter
         self._query_history = query_history
         self._query_failures = query_failures
@@ -1588,6 +1611,7 @@ class AnalyticsQueryService:
                     corrected_s2sql=candidate.corrected_s2sql,
                     visible_element_ids=allowed_element_ids,
                     row_filters=row_filters,
+                    dialect=self._targets.for_project(release.project_id).dialect,
                 )
 
             corrected = self._orchestrator.final_parse(
@@ -1816,7 +1840,9 @@ class AnalyticsQueryService:
             )
             self._dry_run(physical=physical, release=release, trace=trace)
             trace.append(QueryTraceStep(stage=QueryStage.EXECUTING, status="started"))
-            result = self._executor.execute(query=physical, release=release)
+            result = self._targets.for_project(release.project_id).executor.execute(
+                query=physical, release=release
+            )
             trace[-1] = QueryTraceStep(
                 stage=QueryStage.EXECUTING,
                 status="completed",
@@ -2108,6 +2134,7 @@ class AnalyticsQueryService:
                 query=corrected.semantic_query,
                 visible_element_ids=structured_visible,
                 row_filters=structured_row_filters,
+                dialect=self._targets.for_project(release.project_id).dialect,
             )
             trace[-1] = QueryTraceStep(
                 stage=QueryStage.ROUTE_BINDING,
@@ -2130,7 +2157,9 @@ class AnalyticsQueryService:
             )
             self._dry_run(physical=physical, release=release, trace=trace)
             trace.append(QueryTraceStep(stage=QueryStage.EXECUTING, status="started"))
-            result = self._executor.execute(query=physical, release=release)
+            result = self._targets.for_project(release.project_id).executor.execute(
+                query=physical, release=release
+            )
             trace[-1] = QueryTraceStep(
                 stage=QueryStage.EXECUTING,
                 status="completed",
@@ -4943,7 +4972,8 @@ class AnalyticsQueryService:
 
         if not self._dry_run_before_execute:
             return
-        explain = getattr(self._executor, "explain", None)
+        executor = self._targets.for_project(release.project_id).executor
+        explain = getattr(executor, "explain", None)
         if explain is None:
             return
         trace.append(QueryTraceStep(stage=QueryStage.PHYSICAL_SQL_VALIDATING, status="started"))

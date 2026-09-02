@@ -15,6 +15,10 @@ from typing import Literal
 
 from pydantic import ValidationError
 
+from knowflow_analytics.catalog.data_sources import (
+    DataSourceBinding,
+    SingleDataSourceRegistry,
+)
 from knowflow_analytics.catalog.release import ReleasePublisher
 from knowflow_analytics.catalog.store import (
     CatalogError,
@@ -37,7 +41,9 @@ from knowflow_analytics.evaluation.contracts import (
     GoldenSuiteRecord,
 )
 from knowflow_analytics.evaluation.evaluator import GoldenEvaluator
+from knowflow_analytics.execution.dialect import SqlDialect
 from knowflow_analytics.execution.executor import SqlExecutor
+from knowflow_analytics.execution.targets import ExecutionTargetProvider
 from knowflow_analytics.hashing import content_hash, semantic_evidence_hash
 from knowflow_analytics.modeling.ai_artifacts import (
     OneClickModelingArtifactService,
@@ -514,10 +520,25 @@ class AnalyticsApplication:
         query_diagnostic_queue_size: int = 64,
         query_diagnostic_export_wait_seconds: float = 0.5,
         query_diagnostic_purge_interval_seconds: float = 60.0,
+        data_sources: ExecutionTargetProvider | None = None,
     ) -> None:
         self.catalog = catalog
         self._introspector = introspector
         self._executor = executor
+        # 数据源解析器。没传就把构造参数包成单数据源装配——内部只有
+        # ``self._sources`` 一条取法，不存在"配了/没配数据源"的分支。
+        self._sources = data_sources or SingleDataSourceRegistry(
+            DataSourceBinding(
+                data_source_id=None,
+                dialect=SqlDialect.POSTGRES,
+                engine=getattr(introspector, "_engine", None),
+                executor=executor,
+                introspector=introspector,
+                column_profiler=column_profiler,
+                semantic_profiler=semantic_profiler,
+                quality_profiler=quality_profiler,
+            )
+        )
         self._embedding_gateway = embedding_gateway
         self._ai_modeller = ai_modeller
         self._ai_artifact_service = OneClickModelingArtifactService(
@@ -682,7 +703,7 @@ class AnalyticsApplication:
 
     def list_datasource_schemas(self, *, project_id: str) -> tuple[str, ...]:
         self.catalog.get_project(project_id)
-        return self._introspector.list_schemas()
+        return self._source(project_id).introspector.list_schemas()
 
     def list_datasource_tables(
         self,
@@ -692,7 +713,7 @@ class AnalyticsApplication:
         include_views: bool = False,
     ) -> tuple[TableCatalogEntry, ...]:
         self.catalog.get_project(project_id)
-        return self._introspector.list_tables(
+        return self._source(project_id).introspector.list_tables(
             schema_name=schema_name,
             include_views=include_views,
         )
@@ -706,7 +727,7 @@ class AnalyticsApplication:
         include_views: bool = False,
     ) -> TableSnapshot:
         self.catalog.get_project(project_id)
-        return self._introspector.describe_table(
+        return self._source(project_id).introspector.describe_table(
             schema_name=schema_name,
             table_name=table_name,
             include_views=include_views,
@@ -721,12 +742,12 @@ class AnalyticsApplication:
         include_views: bool = False,
     ) -> ScopeRecommendationSet:
         self.catalog.get_project(project_id)
-        entries = self._introspector.list_tables(
+        entries = self._source(project_id).introspector.list_tables(
             schema_name=schema_name,
             include_views=include_views,
         )
         tables = tuple(
-            self._introspector.describe_table(
+            self._source(project_id).introspector.describe_table(
                 schema_name=item.schema_name,
                 table_name=item.name,
                 include_views=include_views,
@@ -740,6 +761,57 @@ class AnalyticsApplication:
             tables=tables,
         )
 
+    # ---- 数据源 -------------------------------------------------------------
+    #
+    # 全部转交解析器：加密、连接、缓存失效都在那一层，凭据不必再多走一层。
+
+    def list_data_sources(self):
+        return self._sources.list()
+
+    def get_data_source(self, data_source_id: str):
+        return self._sources.get(data_source_id)
+
+    def create_data_source(self, *, name: str, engine: str, dsn: str):
+        return self._sources.create(name=name, engine=engine, dsn=dsn)
+
+    def update_data_source(
+        self, *, data_source_id: str, name: str | None = None, dsn: str | None = None
+    ):
+        return self._sources.update(data_source_id=data_source_id, name=name, dsn=dsn)
+
+    def delete_data_source(self, data_source_id: str) -> bool:
+        return self._sources.delete(data_source_id)
+
+    def test_data_source(self, *, engine: str, dsn: str) -> None:
+        self._sources.test(engine=engine, dsn=dsn)
+
+    def bind_project_data_source(self, *, project_id: str, data_source_id: str) -> None:
+        self.catalog.get_project(project_id)
+        self._sources.bind(project_id=project_id, data_source_id=data_source_id)
+
+    def unbind_project_data_source(self, project_id: str) -> bool:
+        self.catalog.get_project(project_id)
+        return self._sources.unbind(project_id)
+
+    def get_project_data_source(self, project_id: str):
+        self.catalog.get_project(project_id)
+        data_source_id = self._sources.project_data_source_id(project_id)
+        return self._sources.get(data_source_id) if data_source_id else None
+
+    def _source(self, project_id: str):
+        """按项目取数据源组件。**所有连库的操作都必须经这里。**
+
+        直接用 ``self._introspector`` / ``self._executor`` 会永远连默认库——绑了
+        MySQL 数据源的项目照样去问 PostgreSQL，而且不报错。
+        """
+
+        return self._sources.for_project(project_id)
+
+    def _source_for_revision(self, revision_id: str):
+        """只有 revision 在手时的取法。revision 自己记着属于哪个项目。"""
+
+        return self._source(self.get_revision(revision_id).project_id)
+
     def create_schema_snapshot(
         self,
         *,
@@ -749,7 +821,7 @@ class AnalyticsApplication:
         include_views: bool = False,
     ):
         self.catalog.get_project(project_id)
-        snapshot = self._introspector.scan(
+        snapshot = self._source(project_id).introspector.scan(
             schemas=schemas,
             selected_tables=selected_tables,
             include_views=include_views,
@@ -895,7 +967,7 @@ class AnalyticsApplication:
             sql_query,
             tuple(item.model_dump(mode="json", by_alias=True) for item in sql_variables),
         )
-        columns = self._introspector.describe_query(rendered)
+        columns = self._source(revision.project_id).introspector.describe_query(rendered)
         if not columns:
             raise SemanticValidationError(
                 "SQL model query exposes no columns",
@@ -1015,7 +1087,7 @@ class AnalyticsApplication:
         expanded_scope: dict[str, list[str]] = {}
         for schema_name, table_name in sorted(set(source_tables) | requested_tables):
             expanded_scope.setdefault(schema_name, []).append(table_name)
-        expanded_snapshot = self._introspector.scan(
+        expanded_snapshot = self._source(revision.project_id).introspector.scan(
             schemas=tuple(expanded_scope),
             selected_tables={schema: tuple(tables) for schema, tables in expanded_scope.items()},
             include_views=include_views
@@ -1167,7 +1239,7 @@ class AnalyticsApplication:
             progress=progress,
             should_stop=should_stop,
             # S1 画像：给 S3 护栏用。没配 profiler 时为空，护栏退回列名规则。
-            profiles=self._profile_tables(snapshot),
+            profiles=self._profile_tables(snapshot, project_id=revision.project_id),
         )
         # Suggestion ids are stable by design, so a re-run regenerates ids the user
         # already settled and apply_suggestion_run would reject the whole batch.
@@ -2377,16 +2449,19 @@ class AnalyticsApplication:
         self.catalog.update_revision(updated, previous_etag=revision.etag)
         return updated
 
-    def _profile_tables(self, snapshot: SchemaSnapshot) -> dict[tuple[str, str], TableProfile]:
+    def _profile_tables(
+        self, snapshot: SchemaSnapshot, *, project_id: str
+    ) -> dict[tuple[str, str], TableProfile]:
         """S1 画像。没配 profiler 或某张表失败时返回空/跳过：画像是证据不是门禁，
         规则会退回类型 + 列名。"""
 
-        if self._column_profiler is None:
+        column_profiler = self._source(project_id).column_profiler
+        if column_profiler is None:
             return {}
         profiles: dict[tuple[str, str], TableProfile] = {}
         for table in snapshot.tables:
             try:
-                profile = self._column_profiler.profile_table(table)
+                profile = column_profiler.profile_table(table)
             except Exception:  # noqa: BLE001 — 画像失败不能阻断导入
                 logging.getLogger(__name__).exception(
                     "column profile failed table=%s.%s", table.schema_name, table.name
@@ -2408,7 +2483,8 @@ class AnalyticsApplication:
         profiling is deterministic; AI aliases remain a separate optional action.
         """
 
-        if self._semantic_profiler is None or updated.semantic_catalog is None:
+        semantic_profiler = self._source(updated.project_id).semantic_profiler
+        if semantic_profiler is None or updated.semantic_catalog is None:
             return updated
         previous_ids = {
             item.id
@@ -2439,7 +2515,7 @@ class AnalyticsApplication:
             snapshot_id,
             project_id=updated.project_id,
         )
-        profile = self._semantic_profiler.profile(
+        profile = semantic_profiler.profile(
             snapshot=snapshot,
             semantic_spec=updated.semantic_spec,
             dimension_ids=targets,
@@ -2768,8 +2844,6 @@ class AnalyticsApplication:
         fetching its item values.
         """
 
-        if self._semantic_profiler is None:
-            raise ValueError("semantic data profiler is not configured")
         if not dimension_ids or len(dimension_ids) > 100:
             raise SemanticValidationError(
                 "select between 1 and 100 dimensions",
@@ -2820,7 +2894,10 @@ class AnalyticsApplication:
             )
         snapshot_id = f"schema_{schema_snapshot_hash.removeprefix('sha256:')[:16]}"
         snapshot = self.catalog.get_schema_snapshot(snapshot_id, project_id=revision.project_id)
-        profile = self._semantic_profiler.profile(
+        semantic_profiler = self._source(revision.project_id).semantic_profiler
+        if semantic_profiler is None:
+            raise ValueError("semantic data profiler is not configured")
+        profile = semantic_profiler.profile(
             snapshot=snapshot,
             semantic_spec=revision.semantic_spec,
             dimension_ids=dimension_ids,
@@ -3032,14 +3109,14 @@ class AnalyticsApplication:
         entries = tuple(
             entry
             for schema_name in schemas
-            for entry in self._introspector.list_tables(
+            for entry in self._source(revision.project_id).introspector.list_tables(
                 schema_name=schema_name,
                 include_views=True,
             )
         )
         entry_by_key = {(item.schema_name, item.name): item for item in entries}
         current_tables = tuple(
-            self._introspector.describe_table(
+            self._source(revision.project_id).introspector.describe_table(
                 schema_name=item.schema_name,
                 table_name=item.name,
                 include_views=entry_by_key.get((item.schema_name, item.name), item).source_type
@@ -3070,15 +3147,15 @@ class AnalyticsApplication:
         expected_etag: int,
         schema_snapshot_hash: str,
     ) -> ModelingQualityReport:
-        if self._quality_profiler is None:
-            raise ValueError("modeling quality profiler is not configured")
         revision = self.catalog.get_revision(revision_id)
+        if self._source(revision.project_id).quality_profiler is None:
+            raise ValueError("modeling quality profiler is not configured")
         self._require_revision_version(
             revision,
             expected_etag=expected_etag,
             expected_schema_snapshot_hash=schema_snapshot_hash,
         )
-        report = self._quality_profiler.profile(revision)
+        report = self._source(revision.project_id).quality_profiler.profile(revision)
         self.catalog.save_modeling_quality_report(report)
         return report
 
@@ -3118,9 +3195,9 @@ class AnalyticsApplication:
         decisions: tuple[MetricPreviewDecision, ...],
         reviewed_by: str,
     ) -> ModelingQualityReport:
-        if self._quality_profiler is None:
-            raise ValueError("modeling quality profiler is not configured")
         revision = self.catalog.get_revision(revision_id)
+        if self._source(revision.project_id).quality_profiler is None:
+            raise ValueError("modeling quality profiler is not configured")
         report = self.catalog.get_modeling_quality_report(report_id)
         if modeling_quality_report_is_stale(
             report,
@@ -3131,7 +3208,7 @@ class AnalyticsApplication:
             raise RevisionConflictError(
                 "modeling quality report is stale; regenerate it before review"
             )
-        reviewed = self._quality_profiler.review(
+        reviewed = self._source(revision.project_id).quality_profiler.review(
             report,
             decisions=decisions,
             reviewed_by=reviewed_by,
@@ -4002,6 +4079,7 @@ class AnalyticsApplication:
             translator=SemanticTranslator(),
             physical_sql_corrector=self._physical_sql_corrector,
             executor=self._executor,
+            execution_targets=self._sources,
             multi_turn_rewriter=self._multi_turn_rewriter,
             query_history=self.catalog,
             query_failures=self.catalog,

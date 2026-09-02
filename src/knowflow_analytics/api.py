@@ -347,6 +347,27 @@ class _RequestModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class CreateDataSourceRequest(_RequestModel):
+    name: str = Field(min_length=1, max_length=256)
+    engine: str = Field(min_length=1, max_length=32)
+    # 连接串带凭据。只进不出：任何响应里都不会有它。
+    dsn: str = Field(min_length=1, max_length=2048)
+
+
+class UpdateDataSourceRequest(_RequestModel):
+    name: str | None = Field(default=None, min_length=1, max_length=256)
+    dsn: str | None = Field(default=None, min_length=1, max_length=2048)
+
+
+class TestDataSourceRequest(_RequestModel):
+    engine: str = Field(min_length=1, max_length=32)
+    dsn: str = Field(min_length=1, max_length=2048)
+
+
+class BindDataSourceRequest(_RequestModel):
+    data_source_id: str = Field(min_length=1, max_length=128)
+
+
 class CreateProjectRequest(_RequestModel):
     name: str = Field(min_length=1, max_length=256)
     project_id: str | None = Field(default=None, min_length=1, max_length=128)
@@ -921,6 +942,75 @@ def create_api(
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    # ---- 数据源 -------------------------------------------------------------
+    #
+    # 这些端点需要服务令牌，浏览器直达不了（core 直通道的路径正则要求
+    # ``projects/{prj_id}/...``）。授权由宿主 BFF 判定，与项目列表同一模式。
+
+    @app.get("/v1/analytics/data-sources")
+    def list_data_sources(request_context: Context):  # noqa: ARG001
+        return {
+            "items": [item.model_dump(mode="json") for item in application.list_data_sources()]
+        }
+
+    @app.post("/v1/analytics/data-sources")
+    def create_data_source(payload: CreateDataSourceRequest, request_context: Context):
+        expensive(request_context)
+        record = application.create_data_source(
+            name=payload.name, engine=payload.engine, dsn=payload.dsn
+        )
+        return record.model_dump(mode="json")
+
+    @app.post("/v1/analytics/data-sources:test")
+    def test_data_source(payload: TestDataSourceRequest, request_context: Context):
+        """连一下但不保存。让用户在填写时就知道信息对不对。"""
+
+        expensive(request_context)
+        application.test_data_source(engine=payload.engine, dsn=payload.dsn)
+        return {"ok": True}
+
+    @app.put("/v1/analytics/data-sources/{data_source_id}")
+    def update_data_source(
+        data_source_id: str, payload: UpdateDataSourceRequest, request_context: Context
+    ):
+        expensive(request_context)
+        record = application.update_data_source(
+            data_source_id=data_source_id, name=payload.name, dsn=payload.dsn
+        )
+        if record is None:
+            raise HTTPException(status_code=404, detail="data source not found")
+        return record.model_dump(mode="json")
+
+    @app.delete("/v1/analytics/data-sources/{data_source_id}")
+    def delete_data_source(data_source_id: str, request_context: Context):
+        expensive(request_context)
+        if not application.delete_data_source(data_source_id):
+            raise HTTPException(status_code=404, detail="data source not found")
+        return {"deleted": True}
+
+    @app.get("/v1/analytics/projects/{project_id}/data-source")
+    def get_project_data_source(project_id: str, request_context: Context):
+        require_project(project_id, request_context)
+        record = application.get_project_data_source(project_id)
+        return {"data_source": record.model_dump(mode="json") if record else None}
+
+    @app.put("/v1/analytics/projects/{project_id}/data-source")
+    def bind_project_data_source(
+        project_id: str, payload: BindDataSourceRequest, request_context: Context
+    ):
+        require_project(project_id, request_context)
+        expensive(request_context)
+        application.bind_project_data_source(
+            project_id=project_id, data_source_id=payload.data_source_id
+        )
+        return {"bound": True}
+
+    @app.delete("/v1/analytics/projects/{project_id}/data-source")
+    def unbind_project_data_source(project_id: str, request_context: Context):
+        require_project(project_id, request_context)
+        expensive(request_context)
+        return {"unbound": application.unbind_project_data_source(project_id)}
 
     @app.get("/v1/analytics/projects")
     def list_projects(

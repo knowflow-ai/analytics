@@ -39,23 +39,23 @@ export function canSaveDataSource(input: {
   return input.editing || input.dsn.trim().length > 0;
 }
 
-/** 未绑定的哨兵值。项目不绑数据源时回落到部署配置的默认库。 */
-export const FALLBACK_DATA_SOURCE = '__fallback__';
-
 /**
  * 保存绑定时该做什么。
  *
  * 「没变化」要单独识别出来：不识别的话，用户点开只想看一眼、直接点保存，就会往
- * 服务端发一次多余的写；而如果回填又没做对，那一次写会把项目从"绑着 A"改成
- * "未绑定"——未绑定会静默回落到默认库，数字看起来完全正常。
+ * 服务端发一次多余的写。
+ *
+ * 没有「解绑」这个动作：项目必须一直有数据源。部署配置的那个库在启动迁移里已经
+ * 变成了一个普通数据源记录，所以"回到默认库"就是选中那一条，跟选别的没有区别。
  */
 export function dataSourceBindingAction(input: {
   boundId: string | null;
   selected: string;
-}): 'none' | 'bind' | 'unbind' {
-  const current = input.boundId ?? FALLBACK_DATA_SOURCE;
-  if (input.selected === current) return 'none';
-  return input.selected === FALLBACK_DATA_SOURCE ? 'unbind' : 'bind';
+}): 'none' | 'bind' {
+  // 空选择 = 还没选（下拉停在"请选择"），不是"要换到某个库"。不单独判的话，
+  // 打开对话框就会被当成换库：保存按钮亮着、还弹一条换库警告。
+  if (!input.selected) return 'none';
+  return input.selected === input.boundId ? 'none' : 'bind';
 }
 
 /**
@@ -69,5 +69,27 @@ export function warnsAboutSemanticDrift(input: {
   selected: string;
 }): boolean {
   if (input.boundId === null) return false;
-  return dataSourceBindingAction(input) !== 'none';
+  return dataSourceBindingAction(input) === 'bind';
+}
+
+
+/**
+ * 新建项目能不能提交。
+ *
+ * 数据源必须明确选一个。不强制的话，用户建完项目直接去导入表，看到一堆表却不知道
+ * 这是哪个库；而建好模型之后再换库是破坏性的（表未必存在、列类型未必一样），所以
+ * 这个选择实际上是一次性的，就该在创建时当面做。
+ *
+ * 不再有「默认库（部署配置）」这个魔法选项：部署配置的那个库在启动迁移里已经变成
+ * 一个普通数据源记录，跟别的一样出现在列表里。
+ *
+ * 开源独立版没有数据源这个概念（只有设置页里那一个库），传 undefined 跳过这条。
+ */
+export function canCreateProject(input: {
+  name: string;
+  dataSourceChoice?: string;
+}): boolean {
+  if (input.name.trim().length === 0) return false;
+  if (input.dataSourceChoice === undefined) return true;
+  return input.dataSourceChoice.length > 0;
 }

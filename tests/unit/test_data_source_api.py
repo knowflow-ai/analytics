@@ -63,9 +63,6 @@ class _FakeApplication:
     def bind_project_data_source(self, *, project_id, data_source_id):
         self.calls.append(("bind", {"project": project_id, "id": data_source_id}))
 
-    def unbind_project_data_source(self, project_id):
-        self.calls.append(("unbind", {"project": project_id}))
-        return True
 
     def get_project_data_source(self, project_id):
         self.calls.append(("get_bound", {"project": project_id}))
@@ -180,7 +177,10 @@ class TestRouting:
 
         assert response.json() == {"data_source": None}
 
-    def test_bind_reaches_the_application(self, client: TestClient, application: _FakeApplication):
+    @pytest.mark.anyio
+    async def test_bind_reaches_the_application(
+        self, client: TestClient, application: _FakeApplication
+    ):
         client.put(
             "/v1/analytics/projects/prj_1/data-source",
             headers=_project_headers(),
@@ -188,13 +188,6 @@ class TestRouting:
         )
 
         assert ("bind", {"project": "prj_1", "id": "ds_1"}) in application.calls
-
-    def test_unbind_reaches_the_application(
-        self, client: TestClient, application: _FakeApplication
-    ):
-        client.delete("/v1/analytics/projects/prj_1/data-source", headers=_project_headers())
-
-        assert ("unbind", {"project": "prj_1"}) in application.calls
 
 
 class TestScopeAndAuth:

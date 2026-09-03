@@ -59,28 +59,96 @@ def _bind(catalog: CatalogStore, *, engine: str = "postgres", dsn: str = _MYSQL_
     return record.id
 
 
-class TestFallback:
-    def test_unbound_project_uses_the_process_default(self, registry: DataSourceRegistry):
-        """存量项目一个绑定行都没有。
+class TestNoFallback:
+    """没有回落。
 
-        不回落的话，这次升级会让所有已有项目当场问不了数——一个新功能不该有这种
-        代价。
+    曾经有过：存量项目一个绑定行都没有，回落让它们继续工作。但那是一次迁移的活，
+    不该做成一条永久的代码路径——回落意味着项目说不出自己连的是哪个库，而这正是
+    最容易出静默错答的地方（本该问 A 库的问题悄悄问了 B 库，数字看起来完全正常）。
+    """
+
+    def test_unbound_project_is_refused(self, registry: DataSourceRegistry):
+        with pytest.raises(DataSourceError) as excinfo:
+            registry.for_project("prj_1")
+
+        assert excinfo.value.code == "DATA_SOURCE_NOT_BOUND"
+
+
+class TestDeploymentDefaultMigration:
+    """把部署配置的那个库变成真实数据源。
+
+    不迁移的话，升级当天所有存量项目一起报"没绑数据源"。迁移之后 UI 里也不再需要
+    「默认库（部署配置）」这个魔法选项——它就是列表里一个普通数据源。
+    """
+
+    def test_migration_creates_a_real_data_source(self, registry: DataSourceRegistry):
+        data_source_id = registry.ensure_default_data_source()
+
+        assert data_source_id is not None
+        record = registry.get(data_source_id)
+        assert record is not None
+        assert record.name == "默认数据源"
+
+    def test_migration_binds_every_unbound_project(
+        self, catalog: CatalogStore, registry: DataSourceRegistry
+    ):
+        catalog.create_project(project_id="prj_2", name="p2")
+
+        data_source_id = registry.ensure_default_data_source()
+
+        assert catalog.get_project_data_source_id("prj_1") == data_source_id
+        assert catalog.get_project_data_source_id("prj_2") == data_source_id
+
+    def test_migrated_projects_resolve_again(self, registry: DataSourceRegistry):
+        # 迁移的意义就在这：升级前能问数的项目，升级后还能问。
+        registry.ensure_default_data_source()
+
+        assert registry.for_project("prj_1").dialect is SqlDialect.POSTGRES
+
+    def test_migration_is_idempotent(
+        self, catalog: CatalogStore, registry: DataSourceRegistry
+    ):
+        # 每次启动都跑：不幂等的话每重启一次就多一个"默认数据源"。
+        first = registry.ensure_default_data_source()
+        second = registry.ensure_default_data_source()
+
+        assert first == second
+        assert len(catalog.list_data_sources()) == 1
+
+    def test_migration_never_touches_already_bound_projects(
+        self, catalog: CatalogStore, registry: DataSourceRegistry
+    ):
+        """已经绑好的项目不能被迁移改掉。
+
+        改掉的话，一次重启就把用户手工绑的 MySQL 换回了默认库——而且不报错。
         """
 
-        binding = registry.for_project("prj_1")
+        chosen = _bind(catalog)
 
-        assert binding.data_source_id is None
-        assert binding.dialect is SqlDialect.POSTGRES
+        registry.ensure_default_data_source()
 
-    def test_the_default_binding_is_fully_assembled(self, registry: DataSourceRegistry):
-        # 回落路径也得给出全套组件；少一个就是"回落之后建模页打不开"。
-        binding = registry.for_project("prj_1")
+        assert catalog.get_project_data_source_id("prj_1") == chosen
 
-        assert binding.executor is not None
-        assert binding.introspector is not None
-        assert binding.column_profiler is not None
-        assert binding.semantic_profiler is not None
-        assert binding.quality_profiler is not None
+    def test_migration_stores_the_connection_string_encrypted(
+        self, catalog: CatalogStore, registry: DataSourceRegistry
+    ):
+        data_source_id = registry.ensure_default_data_source()
+
+        stored = catalog.read_data_source_dsn(data_source_id)
+
+        assert stored != _DEFAULT_URL
+        assert DataSourceSecretBox(_SECRET).decrypt(stored) == _DEFAULT_URL
+
+    def test_no_configured_database_means_no_migration(self, catalog: CatalogStore):
+        # 没配默认库的部署（比如全靠用户自己建数据源）不该凭空造一个连不上的记录。
+        registry = DataSourceRegistry(
+            catalog=catalog,
+            secret_box=DataSourceSecretBox(_SECRET),
+            default_database_url="",
+        )
+
+        assert registry.ensure_default_data_source() is None
+        assert catalog.list_data_sources() == ()
 
 
 class TestBoundProjects:
@@ -308,12 +376,10 @@ class TestManagement:
 
         assert excinfo.value.code == "DATA_SOURCE_IN_USE"
 
-    def test_delete_works_once_unbound(
+    def test_delete_works_when_nobody_uses_it(
         self, catalog: CatalogStore, registry: DataSourceRegistry, reachable: None
     ):
         record = registry.create(name="仓库", engine="postgres", dsn=_MYSQL_DSN)
-        catalog.bind_project_data_source(project_id="prj_1", data_source_id=record.id)
-        registry.unbind("prj_1")
 
         assert registry.delete(record.id) is True
 

@@ -1006,11 +1006,6 @@ def create_api(
         )
         return {"bound": True}
 
-    @app.delete("/v1/analytics/projects/{project_id}/data-source")
-    def unbind_project_data_source(project_id: str, request_context: Context):
-        require_project(project_id, request_context)
-        expensive(request_context)
-        return {"unbound": application.unbind_project_data_source(project_id)}
 
     @app.get("/v1/analytics/projects")
     def list_projects(

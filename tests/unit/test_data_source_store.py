@@ -158,6 +158,22 @@ class TestBinding:
 
         assert catalog.list_projects_using_data_source(record.id) == ("prj_1", "prj_2")
 
+    def test_listing_unbound_projects_drives_the_migration(self, catalog: CatalogStore):
+        """启动迁移靠这个查出要补绑的项目。
+
+        漏掉一个，那个项目升级后就直接问不了数（for_project 已经不再回落）。
+        """
+
+        record = _create(catalog)
+        for project_id in ("prj_1", "prj_2", "prj_3"):
+            catalog.create_project(project_id=project_id, name=project_id)
+        catalog.bind_project_data_source(project_id="prj_2", data_source_id=record.id)
+
+        assert catalog.list_unbound_project_ids() == ("prj_1", "prj_3")
+
+    def test_no_projects_means_nothing_to_migrate(self, catalog: CatalogStore):
+        assert catalog.list_unbound_project_ids() == ()
+
     def test_unbinding_leaves_the_project_without_a_source(self, catalog: CatalogStore):
         record = _create(catalog)
         catalog.create_project(project_id="prj_1", name="p")

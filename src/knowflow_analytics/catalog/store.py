@@ -552,7 +552,32 @@ class CatalogStore:
                     )
                 )
 
+    def list_unbound_project_ids(self) -> tuple[str, ...]:
+        """还没绑数据源的项目。只给启动迁移用。
+
+        项目在正常流程里一定有数据源（创建时必选、没有解绑入口），所以这个结果
+        非空只有两种情况：数据源实体上线前建的老项目，或者迁移上次没跑完。
+        """
+
+        with self._engine.connect() as connection:
+            rows = connection.execute(
+                select(projects.c.id)
+                .outerjoin(
+                    project_data_sources,
+                    projects.c.id == project_data_sources.c.project_id,
+                )
+                .where(project_data_sources.c.project_id.is_(None))
+                .order_by(projects.c.id)
+            ).all()
+        return tuple(row.id for row in rows)
+
     def unbind_project_data_source(self, project_id: str) -> bool:
+        """解除单个项目的绑定。
+
+        **没有对外入口**：项目在正常流程里必须一直有数据源（创建时必选）。留着
+        是给删除数据源时的级联清理和迁移排障用的。
+        """
+
         with self._engine.begin() as connection:
             result = connection.execute(
                 delete(project_data_sources).where(project_data_sources.c.project_id == project_id)

@@ -65,6 +65,10 @@ def create_app() -> FastAPI:
         catalog=catalog,
         embedding_gateway=embedding_gateway,
     )
+    # 一次性迁移：把部署配置的那个库变成真实数据源，并绑上所有还没绑的项目。
+    # 数据源成为实体之前所有项目都连着它，升级后它们没有绑定行，而 for_project
+    # 已经不再回落。幂等，每次启动都跑。
+    data_sources.ensure_default_data_source()
     application = AnalyticsApplication(
         catalog=catalog,
         data_sources=data_sources,

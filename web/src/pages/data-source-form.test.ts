@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   ENGINES,
-  FALLBACK_DATA_SOURCE,
+  canCreateProject,
   canSaveDataSource,
   dataSourceBindingAction,
   dsnPlaceholder,
@@ -55,11 +55,9 @@ describe('绑定动作', () => {
     expect(dataSourceBindingAction({ boundId: 'ds_1', selected: 'ds_1' })).toBe('none');
   });
 
-  it('未绑定时选默认库，也什么都不做', () => {
-    // 这是**多数项目的常态**（存量项目一个绑定行都没有），不能每次点保存都发一次解绑。
-    expect(
-      dataSourceBindingAction({ boundId: null, selected: FALLBACK_DATA_SOURCE }),
-    ).toBe('none');
+  it('还没选就什么都不做', () => {
+    // 打开对话框但没选，点保存不该往服务端发一次空的写。
+    expect(dataSourceBindingAction({ boundId: null, selected: '' })).toBe('none');
   });
 
   it('换成另一个数据源是绑定', () => {
@@ -70,10 +68,18 @@ describe('绑定动作', () => {
     expect(dataSourceBindingAction({ boundId: null, selected: 'ds_1' })).toBe('bind');
   });
 
-  it('选回默认库是解绑', () => {
-    expect(
-      dataSourceBindingAction({ boundId: 'ds_1', selected: FALLBACK_DATA_SOURCE }),
-    ).toBe('unbind');
+  it('没有解绑这个动作', () => {
+    /**
+     * 项目必须一直有数据源。部署配置的那个库在启动迁移里已经变成一个普通数据源
+     * 记录，"回到默认库"就是选中那一条，跟选别的没区别——所以只剩 none 和 bind。
+     */
+    const actions = new Set([
+      dataSourceBindingAction({ boundId: 'ds_1', selected: 'ds_1' }),
+      dataSourceBindingAction({ boundId: 'ds_1', selected: 'ds_2' }),
+      dataSourceBindingAction({ boundId: null, selected: 'ds_1' }),
+    ]);
+
+    expect(actions).toEqual(new Set(['none', 'bind']));
   });
 });
 
@@ -92,10 +98,49 @@ describe('换库提醒', () => {
     expect(warnsAboutSemanticDrift({ boundId: 'ds_1', selected: 'ds_1' })).toBe(false);
   });
 
-  it('解绑回默认库也提醒', () => {
-    // 一样是换库：默认库和原来那个库是两个库。
-    expect(
-      warnsAboutSemanticDrift({ boundId: 'ds_1', selected: FALLBACK_DATA_SOURCE }),
-    ).toBe(true);
+  it('还没选时不提醒', () => {
+    // 对话框刚打开、下拉停在"请选择"，那不是换库。
+    expect(warnsAboutSemanticDrift({ boundId: 'ds_1', selected: '' })).toBe(false);
+  });
+});
+
+describe('新建项目能否提交', () => {
+  it('必须明确选一个数据源', () => {
+    /**
+     * 不强制的话，用户建完项目直接去导入表，看到一堆表却不知道这是哪个库——
+     * 而建好模型之后再换库是破坏性的，所以这个选择实际上是一次性的。
+     */
+    expect(canCreateProject({ name: '经营分析', dataSourceChoice: '' })).toBe(false);
+    expect(canCreateProject({ name: '经营分析', dataSourceChoice: 'ds_1' })).toBe(true);
+  });
+
+  it('没有「默认库」这个魔法选项', () => {
+    /**
+     * 曾经有过：不选就静默回落到部署配置的库，用户不知道自己连的是哪个。现在
+     * 那个库在启动迁移里变成了一个普通数据源记录，出现在列表里，跟别的一样选。
+     */
+    expect(canCreateProject({ name: '经营分析', dataSourceChoice: 'ds_1' })).toBe(true);
+    expect(canCreateProject({ name: '经营分析', dataSourceChoice: '' })).toBe(false);
+  });
+
+  it('名字仍然必填', () => {
+    expect(canCreateProject({ name: '', dataSourceChoice: 'ds_1' })).toBe(false);
+    expect(canCreateProject({ name: '   ', dataSourceChoice: 'ds_1' })).toBe(false);
+  });
+
+  it('开源独立版不受这条约束', () => {
+    // 那边没有数据源这个概念，只有设置页里那一个库。
+    expect(canCreateProject({ name: '经营分析' })).toBe(true);
+  });
+});
+
+describe('新建项目时该不该发绑定请求', () => {
+  it('选了具体数据源就绑', () => {
+    expect(dataSourceBindingAction({ boundId: null, selected: 'ds_1' })).toBe('bind');
+  });
+
+  it('新项目一定要绑：创建时已经强制选过了', () => {
+    // 创建对话框不允许"不选"，所以走到这里 selected 必然是一个真实数据源。
+    expect(dataSourceBindingAction({ boundId: null, selected: 'ds_1' })).toBe('bind');
   });
 });

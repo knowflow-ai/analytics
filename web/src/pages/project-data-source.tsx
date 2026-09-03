@@ -5,7 +5,6 @@ import {
   bindProjectDataSource,
   getProjectDataSource,
   listDataSources,
-  unbindProjectDataSource,
 } from '@analytics/api/analytics';
 import {
   Button,
@@ -18,7 +17,6 @@ import {
 } from '@analytics/components/ui';
 import { describeError } from '@analytics/lib/labels';
 import {
-  FALLBACK_DATA_SOURCE as FALLBACK,
   dataSourceBindingAction,
   engineLabel,
   warnsAboutSemanticDrift,
@@ -27,8 +25,8 @@ import {
 /**
  * 给一个项目挑数据源。
  *
- * 不绑也能用：那种项目回落到部署配置的默认库——**存量项目全是这个状态**，所以
- * 「未绑定」是常态而不是错误，界面上不能显示成待办或告警。
+ * 项目必须有数据源，没有「不绑」这个状态：部署配置的那个库在启动迁移里已经变成
+ * 一个普通数据源记录，所以"用默认那个"就是选中它，跟选别的没有区别。
  *
  * 换数据源是件重的事：语义模型是按原来那个库的表结构建的，换过去表未必存在、
  * 类型未必一样。所以换之前说清楚，而不是换完等用户在问数那头撞见。
@@ -47,7 +45,7 @@ export function ProjectDataSourceDialog({
 }) {
   const toast = useToast();
   const queryClient = useQueryClient();
-  const [selected, setSelected] = useState<string>(FALLBACK);
+  const [selected, setSelected] = useState<string>('');
 
   const bound = useQuery({
     queryKey: ['analytics-project-data-source', projectId],
@@ -64,7 +62,7 @@ export function ProjectDataSourceDialog({
   // 就把项目从"绑着 A"改成了"未绑定"。
   useEffect(() => {
     if (!open) return;
-    setSelected(bound.data ? bound.data.id : FALLBACK);
+    setSelected(bound.data ? bound.data.id : '');
   }, [open, bound.data]);
 
   const boundId = bound.data?.id ?? null;
@@ -73,10 +71,7 @@ export function ProjectDataSourceDialog({
   const loading = bound.isPending || sources.isPending;
 
   const save = useMutation({
-    mutationFn: () =>
-      action === 'unbind'
-        ? unbindProjectDataSource(projectId)
-        : bindProjectDataSource(projectId, selected),
+    mutationFn: () => bindProjectDataSource(projectId, selected),
     onSuccess: () => {
       toast.success('数据源已更新');
       queryClient.invalidateQueries({
@@ -111,15 +106,14 @@ export function ProjectDataSourceDialog({
 
       {!loading && (
         <div className="space-y-3">
-          <Field
-            label="连接到"
-            hint="不选则使用部署配置的默认库。"
-          >
+          <Field label="连接到" hint="建模与问数都会打到这个库。">
             <Select
               value={selected}
               onChange={(event) => setSelected(event.target.value)}
             >
-              <option value={FALLBACK}>默认库（部署配置）</option>
+              <option value="" disabled>
+                请选择
+              </option>
               {(sources.data ?? []).map((item) => (
                 <option key={item.id} value={item.id}>
                   {item.name}（{engineLabel(item.engine)}）

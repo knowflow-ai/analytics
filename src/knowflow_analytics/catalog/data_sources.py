@@ -44,6 +44,10 @@ __all__ = [
 ]
 
 
+# 迁移出来的那个数据源用固定 id：每次启动都要能认出"已经迁过了"。
+_DEFAULT_DATA_SOURCE_ID = "ds_deployment_default"
+
+
 class DataSourceError(AnalyticsError):
     def __init__(self, message: str, *, code: str = "DATA_SOURCE_UNAVAILABLE") -> None:
         super().__init__(message, code=code, stage="PRECHECK")
@@ -90,8 +94,17 @@ class DataSourceRegistry:
     def for_project(self, project_id: str) -> DataSourceBinding:
         data_source_id = self._catalog.get_project_data_source_id(project_id)
         if data_source_id is None:
-            # 存量项目没有绑定行；回落到进程级默认数据源，让它们继续照常工作。
-            return self._binding(None, self._default_database_url, self._default_dialect)
+            # **没有回落。** 曾经有过：存量项目一个绑定行都没有，回落让它们继续
+            # 工作。但那是一次迁移的活，不该做成一条永久的代码路径——回落意味着
+            # 项目说不出自己连的是哪个库，而这正是最容易出静默错答的地方。
+            #
+            # 现在由 ensure_default_data_source() 在启动时把部署配置的那个库变成
+            # 一个真实的数据源记录并绑上去，所以"未绑定"只可能是被手工解绑或
+            # 迁移没跑成，两种都该报出来。
+            raise DataSourceError(
+                "this project is not bound to a data source",
+                code="DATA_SOURCE_NOT_BOUND",
+            )
 
         record = self._catalog.get_data_source(data_source_id)
         secret = self._catalog.read_data_source_dsn(data_source_id)
@@ -214,9 +227,6 @@ class DataSourceRegistry:
             raise DataSourceError("data source was not found", code="DATA_SOURCE_NOT_FOUND")
         self._catalog.bind_project_data_source(project_id=project_id, data_source_id=data_source_id)
 
-    def unbind(self, project_id: str) -> bool:
-        return self._catalog.unbind_project_data_source(project_id)
-
     def project_data_source_id(self, project_id: str) -> str | None:
         return self._catalog.get_project_data_source_id(project_id)
 
@@ -259,6 +269,37 @@ class DataSourceRegistry:
                 f"unsupported data source engine: {engine}",
                 code="DATA_SOURCE_ENGINE_UNSUPPORTED",
             ) from exc
+
+    def ensure_default_data_source(self, *, name: str = "默认数据源") -> str | None:
+        """把部署配置的那个库变成一个真实的数据源，并绑上所有还没绑的项目。
+
+        这是**一次性迁移**，不是运行时回落。数据源成为实体之前，所有项目都连着
+        ``datasource_database_url`` 那一个库；升级后它们没有绑定行，而
+        ``for_project`` 已经不再回落。不迁移的话，升级当天所有存量项目一起报
+        "没绑数据源"。
+
+        迁移之后 UI 里也不再需要「默认库（部署配置）」这个魔法选项——它就是列表里
+        一个普通数据源，可以改名、可以被别的项目复用。
+
+        幂等：固定 id，已存在就不重建；只绑还没绑的项目。每次启动都跑，所以中途
+        失败下次会补上。
+        """
+
+        if not self._default_database_url.strip():
+            return None
+        record = self._catalog.get_data_source(_DEFAULT_DATA_SOURCE_ID)
+        if record is None:
+            self._catalog.create_data_source(
+                name=name,
+                engine=self._default_dialect.value,
+                secret=self._secret_box.encrypt(self._default_database_url),
+                data_source_id=_DEFAULT_DATA_SOURCE_ID,
+            )
+        for project_id in self._catalog.list_unbound_project_ids():
+            self._catalog.bind_project_data_source(
+                project_id=project_id, data_source_id=_DEFAULT_DATA_SOURCE_ID
+            )
+        return _DEFAULT_DATA_SOURCE_ID
 
     def invalidate(self, data_source_id: str) -> None:
         """丢掉某个数据源已缓存的连接。
@@ -323,9 +364,6 @@ class SingleDataSourceRegistry:
         raise self._unavailable()
 
     def bind(self, **_: object):
-        raise self._unavailable()
-
-    def unbind(self, *_: object, **__: object):
         raise self._unavailable()
 
     def test(self, **_: object):

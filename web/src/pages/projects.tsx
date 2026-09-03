@@ -2,11 +2,26 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Database, Plus, UserPlus } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate } from '@analytics/lib/router';
-import { createProject, listProjects } from '@analytics/api/analytics';
+import {
+  bindProjectDataSource,
+  createProject,
+  listDataSources,
+  listProjects,
+} from '@analytics/api/analytics';
 import type { AnalyticsProject } from '@analytics/api/types';
-import { Button, Dialog, Empty, Field, Input, Spinner, useToast } from '@analytics/components/ui';
+import {
+  Button,
+  Dialog,
+  Empty,
+  Field,
+  Input,
+  Select,
+  Spinner,
+  useToast,
+} from '@analytics/components/ui';
 import { avatarGradientOf, avatarStripeOf } from '@analytics/lib/avatar-gradient';
 import { DataSourcesDialog } from './data-sources';
+import { canCreateProject, engineLabel } from './data-source-form';
 import { ProjectAuthorizeDialog } from './project-authorize';
 import { ProjectDataSourceDialog } from './project-data-source';
 import { describeError, formatDateTime } from '@analytics/lib/labels';
@@ -109,12 +124,41 @@ export function ProjectsPage({ ready }: { ready: boolean }) {
   const [pickingSourceFor, setPickingSourceFor] = useState<AnalyticsProject | null>(null);
   const [authorizing, setAuthorizing] = useState<AnalyticsProject | null>(null);
   const [name, setName] = useState('');
+  // 空字符串 = 还没做选择。**不预选**：预选上默认库的话，用户一路回车就又回到了
+  // "不知道自己连的是哪个库"。
+  const [newProjectSource, setNewProjectSource] = useState('');
+
+  // 新建对话框里要列数据源，所以对话框一开就取。
+  const dataSources = useQuery({
+    queryKey: ['analytics-data-sources'],
+    queryFn: listDataSources,
+    enabled: creating && EDITION === 'embedded',
+  });
+
   const create = useMutation({
-    mutationFn: () => createProject(name.trim()),
-    onSuccess: (project) => {
+    /**
+     * 建项目 + 绑数据源是两次调用，核心没有"建的时候一起绑"的接口。
+     *
+     * 所以第二步失败要单独说：那时项目**已经建好了**，只是没绑上。静默跳走的话
+     * 用户会带着一个悄悄连着默认库的项目往下走。
+     */
+    mutationFn: async () => {
+      const project = await createProject(name.trim());
+      try {
+        await bindProjectDataSource(project.id, newProjectSource);
+        return { project, bound: true };
+      } catch {
+        return { project, bound: false };
+      }
+    },
+    onSuccess: ({ project, bound }) => {
       queryClient.invalidateQueries({ queryKey: ['projects'] });
       setCreating(false);
       setName('');
+      setNewProjectSource('');
+      if (!bound) {
+        toast.error('项目已创建，但数据源没绑上。请在项目卡片上补绑后再导入表。');
+      }
       navigate(appPath(`/projects/${project.id}`));
     },
     onError: (error) => toast.error(describeError(error)),
@@ -237,7 +281,7 @@ export function ProjectsPage({ ready }: { ready: boolean }) {
             <Button
               variant="primary"
               loading={create.isPending}
-              disabled={!name.trim()}
+              disabled={!canCreateProject({ name, dataSourceChoice: newProjectSource })}
               onClick={() => create.mutate()}
             >
               创建
@@ -245,16 +289,44 @@ export function ProjectsPage({ ready }: { ready: boolean }) {
           </>
         }
       >
-        <Field label="项目名称" hint="例如：经营分析、销售看板">
-          <Input
-            autoFocus
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && name.trim()) create.mutate();
-            }}
-          />
-        </Field>
+        <div className="space-y-3">
+          <Field label="项目名称" hint="例如：经营分析、销售看板">
+            <Input
+              autoFocus
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              onKeyDown={(event) => {
+                if (
+                  event.key === 'Enter' &&
+                  canCreateProject({ name, dataSourceChoice: newProjectSource })
+                ) {
+                  create.mutate();
+                }
+              }}
+            />
+          </Field>
+          {EDITION === 'embedded' && (
+            <Field
+              label="数据源"
+              hint="建模会从这个库里读表。建好模型之后再换库要重新核对，所以现在就定下来。"
+            >
+              <Select
+                value={newProjectSource}
+                onChange={(event) => setNewProjectSource(event.target.value)}
+              >
+                {/* 占位项禁用：必须做一个明确选择，"默认库"也是一种选择。 */}
+                <option value="" disabled>
+                  {(dataSources.data ?? []).length ? '请选择' : '还没有数据源'}
+                </option>
+                {(dataSources.data ?? []).map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}（{engineLabel(item.engine)}）
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          )}
+        </div>
       </Dialog>
     </div>
   );

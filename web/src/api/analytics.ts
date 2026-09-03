@@ -925,8 +925,3 @@ export const bindProjectDataSource = (
     body: { data_source_id: dataSourceId },
   });
 
-export const unbindProjectDataSource = (projectId: string): Promise<unknown> =>
-  request(`/v1/analytics/projects/${encodeURIComponent(projectId)}/data-source`, {
-    method: 'DELETE',
-    projectId,
-  });

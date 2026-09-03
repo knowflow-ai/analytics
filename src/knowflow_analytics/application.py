@@ -789,10 +789,6 @@ class AnalyticsApplication:
         self.catalog.get_project(project_id)
         self._sources.bind(project_id=project_id, data_source_id=data_source_id)
 
-    def unbind_project_data_source(self, project_id: str) -> bool:
-        self.catalog.get_project(project_id)
-        return self._sources.unbind(project_id)
-
     def get_project_data_source(self, project_id: str):
         self.catalog.get_project(project_id)
         data_source_id = self._sources.project_data_source_id(project_id)

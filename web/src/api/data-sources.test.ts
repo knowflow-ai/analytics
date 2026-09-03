@@ -14,7 +14,6 @@ import {
   getProjectDataSource,
   listDataSources,
   testDataSource,
-  unbindProjectDataSource,
   updateDataSource,
 } from './analytics';
 
@@ -75,12 +74,6 @@ describe('项目绑定', () => {
     expect(options().body).toEqual({ data_source_id: 'ds_1' });
   });
 
-  it('解绑是 DELETE', async () => {
-    await unbindProjectDataSource('prj_1');
-
-    expect(options().method).toBe('DELETE');
-    expect(options().projectId).toBe('prj_1');
-  });
 
   it('没绑数据源时返回 null 而不是抛错', async () => {
     // 这是**多数项目的常态**（存量项目一个绑定行都没有），不能当异常处理。

@@ -926,9 +926,30 @@ class AnalyticsQueryService:
                     )
                 chosen = self._coarsest_scope(release, tuple(bound))
                 if chosen is None:
-                    raise MappingError(
-                        "多个业务分析范围都能执行这个问题，系统不敢替你选。",
+                    # 并列有两种，用户能不能回答完全不同：
+                    # 同一事实根的多个内部作用域是编译产物重复，差异对用户不可见也
+                    # 无从判断——这要建模者去修，给卡等于把锅甩给他答不了的人。
+                    if self._scopes_duplicate_a_root(release, tuple(bound)):
+                        raise MappingError(
+                            "当前发布版本存在无法区分的内部分析路径，请联系建模管理员重新发布。",
+                            code="AMBIGUOUS_QUERY_SCOPE",
+                        )
+                    # 不同事实根的并列才是真正需要问人的场合。问的是「你要看什么」，
+                    # 不是「你要哪个分析范围」——作用域始终不出现在用户面前。
+                    # 卡片给的是能区分这几个范围的**成员**：选中哪个成员就等于定下了
+                    # 拥有它的那个范围。作用域本身不出现在选项里。
+                    distinguishing = tuple(
+                        element_id
+                        for (_kind, element_id), scopes in self._scope_choice_owners(
+                            release, tuple(bound), allowed_element_ids
+                        ).items()
+                        if len(scopes) == 1
+                    )
+                    raise ClarificationSignal(
                         code="AMBIGUOUS_QUERY_SCOPE",
+                        message="这个问题可以从几个角度分析，请确认你要看什么。",
+                        element_ids=distinguishing,
+                        stage=QueryStage.FINAL_PARSING.value,
                     )
                 bound_scope_holder["value"] = chosen
                 translation_holder["value"] = bound[chosen]

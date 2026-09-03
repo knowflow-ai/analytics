@@ -1761,7 +1761,15 @@ class TestScopeIsNeverAskedAboutDirectly:
         kinds = {item.kind for item in getattr(response, "options", ())}
         assert "analysis_object" not in kinds, response.model_dump_json(indent=2)
 
-    def test_undecidable_scope_offers_governed_business_metrics(self, sales_release) -> None:
+    def test_a_meaningless_question_is_refused_not_turned_into_a_menu(
+        self, sales_release
+    ) -> None:
+        """一条证据都没有的问题，选完指标也走不下去——给菜单是把死路包装成选择。
+
+        并集之前这里出的是指标卡。现在生成阶段直接告诉我们模型什么都表达不出来，
+        照实拒答比让用户挑一个再撞墙诚实。
+        """
+
         release = _routed_release(sales_release)
         service, _gateway, _executor = _service(release, query_embedding=False)
 
@@ -1774,12 +1782,8 @@ class TestScopeIsNeverAskedAboutDirectly:
             actor_id="tenant-1",
         )
 
-        assert response.state is QueryState.CLARIFICATION_REQUIRED
-        assert {item.kind for item in response.options} <= {"metric", "dimension"}
-        assert "净收入" in {item.label for item in response.options}
-        # 指标排在维度前面：更常见的意图先出现。
-        kinds = [item.kind for item in response.options]
-        assert kinds == sorted(kinds, key=lambda kind: kind != "metric")
+        assert response.state is QueryState.FAILED
+        assert getattr(response, "options", ()) == ()
 
     def test_choosing_a_metric_fixes_the_fact_root_and_runs(self, sales_release) -> None:
         """选中的指标决定事实根——用户答的是业务问题，路由是系统的事。"""

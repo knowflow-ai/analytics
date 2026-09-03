@@ -769,6 +769,16 @@ class AnalyticsApplication:
             tables=tables,
         )
 
+    def delete_project(self, project_id: str) -> bool:
+        """删掉项目及其名下的一切。
+
+        宿主侧的助手、会话、报表卡、分享链接不在这里——那些是 BFF 的表，核心看不见。
+        整体的先后顺序由 BFF 编排，两步都做成幂等，重试一定收敛。
+        """
+
+        self.catalog.get_project(project_id)
+        return self.catalog.delete_project(project_id)
+
     # ---- 数据源 -------------------------------------------------------------
     #
     # 全部转交解析器：加密、连接、缓存失效都在那一层，凭据不必再多走一层。

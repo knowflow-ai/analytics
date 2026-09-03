@@ -1,10 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Database, Plus, UserPlus } from 'lucide-react';
+import { Database, Plus, Trash2, UserPlus } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate } from '@analytics/lib/router';
 import {
   bindProjectDataSource,
   createProject,
+  deleteProject,
   listDataSources,
   listProjects,
 } from '@analytics/api/analytics';
@@ -21,7 +22,11 @@ import {
 } from '@analytics/components/ui';
 import { avatarGradientOf, avatarStripeOf } from '@analytics/lib/avatar-gradient';
 import { DataSourcesDialog } from './data-sources';
-import { canCreateProject, engineLabel } from './data-source-form';
+import {
+  canCreateProject,
+  engineLabel,
+  projectDeletionConfirmed,
+} from './data-source-form';
 import { ProjectAuthorizeDialog } from './project-authorize';
 import { ProjectDataSourceDialog } from './project-data-source';
 import { describeError, formatDateTime } from '@analytics/lib/labels';
@@ -39,6 +44,7 @@ function ProjectCard({
   onOpen,
   onAuthorize,
   onPickDataSource,
+  onDelete,
 }: {
   project: AnalyticsProject;
   onOpen: () => void;
@@ -46,6 +52,7 @@ function ProjectCard({
   onAuthorize?: () => void;
   /** 仅嵌入版传入：独立版只有一个由设置页配置的数据源，没有可挑的。 */
   onPickDataSource?: () => void;
+  onDelete?: () => void;
 }) {
   const status = projectStatusOf(project);
   const name = project.name ?? '';
@@ -74,6 +81,19 @@ function ProjectCard({
             className="rounded-md bg-white/85 p-1.5 text-slate-500 opacity-0 shadow-sm transition-opacity hover:text-slate-900 focus:opacity-100 group-hover:opacity-100"
           >
             <Database className="h-4 w-4" />
+          </button>
+        )}
+        {onDelete && (
+          <button
+            type="button"
+            title="删除项目"
+            onClick={(event) => {
+              event.stopPropagation();
+              onDelete();
+            }}
+            className="rounded-md bg-white/85 p-1.5 text-slate-500 opacity-0 shadow-sm transition-opacity hover:text-red-600 focus:opacity-100 group-hover:opacity-100"
+          >
+            <Trash2 className="h-4 w-4" />
           </button>
         )}
         {onAuthorize && (
@@ -123,6 +143,19 @@ export function ProjectsPage({ ready }: { ready: boolean }) {
   const [managingSources, setManagingSources] = useState(false);
   const [pickingSourceFor, setPickingSourceFor] = useState<AnalyticsProject | null>(null);
   const [authorizing, setAuthorizing] = useState<AnalyticsProject | null>(null);
+  const [deleting, setDeleting] = useState<AnalyticsProject | null>(null);
+  const [deleteTyped, setDeleteTyped] = useState('');
+
+  const remove = useMutation({
+    mutationFn: () => deleteProject(deleting?.id ?? ''),
+    onSuccess: () => {
+      toast.success('项目已删除');
+      setDeleting(null);
+      setDeleteTyped('');
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+    },
+    onError: (error) => toast.error(describeError(error)),
+  });
   const [name, setName] = useState('');
   // 空字符串 = 还没做选择。**不预选**：预选上默认库的话，用户一路回车就又回到了
   // "不知道自己连的是哪个库"。
@@ -243,6 +276,7 @@ export function ProjectsPage({ ready }: { ready: boolean }) {
                   ? () => setPickingSourceFor(project)
                   : undefined
               }
+              onDelete={() => setDeleting(project)}
             />
           ))}
         </div>
@@ -260,6 +294,57 @@ export function ProjectsPage({ ready }: { ready: boolean }) {
           projectName={pickingSourceFor.name ?? ''}
           onClose={() => setPickingSourceFor(null)}
         />
+      )}
+
+      {deleting && (
+        <Dialog
+          open
+          title={`删除项目「${deleting.name ?? ''}」`}
+          onClose={() => {
+            setDeleting(null);
+            setDeleteTyped('');
+          }}
+          footer={
+            <>
+              <Button
+                onClick={() => {
+                  setDeleting(null);
+                  setDeleteTyped('');
+                }}
+              >
+                取消
+              </Button>
+              <Button
+                variant="dangerPrimary"
+                loading={remove.isPending}
+                disabled={
+                  !projectDeletionConfirmed({
+                    projectName: deleting.name ?? '',
+                    typed: deleteTyped,
+                  })
+                }
+                onClick={() => remove.mutate()}
+              >
+                删除
+              </Button>
+            </>
+          }
+        >
+          <div className="space-y-3">
+            <p className="text-xs leading-relaxed text-slate-600">
+              这个项目的语义模型、发布版本、问数助手、会话记录、报表卡片、数据范围
+              配置会一起消失，<strong className="text-red-600">不可恢复</strong>。
+              数据源本身不受影响。
+            </p>
+            <Field label={`确认请输入项目名：${deleting.name ?? ''}`}>
+              <Input
+                autoFocus
+                value={deleteTyped}
+                onChange={(event) => setDeleteTyped(event.target.value)}
+              />
+            </Field>
+          </div>
+        </Dialog>
       )}
 
       {authorizing && (

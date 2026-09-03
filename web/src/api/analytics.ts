@@ -69,6 +69,18 @@ export const versionOf = (revision: AnalyticsRevision): RevisionVersion => ({
 
 // --- projects -----------------------------------------------------------------
 
+/**
+ * 删掉项目及其名下的一切。
+ *
+ * 走宿主的专办路由（``/core/projects/{id}``），门槛是全局 admin——删项目会毁掉
+ * 别人在这个项目上的全部工作，比建项目更不可逆。
+ */
+export const deleteProject = (projectId: string): Promise<unknown> =>
+  request(`/v1/analytics/projects/${encodeURIComponent(projectId)}`, {
+    method: 'DELETE',
+    projectId,
+  });
+
 export const listProjects = () =>
   request<{ items: AnalyticsProject[] }>('/v1/analytics/projects', {
     // 嵌入版不送 id_prefix：宿主的 /core/projects 根本不读这个查询参数，它按当前

@@ -93,3 +93,21 @@ export function canCreateProject(input: {
   if (input.dataSourceChoice === undefined) return true;
   return input.dataSourceChoice.length > 0;
 }
+
+
+/**
+ * 删项目的确认。
+ *
+ * 要求把项目名原样敲一遍，而不是点一下"确定"。删项目会连带毁掉别人在这个项目上
+ * 的会话、报表卡、数据范围配置，而且不可逆——这个代价配得上多打几个字。
+ *
+ * 比对前先 trim：用户从标题里复制过来常带一个尾随空格，那不该被判成打错。
+ */
+export function projectDeletionConfirmed(input: {
+  projectName: string;
+  typed: string;
+}): boolean {
+  const expected = input.projectName.trim();
+  if (!expected) return false;
+  return input.typed.trim() === expected;
+}

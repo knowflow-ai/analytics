@@ -552,6 +552,31 @@ class CatalogStore:
                     )
                 )
 
+    def delete_project(self, project_id: str) -> bool:
+        """删掉一个项目，以及它名下的一切。
+
+        **按 metadata 里所有带 project_id 的表推导，不手写表名清单。** 手写清单
+        必然会漏：这个目录 22 张表里 20 张带 project_id，而且还在长。漏一张的后果
+        不是报错，是"删完了还留着业务数据"——确认记忆和诊断产物里存着真实的维度
+        取值和物理 SQL。
+
+        ``analytics_data_source`` 不带 project_id，天然不在范围内：数据源是连接，
+        不属于任何项目，删项目不该把别的项目还在用的连接一起带走。
+
+        一个事务：中途失败什么都不删，不会留下半个项目。
+        """
+
+        scoped = [
+            table
+            for table in metadata.sorted_tables
+            if table is not projects and "project_id" in table.c
+        ]
+        with self._engine.begin() as connection:
+            for table in scoped:
+                connection.execute(delete(table).where(table.c.project_id == project_id))
+            result = connection.execute(delete(projects).where(projects.c.id == project_id))
+        return result.rowcount > 0
+
     def list_unbound_project_ids(self) -> tuple[str, ...]:
         """还没绑数据源的项目。只给启动迁移用。
 

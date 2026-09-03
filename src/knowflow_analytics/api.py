@@ -1038,6 +1038,20 @@ def create_api(
             raise HTTPException(status_code=403, detail="project scope mismatch")
         return application.create_project(name=payload.name, project_id=payload.project_id)
 
+    @app.delete("/v1/analytics/projects/{project_id}")
+    def delete_project(project_id: str, request_context: Context):
+        """删掉项目及其名下的一切。
+
+        不做软删：留一份"已删除"的项目意味着它的语义模型、确认记忆、诊断产物都还
+        在库里，而那些东西装着真实的维度取值和物理 SQL。用户点删除就是要它消失。
+        """
+
+        require_project(project_id, request_context)
+        expensive(request_context)
+        if not application.delete_project(project_id):
+            raise HTTPException(status_code=404, detail="project not found")
+        return {"deleted": True}
+
     @app.get("/v1/analytics/projects/{project_id}/domain-governance")
     def get_domain_governance(project_id: str, request_context: Context):
         require_project(project_id, request_context)

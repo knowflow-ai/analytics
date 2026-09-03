@@ -6,6 +6,7 @@ import {
   dataSourceBindingAction,
   dsnPlaceholder,
   engineLabel,
+  projectDeletionConfirmed,
   warnsAboutSemanticDrift,
 } from './data-source-form';
 
@@ -142,5 +143,32 @@ describe('新建项目时该不该发绑定请求', () => {
   it('新项目一定要绑：创建时已经强制选过了', () => {
     // 创建对话框不允许"不选"，所以走到这里 selected 必然是一个真实数据源。
     expect(dataSourceBindingAction({ boundId: null, selected: 'ds_1' })).toBe('bind');
+  });
+});
+
+describe('删项目的确认', () => {
+  it('名字对上才算确认', () => {
+    expect(projectDeletionConfirmed({ projectName: '经营分析', typed: '经营分析' })).toBe(true);
+    expect(projectDeletionConfirmed({ projectName: '经营分析', typed: '经营' })).toBe(false);
+  });
+
+  it('两边都 trim', () => {
+    // 从标题里复制常带尾随空格，那不该被判成打错。
+    expect(
+      projectDeletionConfirmed({ projectName: '经营分析', typed: ' 经营分析 ' }),
+    ).toBe(true);
+  });
+
+  it('没输入不算确认', () => {
+    expect(projectDeletionConfirmed({ projectName: '经营分析', typed: '' })).toBe(false);
+  });
+
+  it('项目名为空时永远不放行', () => {
+    /**
+     * 名字取不到（数据还没加载完）时，如果拿空串比空串会直接判成"已确认"——
+     * 用户一进对话框按钮就是亮的，一点就删。
+     */
+    expect(projectDeletionConfirmed({ projectName: '', typed: '' })).toBe(false);
+    expect(projectDeletionConfirmed({ projectName: '   ', typed: '' })).toBe(false);
   });
 });

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
+from datetime import datetime
 
 from knowflow_analytics.contracts import (
     FieldKind,
@@ -67,6 +68,12 @@ class RevisionEditor:
         suggestions: Iterable[SuggestionPatch] = (),
         parent_revision_id: str | None = None,
         modeling_job_id: str | None = None,
+        # 语义上下文的人工评审记录。派生子版本时原样继承——内容一样就没有重审的
+        # 道理。安全性由契约保证：review_hash 必须绑住当前内容，内容一变就对不上，
+        # 所以"继承"传不进一份与内容不符的评审。
+        semantic_context_review_hash: str | None = None,
+        semantic_context_reviewed_by: str | None = None,
+        semantic_context_reviewed_at: datetime | None = None,
     ) -> ModelingRevision:
         if semantic_catalog is not None:
             semantic_spec = compile_semantic_catalog(semantic_catalog)
@@ -84,6 +91,9 @@ class RevisionEditor:
             suggestions=tuple(suggestions),
             parent_revision_id=parent_revision_id,
             modeling_job_id=modeling_job_id,
+            semantic_context_review_hash=semantic_context_review_hash,
+            semantic_context_reviewed_by=semantic_context_reviewed_by,
+            semantic_context_reviewed_at=semantic_context_reviewed_at,
         )
 
     def replace_semantic_catalog(

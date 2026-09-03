@@ -1049,12 +1049,37 @@ class AnalyticsApplication:
                 update={"revision_id": child_revision_id}
             ).model_dump(mode="python")
         )
+        # 语义上下文的人工评审记录一并继承。
+        #
+        # 不继承的话，从已发布版本点「编辑」派生出来的草稿会当场被结构校验阻断：
+        # 「semantic context requires an artifact-bound human review」——而那份上下文
+        # 一个字都没改，只是评审记录没跟过来。用户刚审完、刚发布，一点编辑就被要求
+        # 重审，而界面上又看不出该审什么。
+        #
+        # 只在内容确实没变时继承。契约本身也会把关（review_hash 必须绑住当前内容，
+        # 对不上会直接拒绝构造），这里显式判一次是为了让意图写在明处。
+        child_context_hash = semantic_context_content_hash(
+            child_catalog and compile_semantic_catalog(child_catalog).semantic_context
+        )
+        inherit_review = (
+            source.semantic_context_review_hash is not None
+            and source.semantic_context_review_hash == child_context_hash
+        )
         child = self._revision_editor.create(
             project_id=source.project_id,
             schema_snapshot_hash=source.schema_snapshot_hash,
             semantic_catalog=child_catalog,
             suggestions=source.suggestions,
             parent_revision_id=source.id,
+            semantic_context_review_hash=(
+                source.semantic_context_review_hash if inherit_review else None
+            ),
+            semantic_context_reviewed_by=(
+                source.semantic_context_reviewed_by if inherit_review else None
+            ),
+            semantic_context_reviewed_at=(
+                source.semantic_context_reviewed_at if inherit_review else None
+            ),
         )
         self.catalog.save_revision(child)
         return child

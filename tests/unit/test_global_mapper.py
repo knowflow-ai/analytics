@@ -145,7 +145,9 @@ def test_collects_embedding_and_term_evidence_once_for_every_scope_and_view() ->
     )
 
     assert len(gateway.calls) == 1
-    assert {"经营表", "表现", "收益情", "情况"} <= set(gateway.calls[0])
+    assert {"经营表现", "收益情", "情况"} <= set(gateway.calls[0])
+    # 「经营表」「表现」是精确命中「经营表现」的碎片，不再单独去查向量。
+    assert {"经营表", "表现"}.isdisjoint(gateway.calls[0])
 
     mapper.project_evidence(evidence=evidence, dataset_id="scope-a", mode=MapMode.STRICT)
     mapper.project_evidence(evidence=evidence, dataset_id="scope-b", mode=MapMode.MODERATE)

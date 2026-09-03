@@ -51,8 +51,29 @@ def test_embedding_segments_union_governed_words_with_the_sliding_window() -> No
     # 受治理真词进入向量查询（滑窗永远切不出「图书馆」——奇数位起始）。
     assert "图书馆" in segments
     assert "藏品数量" in segments
-    # 滑窗保留：词表外说法仍有无差别兜底。
-    assert "各图书" in segments
+    # 「各图书」与精确命中「图书馆」重叠：它是同一处文本的碎片，不是另一种说法。
+    assert "各图书" not in segments
+
+
+def test_window_fragments_overlapping_an_exact_term_are_dropped() -> None:
+    """实机回放（2026-09-02）：「上海有哪些门店，什么时候开业的」。
+
+    词表命中「上海」[0,2) 与「门店」[5,7)；滑窗从偶数位切出「些门店」[4,7)，
+    与「门店」重叠。碎片去查向量召回的是「门店数量」这类弱候选，再被升级成
+    需要用户确认的指标——一个没问指标的问题因此反复弹澄清卡。
+    上游 MapFilter 同样以精确命中为准，剔除落在同一 span 上的模糊命中。
+    """
+    entries = _entries(("上海", "门店", "门店数量"))
+
+    segments = M._embedding_segments("上海有哪些门店，什么时候开业的", entries=entries)
+
+    assert "门店" in segments
+    assert "些门店" not in segments
+    assert "上海有" not in segments
+    assert "店，什" not in segments
+    # 不与任何精确命中重叠的碎片保留：词表外说法仍有兜底。
+    assert "有哪些" in segments
+    assert "什么时" in segments
 
 
 def test_embedding_segments_without_entries_keep_the_sliding_window() -> None:

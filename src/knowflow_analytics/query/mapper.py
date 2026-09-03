@@ -1784,22 +1784,51 @@ def _embedding_segments_with_spans(
         )
     )
     governed = _dictionary_segment_spans(question, entries) if entries else {}
-    segments = tuple(dict.fromkeys((*governed, *windows))) or (normalized,)
+    exact_spans = _exact_term_spans(question, entries) if entries else ()
     coordinates = _surface_coordinates(question)
-    return tuple(
-        (
-            segment,
-            tuple(
-                dict.fromkeys(
-                    (
-                        *governed.get(normalize_text(segment), ()),
-                        *coordinates.literal_spans(segment),
-                    )
+
+    def spans_of(segment: str) -> tuple[tuple[int, int], ...]:
+        return tuple(
+            dict.fromkeys(
+                (
+                    *governed.get(normalize_text(segment), ()),
+                    *coordinates.literal_spans(segment),
                 )
-            ),
+            )
         )
-        for segment in segments
+
+    # A window fragment that overlaps an exact dictionary hit is a piece of that
+    # hit, not another wording of it: 「些门店」 next to 「门店」 recalls 「门店数量」
+    # and turns a question that never asked for a metric into a confirmation.
+    # Upstream MapFilter likewise drops fuzzy hits on a span an exact hit owns.
+    windows = tuple(
+        window
+        for window in windows
+        if normalize_text(window) in governed
+        or not any(_overlaps(span, exact_spans) for span in spans_of(window))
     )
+    segments = tuple(dict.fromkeys((*governed, *windows))) or (normalized,)
+    return tuple((segment, spans_of(segment)) for segment in segments)
+
+
+def _exact_term_spans(
+    question: str,
+    entries: tuple[SemanticIndexEntry, ...],
+) -> tuple[tuple[int, int], ...]:
+    """Raw-offset spans of the longest governed dictionary hits in ``question``."""
+
+    coordinates = _surface_coordinates(question)
+    if not coordinates.reliable or not coordinates.normalized:
+        return ()
+    return tuple(
+        coordinates.raw_span(term.offset, term.offset + term.length)
+        for term in HanlpCustomDictionary(entries).segment(coordinates.normalized)
+    )
+
+
+def _overlaps(span: tuple[int, int], spans: tuple[tuple[int, int], ...]) -> bool:
+    start, end = span
+    return any(start < other_end and other_start < end for other_start, other_end in spans)
 
 
 def _cosine(left: tuple[float, ...], right: tuple[float, ...]) -> float:

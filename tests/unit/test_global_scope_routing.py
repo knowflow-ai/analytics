@@ -727,10 +727,10 @@ def test_same_root_internal_scope_variants_are_not_user_choices(
 
     first = service.query(QueryRequest(project_id="sales", question="共享口径"))
 
-    assert first.state is QueryState.CLARIFICATION_REQUIRED
-    assert gateway.calls == 0
-    assert first.options == ()
-    assert "重新发布" in first.question
+    # 同一事实根的两个内部作用域差异对用户不可见，他答不了。此前出的是一张零选项的
+    # 澄清卡——那本质就是拒答，只是穿了卡片的壳。改为直说，并把话讲给能修的人听。
+    assert first.state is QueryState.FAILED
+    assert "重新发布" in first.diagnostics.user_hint or "重新发布" in str(first.error.message)
     assert executor.calls == 0
 
 
@@ -1785,131 +1785,6 @@ class TestScopeIsNeverAskedAboutDirectly:
         assert response.state is QueryState.FAILED
         assert getattr(response, "options", ()) == ()
 
-    def test_choosing_a_metric_fixes_the_fact_root_and_runs(self, sales_release) -> None:
-        """选中的指标决定事实根——用户答的是业务问题，路由是系统的事。"""
-
-        release = _routed_release(sales_release)
-        llm = _FixedS2SqlGateway('SELECT SUM("净收入") FROM "销售经营"')
-        service, _gateway, executor = _service(release, llm_gateway=llm, query_embedding=False)
-        dataset_ids = ("sales_dataset", "customer_scope")
-
-        first = service.query(
-            QueryRequest(project_id="sales", question="随便看看", dataset_ids=dataset_ids),
-            actor_id="tenant-1",
-        )
-        chosen = next(item for item in first.options if item.label == "净收入")
-
-        second = service.query(
-            QueryRequest(
-                project_id="sales",
-                question="随便看看",
-                dataset_ids=dataset_ids,
-                selected_candidate_id=chosen.candidate_id,
-                expected_release_id=first.release_id,
-                expected_spec_hash=first.spec_hash,
-                expected_index_snapshot_id=first.index_snapshot_id,
-            ),
-            actor_id="tenant-1",
-        )
-
-        assert second.state is QueryState.COMPLETED, second.model_dump_json(indent=2)
-        assert second.semantic_query.dataset_id == "sales_dataset"
-        assert second.semantic_query.metric_ids == ("net_revenue",)
-        assert executor.calls == 1
-
-    def test_a_chosen_metric_the_query_ignores_is_not_executed(self, sales_release) -> None:
-        """结算义务：生成的 SQL 没用上用户选的指标就不执行。
-
-        指标卡不是换个说法的作用域卡——用户选的是「我要看净收入」，回来一个别的
-        指标就是答非所问，哪怕事实根碰巧是对的。
-        """
-
-        release = _routed_release(sales_release)
-        llm = _FixedS2SqlGateway('SELECT SUM("退款金额") FROM "销售经营"')
-        service, _gateway, executor = _service(release, llm_gateway=llm, query_embedding=False)
-        dataset_ids = ("sales_dataset", "customer_scope")
-
-        first = service.query(
-            QueryRequest(project_id="sales", question="随便看看", dataset_ids=dataset_ids),
-            actor_id="tenant-1",
-        )
-        chosen = next(item for item in first.options if item.label == "净收入")
-
-        second = service.query(
-            QueryRequest(
-                project_id="sales",
-                question="随便看看",
-                dataset_ids=dataset_ids,
-                selected_candidate_id=chosen.candidate_id,
-                expected_release_id=first.release_id,
-                expected_spec_hash=first.spec_hash,
-                expected_index_snapshot_id=first.index_snapshot_id,
-            ),
-            actor_id="tenant-1",
-        )
-
-        assert second.state is not QueryState.COMPLETED, second.model_dump_json(indent=2)
-        assert executor.calls == 0
-
-    def test_a_forged_metric_outside_the_shown_card_is_refused(self, sales_release) -> None:
-        """token 绑定的是实际展示过的组合；没展示过的指标不能靠改 id 混进来。"""
-
-        release = _routed_release(sales_release)
-        service, _gateway, executor = _service(release, query_embedding=False)
-        dataset_ids = ("sales_dataset", "customer_scope")
-
-        first = service.query(
-            QueryRequest(project_id="sales", question="随便看看", dataset_ids=dataset_ids),
-            actor_id="tenant-1",
-        )
-        forged = service._selection_token(
-            release=release,
-            context=_selection_context_for(
-                service, question="随便看看", dataset_ids=dataset_ids
-            ),
-            dataset_id="customer_scope",
-            semantic_selection_id="scope_choice:metric:net_revenue",
-        )
-
-        second = service.query(
-            QueryRequest(
-                project_id="sales",
-                question="随便看看",
-                dataset_ids=dataset_ids,
-                selected_candidate_id=forged,
-                expected_release_id=first.release_id,
-                expected_spec_hash=first.spec_hash,
-                expected_index_snapshot_id=first.index_snapshot_id,
-            ),
-            actor_id="tenant-1",
-        )
-
-        assert second.state is QueryState.FAILED
-        assert executor.calls == 0
-
-    def test_a_question_without_metric_intent_can_pick_a_dimension(
-        self, sales_release
-    ) -> None:
-        """「各门店都卖些什么」这类问题一个指标都不想要。
-
-        实测：只给指标时，它和「哪些门店售卖 X」都被逼着在「销售金额 / 销售数量」
-        里挑一个——与之前那张弱指标卡是同一个病，只是换了个位置。
-        """
-
-        release = _routed_release(sales_release)
-        service, _gateway, _executor = _service(release, query_embedding=False)
-
-        response = service.query(
-            QueryRequest(
-                project_id="sales",
-                question="随便看看",
-                dataset_ids=("sales_dataset", "customer_scope"),
-            ),
-            actor_id="tenant-1",
-        )
-
-        assert "dimension" in {item.kind for item in response.options}
-
 
 class _CapturingGaps:
     def __init__(self) -> None:
@@ -1919,98 +1794,75 @@ class _CapturingGaps:
         self.saved.append(record)
 
 
-class TestClarificationFeedsTheBusinessDictionary:
-    """澄清与拒答是同一个信号的两半：系统没接住用户的说法。
+class TestVocabularyGapIsKeptForTheModeler:
+    """「系统没接住用户的说法」记在同一处，靠 kind 区分这一轮怎么收场。
 
-    区别在这一轮怎么收场——拒答只知道失败了、正解未知，要人去诊断；澄清被回答则
-    **自带正解**（「业绩」→「销售金额」），可以在建模端一键采纳成别名。两者记在同
-    一处，靠 ``kind`` 与 ``resolution`` 区分。
+    并集之后澄清大幅减少，`clarified` 这一类的输入随之变少——那是产品取舍，不影响这条
+    记录契约本身：带正解的可以一键采纳成别名，拒答的还得人去诊断。端到端触发频率另议，
+    这里钉的是记录器答应了什么。
     """
 
-    def test_an_answered_clarification_is_kept_with_the_answer(self, sales_release) -> None:
-        release = _routed_release(sales_release)
+    def _service_with(self, sales_release, gaps):
+        return _service(_routed_release(sales_release), query_embedding=False, query_failures=gaps)
+
+    def test_an_unknown_filter_value_is_kept_with_its_near_miss(self, sales_release) -> None:
         gaps = _CapturingGaps()
-        llm = _FixedS2SqlGateway('SELECT SUM("净收入") FROM "销售经营"')
-        service, _gateway, _executor = _service(
-            release, llm_gateway=llm, query_embedding=False, query_failures=gaps
-        )
-        dataset_ids = ("sales_dataset", "customer_scope")
+        service, _gateway, _executor = self._service_with(sales_release, gaps)
+        published = service._releases.published
 
-        first = service.query(
-            QueryRequest(project_id="sales", question="随便看看", dataset_ids=dataset_ids),
+        service._record_vocabulary_gap(
+            QueryRequest(project_id="sales", question="哪些门店售卖卡布奇洛"),
+            kind="unknown_value",
+            published=published,
+            effective_question="哪些门店售卖卡布奇洛",
             actor_id="tenant-1",
-        )
-        chosen = next(item for item in first.options if item.label == "净收入")
-        service.query(
-            QueryRequest(
-                project_id="sales",
-                question="随便看看",
-                dataset_ids=dataset_ids,
-                selected_candidate_id=chosen.candidate_id,
-                expected_release_id=first.release_id,
-                expected_spec_hash=first.spec_hash,
-                expected_index_snapshot_id=first.index_snapshot_id,
-            ),
-            actor_id="tenant-1",
+            code="UNKNOWN_FILTER_VALUE",
+            message="「卡布奇洛」不在「商品名称」的已发布取值里",
+            resolution="卡布奇诺",
         )
 
-        clarified = [item for item in gaps.saved if item.kind == "clarified"]
-        assert len(clarified) == 1
-        assert clarified[0].question == "随便看看"
-        assert clarified[0].resolution == "净收入"
+        assert len(gaps.saved) == 1
+        assert gaps.saved[0].kind == "unknown_value"
+        assert gaps.saved[0].resolution == "卡布奇诺"
 
-    def test_a_clarification_that_never_answers_is_not_a_suggestion(
-        self, sales_release
-    ) -> None:
-        """只弹了卡、用户没选，学不到任何东西——不能凭空生成别名建议。"""
+    def test_a_refusal_carries_no_answer(self, sales_release) -> None:
+        """拒答只知道失败了，正解未知——不能编一个出来。"""
 
-        release = _routed_release(sales_release)
         gaps = _CapturingGaps()
-        service, _gateway, _executor = _service(
-            release, query_embedding=False, query_failures=gaps
-        )
+        service, _gateway, _executor = self._service_with(sales_release, gaps)
 
-        service.query(
-            QueryRequest(
-                project_id="sales",
-                question="随便看看",
-                dataset_ids=("sales_dataset", "customer_scope"),
-            ),
+        service._record_vocabulary_gap(
+            QueryRequest(project_id="sales", question="各城市有哪些门店"),
+            kind="refused",
+            published=service._releases.published,
+            effective_question="各城市有哪些门店",
             actor_id="tenant-1",
+            code="QUERY_EXECUTION_FAILED",
+            message="postgres query failed",
         )
 
-        assert [item for item in gaps.saved if item.kind == "clarified"] == []
+        assert gaps.saved[0].kind == "refused"
+        assert gaps.saved[0].resolution == ""
 
-    def test_a_choice_whose_query_fails_is_not_suggested_either(self, sales_release) -> None:
-        """选了但没答出来：这次选择没被验证过，不该推荐给建模者。"""
+    def test_recording_never_breaks_the_answer(self, sales_release) -> None:
+        """记录是旁路：它自己出错不能把一次已经算好的回答变成失败。"""
 
-        release = _routed_release(sales_release)
-        gaps = _CapturingGaps()
-        llm = _FixedS2SqlGateway('SELECT SUM("退款金额") FROM "销售经营"')
-        service, _gateway, _executor = _service(
-            release, llm_gateway=llm, query_embedding=False, query_failures=gaps
-        )
-        dataset_ids = ("sales_dataset", "customer_scope")
+        class _Exploding:
+            def save_failure(self, record, *, actor_id, project_id):
+                raise RuntimeError("disk full")
 
-        first = service.query(
-            QueryRequest(project_id="sales", question="随便看看", dataset_ids=dataset_ids),
+        service, _gateway, _executor = self._service_with(sales_release, _Exploding())
+
+        service._record_vocabulary_gap(
+            QueryRequest(project_id="sales", question="x"),
+            kind="clarified",
+            published=service._releases.published,
+            effective_question="x",
             actor_id="tenant-1",
+            code="SEMANTIC_CLARIFIED",
+            message="用户确认要看的是「净收入」",
+            resolution="净收入",
         )
-        chosen = next(item for item in first.options if item.label == "净收入")
-        service.query(
-            QueryRequest(
-                project_id="sales",
-                question="随便看看",
-                dataset_ids=dataset_ids,
-                selected_candidate_id=chosen.candidate_id,
-                expected_release_id=first.release_id,
-                expected_spec_hash=first.spec_hash,
-                expected_index_snapshot_id=first.index_snapshot_id,
-            ),
-            actor_id="tenant-1",
-        )
-
-        assert [item for item in gaps.saved if item.kind == "clarified"] == []
 
 
 class TestCrossScopeNameCollisionInTheUnion:
@@ -2135,3 +1987,38 @@ class TestCrossScopeNameCollisionInTheUnion:
         )
 
         assert _union_scope(release, ("sales_dataset", "customer_scope")) is None
+
+    def test_a_non_nested_tie_is_the_only_case_left_that_asks(self, sales_release) -> None:
+        """并集之后，唯一还需要问人的是「生成完了仍有多个互不嵌套的事实根能执行」。
+
+        嵌套的作用域由粒度收敛解开，同一事实根的重复由建模者去修——剩下的这种在冻结
+        路由下极少见，正说明卡片已经退成兜底而不是常态。这里钉的是机制本身：非嵌套的
+        并列解不开，而嵌套的能解开。
+        """
+
+        release = _routed_release(sales_release)
+        service, _gateway, _executor = _service(release, query_embedding=False)
+
+        # 订单 —many_to_one→ 客户：嵌套，取最粗的那个。
+        assert (
+            service._coarsest_scope(release, ("sales_dataset", "customer_scope"))
+            == "customer_scope"
+        )
+        # 没有从属关系时解不开——那时才问人。
+        flat = release.model_copy(update={"relations": ()})
+        assert service._coarsest_scope(flat, ("sales_dataset", "customer_scope")) is None
+
+    def test_the_card_names_members_that_tell_the_scopes_apart(self, sales_release) -> None:
+        """兜底卡的选项是能区分这几个范围的成员——选中成员即定下拥有它的范围。"""
+
+        release = _routed_release(sales_release)
+        service, _gateway, _executor = _service(release, query_embedding=False)
+
+        owners = service._scope_choice_owners(release, ("sales_dataset", "customer_scope"))
+        distinguishing = {
+            element_id for (_kind, element_id), scopes in owners.items() if len(scopes) == 1
+        }
+
+        assert distinguishing, "一个能区分的成员都没有，卡就是空的"
+        # 两个范围共有的成员不进选项：选了它也定不下范围。
+        assert "customer_segment" not in distinguishing

@@ -931,8 +931,8 @@ class AnalyticsQueryService:
                     # 无从判断——这要建模者去修，给卡等于把锅甩给他答不了的人。
                     if self._scopes_duplicate_a_root(release, tuple(bound)):
                         raise MappingError(
-                            "当前发布版本存在无法区分的内部分析路径，请联系建模管理员重新发布。",
-                            code="AMBIGUOUS_QUERY_SCOPE",
+                            "当前发布版本存在无法区分的内部分析路径。",
+                            code="QUERY_SCOPE_DUPLICATE_ROOTS",
                         )
                     # 不同事实根的并列才是真正需要问人的场合。问的是「你要看什么」，
                     # 不是「你要哪个分析范围」——作用域始终不出现在用户面前。
@@ -4175,6 +4175,17 @@ def _error_diagnosis(exc: AnalyticsError) -> QueryDiagnosis:
             summary="该项目的数据范围引用了当前版本里不存在的维度",
             recommendation="发布改名或删除维度后，需要同步更新受影响主体的数据范围配置。",
             user_hint=str(exc),
+        )
+    if exc.code == "QUERY_SCOPE_DUPLICATE_ROOTS":
+        # 同一事实根编译出了多个内部作用域。用户看不见它们的差异，也没法替系统挑；
+        # 套通用文案会变成「换一种说法」——换多少次都没用，这是要建模者去修的。
+        return QueryDiagnosis(
+            category=QueryDiagnosticCategory.MODEL_VERSION,
+            stage=QueryStage.FINAL_PARSING.value,
+            severity="error",
+            summary="同一业务对象编译出了多个无法区分的内部分析路径",
+            recommendation="检查该事实根下重复的作用域，收敛后重新发布。",
+            user_hint="当前发布版本存在无法区分的内部分析路径，请联系建模管理员重新发布。",
         )
     if exc.code == "S2SQL_CONTRADICTORY_FILTER":
         # 模型用"永不成立的条件"顶掉了它表达不了的那部分。照通用文案说"没能理解"

@@ -182,6 +182,18 @@ Mapper + selected SemanticParseInfo
 
 这不是收窄规则的缺陷：旧的业务对象卡同样保护不了它（选项是"销售单 / 销售明细 / 门店"，用户看到自己说的「门店」就会选门店，得到同一个错答）。正解是在业务词典中补别名，让「卖」这类说法映射到销售指标或销售明细，而不是恢复卡片。作用域路由按合同不读问题文本，不能凭动词改判。
 
+## 12.1 空结果的两种含义
+
+空结果是数据事实，"系统没能表达问题"不是。两者必须分开：
+
+| 形态 | 处理 |
+| --- | --- |
+| 模型用永不成立的条件（`1=0`、`FALSE`）顶掉表达不了的部分 | `S2SQL_CONTRADICTORY_FILTER` 拒绝。判据是 sqlglot 常量折叠：任一 SELECT 的 WHERE/HAVING 归约为 FALSE。`1=1` 等无害占位、OR 分支、子查询过滤都不受影响 |
+| 0 行且过滤值不在该维度已发布取值里 | 指名道姓说出来；编辑相似度 ≥0.6 才给近似建议（卡布奇洛→卡布奇诺 0.75 建议；摩卡 0.33 不猜） |
+
+只判文本取值、只看已发布取值的维度、只在过滤投影完整时判。措辞是"不在已发布取值里"
+而不是"不存在"——高基数维度的取值可能只是抽样。
+
 ## 13. 合同测试
 
 | 合同 | 测试 |
@@ -192,6 +204,8 @@ Mapper + selected SemanticParseInfo
 | 端到端不出弱指标卡、归属路由到位 | `tests/unit/test_global_scope_routing.py` |
 | exact 维度否决 | `tests/unit/test_scope_resolver.py` |
 | settlement obligation | `tests/unit/test_query_stage_pipeline.py` |
+| 矛盾过滤条件拒绝 | `tests/unit/test_textual_s2sql_pipeline.py` |
+| 未发布取值提示与近似建议 | `tests/unit/test_diagnosis_user_hints.py` |
 
 ## 14. 版本演进规则
 

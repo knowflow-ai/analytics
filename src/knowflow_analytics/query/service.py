@@ -7,14 +7,16 @@ import logging
 import secrets
 import time
 import uuid
-from collections import Counter
+from collections import Counter, defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from difflib import SequenceMatcher
 from typing import Protocol
 
 from knowflow_analytics.catalog.store import PublishedRelease
 from knowflow_analytics.contracts import (
+    DimensionValueSpec,
     FilterOperator,
     FixedFilter,
     OutputColumn,
@@ -1060,6 +1062,16 @@ class AnalyticsQueryService:
                         parser=corrected.parser,
                         llm_enabled=self._orchestrator.llm_enabled,
                         audit_complete=audit_complete,
+                        # 只有 0 行才需要解释：有结果就说明过滤生效了。投影不完整时
+                        # 我们并不知道真实过滤条件，不能拿它去指认用户的说法。
+                        unpublished_values=(
+                            _unpublished_filter_values(
+                                release,
+                                filters=_equality_filter_values(translated.audit_query),
+                            )
+                            if audit_complete and result.row_count == 0
+                            else ()
+                        ),
                     ),
                     include_diagnostics=request.include_diagnostics,
                 ),
@@ -3366,12 +3378,100 @@ def _filter_operator_label(value: str) -> str:
     }.get(value, value)
 
 
+_SUGGESTION_SIMILARITY = 0.6
+
+
+def _equality_filter_values(query: SemanticQuery) -> tuple[tuple[str, object], ...]:
+    """取"等于/属于"这类能把结果打空的过滤值；范围与空值判断不在此列。"""
+
+    values: list[tuple[str, object]] = []
+    for item in query.filters:
+        if item.operator is FilterOperator.EQ:
+            values.append((item.dimension_id, item.value))
+        elif item.operator is FilterOperator.IN and isinstance(item.value, (list, tuple)):
+            values.extend((item.dimension_id, entry) for entry in item.value)
+    return tuple(values)
+
+
+def _unpublished_filter_values(
+    release: SemanticRelease,
+    *,
+    filters: tuple[tuple[str, object], ...],
+) -> tuple[tuple[str, str, str | None], ...]:
+    """结果为空时，指出哪个过滤值不在该维度的已发布取值里。
+
+    实机：商品叫「卡布奇诺」，用户打成「卡布奇洛」，系统照样翻成
+    ``商品名称 = '卡布奇洛'`` 执行成功、0 行，界面只说"查询成功，但没有返回数据"——
+    用户读到的是"没有门店卖这个"，而真相是这个说法系统根本不认识。
+
+    只在文本取值上判断（数值取值有 ``20`` 与 ``20.00`` 这类等价写法，比对会误报），
+    且只看已经发布了取值的维度：没发布取值的维度无从判断，不能因为"没查到"就说
+    人家说法不对。近似建议用编辑相似度，够不到阈值就不猜——猜错比不猜更糟。
+
+    返回 ``(维度业务名, 过滤值, 建议值或 None)``。
+    """
+
+    dimensions = {item.id: item for item in release.dimensions}
+    values_by_dimension: dict[str, list[DimensionValueSpec]] = defaultdict(list)
+    for value in release.dimension_values:
+        if value.enabled:
+            values_by_dimension[value.dimension_id].append(value)
+
+    found: list[tuple[str, str, str | None]] = []
+    for dimension_id, raw_value in filters:
+        dimension = dimensions.get(dimension_id)
+        published = values_by_dimension.get(dimension_id, [])
+        if dimension is None or not published or not isinstance(raw_value, str):
+            continue
+        if any(not isinstance(item.value, str) for item in published):
+            continue
+        needle = normalize_text(raw_value)
+        known = {
+            normalize_text(text)
+            for item in published
+            for text in (str(item.value), item.display_name, *item.aliases)
+        }
+        if not needle or needle in known:
+            continue
+        score, closest = max(
+            (SequenceMatcher(None, raw_value, item.display_name).ratio(), item.display_name)
+            for item in published
+        )
+        found.append(
+            (dimension.name, raw_value, closest if score >= _SUGGESTION_SIMILARITY else None)
+        )
+    return tuple(found)
+
+
 def _success_diagnosis(
     *,
     parser: str,
     llm_enabled: bool,
     audit_complete: bool = True,
+    unpublished_values: tuple[tuple[str, str, str | None], ...] = (),
 ) -> QueryDiagnosis:
+    if unpublished_values:
+        # 空结果有两种完全不同的含义：数据里确实没有，和这个说法系统不认识。
+        # 只说"没有返回数据"会让用户把后者当成前者——一句关于他自己业务的假话。
+        unknown = "、".join(
+            (
+                f"「{value}」（{dimension}，是不是想问「{suggestion}」？）"
+                if suggestion
+                else f"「{value}」（{dimension}）"
+            )
+            for dimension, value, suggestion in unpublished_values
+        )
+        return QueryDiagnosis(
+            category=QueryDiagnosticCategory.MAPPING,
+            stage=QueryStage.EXECUTING.value,
+            severity="warning",
+            summary="过滤条件里的取值不在该维度的已发布取值里",
+            recommendation=(
+                "确认拼写，或把这个说法补成维度值别名；"
+                "若该维度取值只是抽样发布，本提示可以忽略。"
+            ),
+            user_hint=f"没有查到数据。{unknown}不在已发布的取值里，可能是这个原因。",
+        )
     if not audit_complete:
         # The executed SQL is authoritative and correct; only the audit
         # projection behind `interpretation` cannot represent it. Saying so is

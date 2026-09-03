@@ -190,3 +190,48 @@ def test_large_table_sampling_has_a_mysql_form(mysql, snapshot):
 
     assert profile.error is None
     assert profile.truncated is True
+
+
+@pytest.mark.mysql
+def test_schema_listing_hides_mysql_system_databases(mysql):
+    """MySQL 把系统库也当 schema 暴露出来。
+
+    实测：mysql(38 张表)、performance_schema(111)、sys(101)。原来的排除规则是
+    PostgreSQL 形状的（information_schema 与 pg_*），这三个会直接出现在用户的
+    schema 选择器里。
+    """
+
+    names = SchemaIntrospector(mysql, dialect=SqlDialect.MYSQL).list_schemas()
+
+    assert "mysql" not in names
+    assert "performance_schema" not in names
+    assert "sys" not in names
+    assert "information_schema" not in names
+
+
+@pytest.mark.mysql
+def test_schema_listing_keeps_the_business_database(mysql):
+    from sqlalchemy import inspect as sa_inspect
+
+    names = SchemaIntrospector(mysql, dialect=SqlDialect.MYSQL).list_schemas()
+
+    assert sa_inspect(mysql).default_schema_name in names
+
+
+@pytest.mark.mysql
+def test_schema_listing_omits_empty_schemas(mysql):
+    """空 schema 不该出现。
+
+    选进去一张表都没有，用户会以为数据源配错了。这条在 MySQL 上用一个空库验证；
+    PostgreSQL 上更常见——每个库自带的 public 在表建在别处时就是空的。
+    """
+
+    with mysql.begin() as connection:
+        connection.exec_driver_sql("CREATE DATABASE IF NOT EXISTS kf_empty_probe")
+    try:
+        names = SchemaIntrospector(mysql, dialect=SqlDialect.MYSQL).list_schemas()
+
+        assert "kf_empty_probe" not in names
+    finally:
+        with mysql.begin() as connection:
+            connection.exec_driver_sql("DROP DATABASE IF EXISTS kf_empty_probe")

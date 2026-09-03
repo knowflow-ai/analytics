@@ -28,6 +28,8 @@ export function TablesPanel({ projectId, revision, acceptRevision, readOnly }: P
   const [filter, setFilter] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
+  // 优先 public：多数 PostgreSQL 库把业务表放在那儿。服务端已经不再返回空 schema，
+  // 所以 public 出现在列表里就意味着它真的有表——空的时候会自然落到第一个有表的。
   useEffect(() => {
     if (!schema && schemas.data?.items.length) {
       setSchema(schemas.data.items.includes('public') ? 'public' : schemas.data.items[0]);

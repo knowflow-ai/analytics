@@ -301,6 +301,23 @@ class SemanticMapper:
             channel=MappingEvidenceChannel.DICTIONARY,
         )
         matches.extend(dictionary)
+        # 用户明确选定的指标原样透传：它没有被问句召回过，任何基于问句的阈值、
+        # 前缀或最长命中规则都会把它筛掉——而它恰恰是用户唯一说清楚的东西。
+        matches.extend(
+            SchemaMatch(
+                entry_id=item.entry_id,
+                dataset_id=dataset_id,
+                element_type=item.element_type,
+                element_id=item.element_id,
+                phrase=item.phrase,
+                detected_text=item.detected_text,
+                method=MatchMethod.CONFIRMED,
+                score=1.0,
+                priority=item.priority,
+            )
+            for item in direct
+            if item.channel is MappingEvidenceChannel.CONFIRMED
+        )
         matches.extend(
             self._project_database_evidence(
                 direct,

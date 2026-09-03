@@ -836,9 +836,11 @@ def test_typed_semantic_options_do_not_inject_a_same_id_dimension_value(
     }
 
 
-def test_scope_fallback_is_presented_as_business_objects_not_datasets(
+def test_scope_fallback_is_presented_as_governed_metrics_not_datasets(
     sales_release,
 ) -> None:
+    """作用域定不下来时给的是指标，且一个内部名都不许露出来。"""
+
     release = _routed_release(sales_release)
 
     service, _gateway, _executor = _service(release, query_embedding=False)
@@ -847,18 +849,19 @@ def test_scope_fallback_is_presented_as_business_objects_not_datasets(
         question="测试",
         dataset_ids=("sales_dataset", "customer_scope"),
     )
-    options = service._query_scope_options_for_dataset_ids(
+    options = service._scope_metric_options(
         release,
         ("sales_dataset", "customer_scope"),
         selection_context=context,
     )
 
-    assert {item.kind for item in options} == {"analysis_object"}
-    assert {item.label for item in options} == {"订单", "客户"}
+    assert {item.kind for item in options} == {"metric"}
+    assert "净收入" in {item.label for item in options}
     rendered = " ".join(f"{item.label} {item.description}" for item in options)
     assert "销售经营" not in rendered
     assert "客户范围" not in rendered
     assert "查询作用域" not in rendered
+    assert "sales_dataset" not in rendered
 
 
 def test_entity_attribute_routes_to_its_owner_without_a_business_object_card(
@@ -1105,9 +1108,10 @@ def test_one_human_card_bundles_semantic_and_business_grain_choices(
     assert second.state is QueryState.COMPLETED, second.model_dump_json(indent=2)
     assert second.semantic_query.dataset_id == "sales_dataset"
     assert second.semantic_query.dimension_ids == ("customer_segment",)
+    # 作用域仍由同一个 token 绑定，但不再作为「业务对象」决策报给用户——
+    # 它是内部执行计划，回答卡上不出现。
     assert {(item.source.value, item.chosen.kind) for item in second.semantic_decisions} == {
         ("human", "dimension"),
-        ("human", "analysis_object"),
     }
     assert gateway.calls == 1
     assert executor.calls == 1
@@ -1426,12 +1430,13 @@ def test_same_root_internal_scopes_are_not_duplicate_user_choices(
         question="测试",
         dataset_ids=("sales_dataset", "sales_duplicate", "customer_scope"),
     )
-    options = service._query_scope_options_for_dataset_ids(
+    options = service._scope_metric_options(
         release,
         ("sales_dataset", "sales_duplicate", "customer_scope"),
         selection_context=context,
     )
 
+    # 同一指标同时属于两个同根作用域，选了也定不下事实根——不给假选择。
     assert options == ()
     # The retired public-hash token algorithm is reproducible from Release API
     # fields.  Even a mathematically valid old token for the hidden duplicate
@@ -1721,3 +1726,152 @@ def test_verbatim_scope_name_anchors_a_cross_root_metric_collision_in_one_hop(
     assert completed.semantic_query.dataset_id == "customer_scope"
     assert completed.semantic_query.metric_ids == ("customer_revenue",)
     assert executor.calls == 1
+
+
+class TestScopeIsNeverAskedAboutDirectly:
+    """作用域是内部执行计划，任何时候都不许问用户。
+
+    实机（2026-09-03，demo_cafe）：「各门店的业绩」「各门店的营业额」「上个月各门店的
+    收入」「哪个门店卖得最多」四题都弹出「销售单 / 销售明细 / 门店」让用户挑——用户的
+    问题是「业绩」没被词典覆盖，卡片却让他去挑内部执行计划，答非所问，而且问一万次
+    系统也不会变聪明。
+
+    改成问指标：选项取候选作用域的受治理业务指标（不是从证据取——实测证据里唯一的
+    指标候选是从「门店」召回的默认计数 门店数量，正是要避开的噪声）。选中即确定事实根，
+    用户的选择还能回补业务词典。
+    """
+
+    def test_a_clarification_never_offers_an_analysis_object(self, sales_release) -> None:
+        release = _routed_release(sales_release)
+        service, _gateway, _executor = _service(release, query_embedding=False)
+
+        response = service.query(
+            QueryRequest(
+                project_id="sales",
+                question="随便看看",
+                dataset_ids=("sales_dataset", "customer_scope"),
+            ),
+            actor_id="tenant-1",
+        )
+
+        kinds = {item.kind for item in getattr(response, "options", ())}
+        assert "analysis_object" not in kinds, response.model_dump_json(indent=2)
+
+    def test_undecidable_scope_offers_governed_business_metrics(self, sales_release) -> None:
+        release = _routed_release(sales_release)
+        service, _gateway, _executor = _service(release, query_embedding=False)
+
+        response = service.query(
+            QueryRequest(
+                project_id="sales",
+                question="随便看看",
+                dataset_ids=("sales_dataset", "customer_scope"),
+            ),
+            actor_id="tenant-1",
+        )
+
+        assert response.state is QueryState.CLARIFICATION_REQUIRED
+        assert {item.kind for item in response.options} == {"metric"}
+        assert "净收入" in {item.label for item in response.options}
+
+    def test_choosing_a_metric_fixes_the_fact_root_and_runs(self, sales_release) -> None:
+        """选中的指标决定事实根——用户答的是业务问题，路由是系统的事。"""
+
+        release = _routed_release(sales_release)
+        llm = _FixedS2SqlGateway('SELECT SUM("净收入") FROM "销售经营"')
+        service, _gateway, executor = _service(release, llm_gateway=llm, query_embedding=False)
+        dataset_ids = ("sales_dataset", "customer_scope")
+
+        first = service.query(
+            QueryRequest(project_id="sales", question="随便看看", dataset_ids=dataset_ids),
+            actor_id="tenant-1",
+        )
+        chosen = next(item for item in first.options if item.label == "净收入")
+
+        second = service.query(
+            QueryRequest(
+                project_id="sales",
+                question="随便看看",
+                dataset_ids=dataset_ids,
+                selected_candidate_id=chosen.candidate_id,
+                expected_release_id=first.release_id,
+                expected_spec_hash=first.spec_hash,
+                expected_index_snapshot_id=first.index_snapshot_id,
+            ),
+            actor_id="tenant-1",
+        )
+
+        assert second.state is QueryState.COMPLETED, second.model_dump_json(indent=2)
+        assert second.semantic_query.dataset_id == "sales_dataset"
+        assert second.semantic_query.metric_ids == ("net_revenue",)
+        assert executor.calls == 1
+
+    def test_a_chosen_metric_the_query_ignores_is_not_executed(self, sales_release) -> None:
+        """结算义务：生成的 SQL 没用上用户选的指标就不执行。
+
+        指标卡不是换个说法的作用域卡——用户选的是「我要看净收入」，回来一个别的
+        指标就是答非所问，哪怕事实根碰巧是对的。
+        """
+
+        release = _routed_release(sales_release)
+        llm = _FixedS2SqlGateway('SELECT SUM("退款金额") FROM "销售经营"')
+        service, _gateway, executor = _service(release, llm_gateway=llm, query_embedding=False)
+        dataset_ids = ("sales_dataset", "customer_scope")
+
+        first = service.query(
+            QueryRequest(project_id="sales", question="随便看看", dataset_ids=dataset_ids),
+            actor_id="tenant-1",
+        )
+        chosen = next(item for item in first.options if item.label == "净收入")
+
+        second = service.query(
+            QueryRequest(
+                project_id="sales",
+                question="随便看看",
+                dataset_ids=dataset_ids,
+                selected_candidate_id=chosen.candidate_id,
+                expected_release_id=first.release_id,
+                expected_spec_hash=first.spec_hash,
+                expected_index_snapshot_id=first.index_snapshot_id,
+            ),
+            actor_id="tenant-1",
+        )
+
+        assert second.state is not QueryState.COMPLETED, second.model_dump_json(indent=2)
+        assert executor.calls == 0
+
+    def test_a_forged_metric_outside_the_shown_card_is_refused(self, sales_release) -> None:
+        """token 绑定的是实际展示过的组合；没展示过的指标不能靠改 id 混进来。"""
+
+        release = _routed_release(sales_release)
+        service, _gateway, executor = _service(release, query_embedding=False)
+        dataset_ids = ("sales_dataset", "customer_scope")
+
+        first = service.query(
+            QueryRequest(project_id="sales", question="随便看看", dataset_ids=dataset_ids),
+            actor_id="tenant-1",
+        )
+        forged = service._selection_token(
+            release=release,
+            context=_selection_context_for(
+                service, question="随便看看", dataset_ids=dataset_ids
+            ),
+            dataset_id="customer_scope",
+            semantic_selection_id="scope_metric:net_revenue",
+        )
+
+        second = service.query(
+            QueryRequest(
+                project_id="sales",
+                question="随便看看",
+                dataset_ids=dataset_ids,
+                selected_candidate_id=forged,
+                expected_release_id=first.release_id,
+                expected_spec_hash=first.spec_hash,
+                expected_index_snapshot_id=first.index_snapshot_id,
+            ),
+            actor_id="tenant-1",
+        )
+
+        assert second.state is QueryState.FAILED
+        assert executor.calls == 0

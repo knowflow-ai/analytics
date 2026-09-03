@@ -28,6 +28,9 @@ class MatchMethod(StrEnum):
     EMBEDDING = "embedding"
     TERM = "term_description"
     ALL_FIELD = "all_field"
+    # 用户在指标卡上明确选择的指标。它没有被问句召回过——正因如此才需要问——
+    # 所以既不能伪装成 EXACT，也不能算进弱召回。
+    CONFIRMED = "confirmed"
 
 
 class MappingEvidenceChannel(StrEnum):
@@ -45,6 +48,7 @@ class MappingEvidenceChannel(StrEnum):
     TERM_DATABASE = "term_database"
     TERM_EMBEDDING = "term_embedding"
     MANIFEST = "manifest"
+    CONFIRMED = "confirmed"
 
 
 class MemoryStatus(StrEnum):

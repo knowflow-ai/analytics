@@ -45,6 +45,8 @@ from knowflow_analytics.query.contracts import (
     FailedQueryResponse,
     MapMode,
     MappingEvidence,
+    MappingEvidenceChannel,
+    MappingEvidenceMatch,
     MappingResult,
     MatchMethod,
     ObservedTrace,
@@ -289,6 +291,7 @@ class AnalyticsQueryService:
                 selected_element_id,
                 selected_element_type,
                 selected_time_dimension_id,
+                selected_scope_metric_id,
             ) = self._selection(
                 request,
                 published,
@@ -423,34 +426,67 @@ class AnalyticsQueryService:
                         ),
                     )
                     if unselected_scope.status is QueryScopeResolutionStatus.CLARIFICATION:
-                        object_options = self._query_scope_options_for_dataset_ids(
+                        # 重新推导上一轮实际展示过的那张卡，确认用户点的确实在里面，
+                        # 并把这次选择变成 FINAL_PARSING 的结算义务：生成的 S2SQL
+                        # 必须真的用上他选的指标，否则不执行。
+                        metric_options = self._scope_metric_options(
                             release,
                             unselected_scope.candidate_dataset_ids,
                             selection_context=selection_context,
                             allowed_element_ids=allowed_element_ids,
-                            carried_selection_id=self._semantic_selection_token(
-                                selected_element_id=selected_element_id,
-                                selected_element_type=selected_element_type,
-                                selected_time_dimension_id=selected_time_dimension_id,
-                            ),
                         )
-                        chosen_object = next(
+                        chosen_metric = next(
                             (
                                 item
-                                for item in object_options
+                                for item in metric_options
                                 if item.dataset_id == candidate_selection_id
+                                and item.element_id == selected_scope_metric_id
                             ),
                             None,
                         )
-                        if chosen_object is not None:
-                            automatic_decisions.append(
-                                self._semantic_decision(
-                                    detected_text="业务记录粒度",
-                                    source=SemanticDecisionSource.HUMAN,
-                                    chosen=chosen_object,
-                                    options=object_options,
-                                )
+                        if selected_scope_metric_id is not None and chosen_metric is None:
+                            raise MappingError(
+                                "确认的指标不属于当前问题实际展示的候选。",
+                                code="CANDIDATE_NOT_FOUND",
                             )
+                        if chosen_metric is not None:
+                            # 把这次选择作为一条 confirmed 证据放回去：该指标从未被
+                            # 问句召回过（正因如此才需要问），不注入的话选定作用域的
+                            # 映射可能整个是空的，照样以 NO_SEMANTIC_MAPPING 拒答；
+                            # 注入后它也会出现在最终 LLM 的 mapped_constraints 里。
+                            global_evidence = global_evidence.model_copy(
+                                update={
+                                    "matches": (
+                                        *global_evidence.matches,
+                                        self._confirmed_metric_evidence(
+                                            release,
+                                            metric_id=chosen_metric.element_id or "",
+                                            dataset_id=candidate_selection_id,
+                                        ),
+                                    )
+                                }
+                            )
+                            obligation = self._decision_obligation(
+                                release=release,
+                                detected_text=chosen_metric.label,
+                                source=SemanticDecisionSource.HUMAN,
+                                chosen=chosen_metric,
+                                options=metric_options,
+                            )
+                            # 只登记义务，不另记一条决策：结算通过后 settlement 会
+                            # 报同一次选择，两边都记会在回答卡上出现重复 chip。
+                            if obligation is not None:
+                                decision_obligations.append(obligation)
+                if (
+                    scope_resolution.status is QueryScopeResolutionStatus.CLARIFICATION
+                    and not global_evidence.matches
+                ):
+                    # 一条证据都没有时给指标卡是死路：选完之后每个作用域的映射
+                    # 依然是空的，照样以 NO_SEMANTIC_MAPPING 拒答。直接说实话。
+                    raise MappingError(
+                        "没有在已发布语义模型中找到可回答该问题的指标或维度",
+                        code="NO_SEMANTIC_MAPPING",
+                    )
                 if scope_resolution.status is QueryScopeResolutionStatus.CLARIFICATION:
                     ambiguous_metric_ids = tuple(
                         dict.fromkeys(
@@ -489,16 +525,12 @@ class AnalyticsQueryService:
                         if ambiguous_metric_ids
                         else bundled_scope_semantics[1]
                         if bundled_scope_semantics is not None
-                        else self._query_scope_options_for_dataset_ids(
+                        # 作用域是内部执行计划，不问用户。问指标：选中即确定事实根。
+                        else self._scope_metric_options(
                             release,
                             scope_resolution.candidate_dataset_ids,
                             selection_context=selection_context,
                             allowed_element_ids=allowed_element_ids,
-                            carried_selection_id=self._semantic_selection_token(
-                                selected_element_id=effective_selected_element_id,
-                                selected_element_type=effective_selected_element_type,
-                                selected_time_dimension_id=selected_time_dimension_id,
-                            ),
                         )
                     )
                     if (
@@ -562,10 +594,23 @@ class AnalyticsQueryService:
                         clarification_question = (
                             "同一说法对应多个业务指标，请确认具体口径。"
                             if ambiguous_metric_ids
-                            else "当前问题仍可落到多个业务分析对象，请确认你要分析什么。"
+                            else "这个问题可以从几个角度分析，请确认你要看哪个指标。"
                             if options
+                            # 没有选项有两种完全不同的原因，说法不能混：同一事实根
+                            # 有多个内部作用域是编译产物重复（用户答不了，要重新发布）；
+                            # 否则就是候选范围里没有可问的业务指标（说法没被覆盖）。
                             else (
-                                "当前发布版本存在无法区分的内部分析路径，请联系建模管理员重新发布。"
+                                "当前发布版本存在无法区分的内部分析路径，"
+                                "请联系建模管理员重新发布。"
+                            )
+                            if self._scope_metric_choice_is_fake(
+                                release,
+                                scope_resolution.candidate_dataset_ids,
+                                allowed_element_ids,
+                            )
+                            else (
+                                "当前问题没有对应到任何可分析的业务指标，"
+                                "请换一种说法，或在业务词典中补充你的说法。"
                             )
                         )
                         return ClarificationQueryResponse(
@@ -581,10 +626,13 @@ class AnalyticsQueryService:
                                 summary=(
                                     "同一说法对应多个业务指标。"
                                     if ambiguous_metric_ids
-                                    else "多个业务分析对象满足当前语义条件。"
+                                    else "问题没有确定到唯一指标，多个事实范围都可行。"
                                 ),
-                                recommendation="确认具体语义对象或事实范围后重新执行。",
-                                user_hint="请选择你要分析的业务对象。",
+                                recommendation=(
+                                    "确认指标后重新执行；反复出现同一说法时，"
+                                    "把它补进业务词典的别名。"
+                                ),
+                                user_hint="请选择你要分析的指标。",
                             ),
                             question=clarification_question,
                             options=options,
@@ -688,13 +736,14 @@ class AnalyticsQueryService:
                     }
                 )
             offered_candidates = self._clarification_scope_candidates(admitted_candidates)
-            scope_options = self._query_scope_options(
+            offered_scope_ids = tuple(dict.fromkeys(item.dataset_id for item in offered_candidates))
+            # legacy 逐 Dataset 发现路径同样不问作用域：问指标。
+            scope_options = self._scope_metric_options(
                 release,
-                offered_candidates,
+                offered_scope_ids,
                 selection_context=selection_context,
                 allowed_element_ids=allowed_element_ids,
             )
-            offered_scope_ids = tuple(dict.fromkeys(item.dataset_id for item in offered_candidates))
             if (
                 not use_global_scope_router
                 and candidate_selection_id is None
@@ -734,14 +783,27 @@ class AnalyticsQueryService:
                         category=QueryDiagnosticCategory.AMBIGUITY,
                         stage=QueryStage.CANDIDATE_DISCOVERY.value,
                         severity="warning",
-                        summary="同一问题匹配到多个业务分析对象",
-                        recommendation="重新发布带有业务对象信息的语义模型后再确认。",
-                        user_hint="当前版本无法安全地区分分析对象，请联系建模管理员。",
+                        summary="问题没有确定到唯一指标，多个事实范围都可行",
+                        recommendation=(
+                            "确认指标后重新执行；反复出现同一说法时，"
+                            "把它补进业务词典的别名。"
+                        ),
+                        user_hint="请选择你要分析的指标。",
                     ),
                     question=(
-                        "这个问题可以按多个业务对象分析，请确认你想分析哪一个。"
+                        "这个问题可以从几个角度分析，请确认你要看哪个指标。"
                         if scope_options
-                        else "当前发布版本缺少可区分的业务对象信息，请联系建模管理员重新发布。"
+                        else (
+                            "当前发布版本存在无法区分的内部分析路径，"
+                            "请联系建模管理员重新发布。"
+                        )
+                        if self._scope_metric_choice_is_fake(
+                            release, offered_scope_ids, allowed_element_ids
+                        )
+                        else (
+                            "当前问题没有对应到任何可分析的业务指标，"
+                            "请换一种说法，或在业务词典中补充你的说法。"
+                        )
                     ),
                     options=scope_options,
                 )
@@ -2346,6 +2408,9 @@ class AnalyticsQueryService:
     def _semantic_selection_tokens(release: SemanticRelease) -> tuple[str, ...]:
         return (
             *(f"element:metric:{metric.id}" for metric in release.metrics),
+            # 作用域指标选择：与 `element:metric:` 分开，因为它不要求该指标出现在
+            # 本轮证据里——用户说「业绩」时，「销售金额」根本没被召回。
+            *(f"scope_metric:{metric.id}" for metric in release.metrics),
             *(f"element:dimension:{dimension.id}" for dimension in release.dimensions),
             *(f"value:{value.id}" for value in release.dimension_values if value.enabled),
             *(
@@ -2355,31 +2420,173 @@ class AnalyticsQueryService:
             ),
         )
 
-    def _query_scope_options(
+    @staticmethod
+    def _confirmed_metric_evidence(
+        release: SemanticRelease,
+        *,
+        metric_id: str,
+        dataset_id: str,
+    ) -> MappingEvidenceMatch:
+        """用户在指标卡上的选择，作为一条独立来源的证据。
+
+        provenance 单列：既不是 EXACT（问句里根本没出现这个指标的说法），也不是
+        keyword/embedding 弱召回（它一次都没被召回）。只在用户选定的那个作用域内
+        可见——事实根已经由这次选择定死了。
+        """
+
+        metric = next(item for item in release.metrics if item.id == metric_id)
+        return MappingEvidenceMatch(
+            entry_id=f"confirmed:{metric_id}",
+            eligible_dataset_ids=(dataset_id,),
+            element_type=SemanticElementType.METRIC,
+            element_id=metric_id,
+            phrase=metric.name,
+            normalized_phrase=normalize_text(metric.name),
+            detected_text=metric.name,
+            method=MatchMethod.CONFIRMED,
+            score=1.0,
+            priority=0,
+            channel=MappingEvidenceChannel.CONFIRMED,
+            entry_source="confirmation",
+        )
+
+    @staticmethod
+    def _scope_roots(release: SemanticRelease, dataset_ids: tuple[str, ...]) -> dict[str, object]:
+        """候选作用域各自的业务事实根。
+
+        冻结路由给出事实根；legacy Release 没有路由，退回该作用域覆盖的模型集合——
+        它是这种情况下唯一能表达"同一个业务对象"的结构。
+        """
+
+        datasets = {item.id: item for item in release.datasets}
+        routes = {item.dataset_id: item for item in release.analysis_topic_routes}
+        roots: dict[str, object] = {}
+        for dataset_id in dataset_ids:
+            dataset = datasets.get(dataset_id)
+            if dataset is None:
+                continue
+            route = routes.get(dataset_id)
+            roots[dataset_id] = (
+                route.root_model_id if route is not None else tuple(sorted(dataset.model_ids))
+            )
+        return roots
+
+    @classmethod
+    def _scopes_duplicate_a_root(
+        cls, release: SemanticRelease, dataset_ids: tuple[str, ...]
+    ) -> bool:
+        """同一事实根有多个内部作用域。
+
+        它们是同一个业务对象的两套内部执行计划，差异对用户不可见也无从判断。已评审
+        合同：这种情况必须由确定性收敛或建模修复解决，绝不做成卡片——哪怕把它包装成
+        指标选择，用户实际上仍然是在挑执行计划。
+        """
+
+        roots = list(cls._scope_roots(release, dataset_ids).values())
+        return len(roots) != len({str(item) for item in roots})
+
+    @staticmethod
+    def _scope_metric_owners(
+        release: SemanticRelease,
+        dataset_ids: tuple[str, ...],
+        allowed_element_ids: frozenset[str] | None = None,
+    ) -> dict[str, set[str]]:
+        """候选作用域里每个受治理业务指标分别属于哪些候选作用域。
+
+        默认计数指标不算：它是「有多少个 X」的答案，不是用户说「业绩」时想要的。
+        """
+
+        metrics = {item.id for item in release.metrics}
+        datasets = {item.id: item for item in release.datasets}
+        routes = {item.dataset_id: item for item in release.analysis_topic_routes}
+        owners: dict[str, set[str]] = defaultdict(set)
+        for dataset_id in dataset_ids:
+            dataset = datasets.get(dataset_id)
+            if dataset is None:
+                continue
+            route = routes.get(dataset_id)
+            default_count = route.default_count_metric_id if route is not None else None
+            for metric_id in dataset.metric_ids:
+                if metric_id == default_count or metric_id not in metrics:
+                    continue
+                if allowed_element_ids is not None and metric_id not in allowed_element_ids:
+                    continue
+                owners[metric_id].add(dataset_id)
+        return owners
+
+    def _scope_metric_choice_is_fake(
         self,
         release: SemanticRelease,
-        candidates: tuple[ParsedSemanticCandidate, ...],
+        dataset_ids: tuple[str, ...],
+        allowed_element_ids: frozenset[str] | None = None,
+    ) -> bool:
+        """有业务指标，但没有一个只属于一个候选作用域。
+
+        多个内部作用域暴露同一批指标时，选哪个都定不下事实根。那是编译产物重复或
+        建模缺陷，用户回答不了——必须让建模者去修，而不是告诉他"你的说法没被覆盖"。
+        """
+
+        if self._scopes_duplicate_a_root(release, dataset_ids):
+            return True
+        owners = self._scope_metric_owners(release, dataset_ids, allowed_element_ids)
+        return bool(owners) and all(len(scopes) != 1 for scopes in owners.values())
+
+    def _scope_metric_options(
+        self,
+        release: SemanticRelease,
+        dataset_ids: tuple[str, ...],
         *,
         selection_context: _SelectionTokenContext,
         allowed_element_ids: frozenset[str] | None = None,
     ) -> tuple[ClarificationOption, ...]:
-        """Expose at most one candidate per materially different query scope.
+        """作用域定不下来时，问用户要分析哪个指标——绝不问要分析哪个对象。
 
-        Candidate ordering may rank parsers inside one scope, but it must not
-        silently decide which fact grain the user meant.  The existing candidate
-        id is the release-bound continuation token, so confirming a scope resumes
-        the unchanged textual-S2SQL pipeline rather than introducing a new stage.
+        选项取候选作用域的**受治理业务指标目录**，不是 Mapper 证据：实测（demo_cafe，
+        「各门店的业绩/营业额/收入」）证据里唯一的指标候选是从实体名「门店」召回的
+        默认计数「门店数量」，正是要避开的噪声；用户真正想要的「销售金额」一次都没
+        被召回。默认计数指标因此也排除在选项外——它是「有多少个 X」的答案，不是用户
+        说「业绩」时想要的东西。
+
+        只提供**恰好属于一个候选作用域**的指标：跨多个候选的指标选了也定不下事实根，
+        列出来等于给一个假选择。
         """
 
-        first_by_dataset: dict[str, ParsedSemanticCandidate] = {}
-        for candidate in candidates:
-            first_by_dataset.setdefault(candidate.dataset_id, candidate)
-        return self._query_scope_options_for_dataset_ids(
-            release,
-            tuple(first_by_dataset),
-            selection_context=selection_context,
-            allowed_element_ids=allowed_element_ids,
-        )
+        if self._scopes_duplicate_a_root(release, dataset_ids):
+            return ()
+        metrics = {item.id: item for item in release.metrics}
+        models = {item.id: item for item in release.models}
+        routes = {item.dataset_id: item for item in release.analysis_topic_routes}
+        owners = self._scope_metric_owners(release, dataset_ids, allowed_element_ids)
+
+        options: list[ClarificationOption] = []
+        for metric_id in sorted(owners):
+            scopes = owners[metric_id]
+            if len(scopes) != 1:
+                continue
+            dataset_id = next(iter(scopes))
+            metric = metrics[metric_id]
+            route = routes.get(dataset_id)
+            owner_model = models.get(route.root_model_id) if route is not None else None
+            description = metric.description or (
+                f"{owner_model.name}的{metric.name}" if owner_model else metric.name
+            )
+            options.append(
+                ClarificationOption(
+                    candidate_id=self._selection_token(
+                        release=release,
+                        context=selection_context,
+                        dataset_id=dataset_id,
+                        semantic_selection_id=f"scope_metric:{metric_id}",
+                    ),
+                    kind="metric",
+                    label=metric.name,
+                    description=description,
+                    element_type="metric",
+                    element_id=metric_id,
+                    dataset_id=dataset_id,
+                )
+            )
+        return tuple(options)
 
     def _bundle_semantic_scope_options(
         self,
@@ -2565,63 +2772,6 @@ class AnalyticsQueryService:
             for dataset_id in dataset_ids
         )
 
-    def _query_scope_options_for_dataset_ids(
-        self,
-        release: SemanticRelease,
-        dataset_ids: tuple[str, ...],
-        *,
-        selection_context: _SelectionTokenContext,
-        carried_selection_id: str | None = None,
-        allowed_element_ids: frozenset[str] | None = None,
-    ) -> tuple[ClarificationOption, ...]:
-        models = {item.id: item for item in release.models}
-        metrics = {item.id: item for item in release.metrics}
-        datasets = {item.id: item for item in release.datasets}
-        routes = {item.dataset_id: item for item in release.analysis_topic_routes}
-        datasets_by_root: dict[str, list[str]] = {}
-        for dataset_id in dataset_ids:
-            route = routes.get(dataset_id)
-            if route is None or route.root_model_id not in models:
-                return ()
-            datasets_by_root.setdefault(route.root_model_id, []).append(dataset_id)
-        if any(len(root_datasets) != 1 for root_datasets in datasets_by_root.values()):
-            return ()
-        options: list[ClarificationOption] = []
-        for root_model_id in sorted(datasets_by_root):
-            root_datasets = datasets_by_root[root_model_id]
-            # Two internal plans for the same business root are not meaningful
-            # user choices. They require deterministic compiler convergence or
-            # a modeling fix, never duplicate cards with hidden differences.
-            dataset_id = root_datasets[0]
-            model = models[root_model_id]
-            dataset = datasets[dataset_id]
-            # 「可分析指标：A、B、C」是直接枚举 Release 的名字清单，不经过证据，
-            # 所以列级白名单必须在这里再挡一次。
-            metric_names = [
-                metrics[item].name
-                for item in dataset.metric_ids
-                if item in metrics and (allowed_element_ids is None or item in allowed_element_ids)
-            ][:8]
-            description_parts = [model.description or f"按{model.name}业务记录分析"]
-            if metric_names:
-                description_parts.append(f"可分析指标：{'、'.join(metric_names)}")
-            candidate_id = self._selection_token(
-                release=release,
-                context=selection_context,
-                dataset_id=dataset_id,
-                semantic_selection_id=carried_selection_id,
-            )
-            options.append(
-                ClarificationOption(
-                    candidate_id=candidate_id,
-                    kind="analysis_object",
-                    label=model.name,
-                    description="；".join(description_parts),
-                    dataset_id=dataset_id,
-                )
-            )
-        return tuple(options)
-
     def _record_failure(
         self,
         request: QueryRequest,
@@ -2712,10 +2862,10 @@ class AnalyticsQueryService:
         published: PublishedRelease,
         *,
         selection_context: _SelectionTokenContext,
-    ) -> tuple[str | None, str | None, SemanticElementType | None, str | None]:
+    ) -> tuple[str | None, str | None, SemanticElementType | None, str | None, str | None]:
         selected_id = request.selected_candidate_id
         if selected_id is None:
-            return None, None, None, None
+            return None, None, None, None, None
         release = published.release
         if (
             request.expected_release_id != release.id
@@ -2732,7 +2882,20 @@ class AnalyticsQueryService:
             context=selection_context,
         )
         if not semantic_selection_ids:
-            return selected_dataset_id, None, None, None
+            return selected_dataset_id, None, None, None, None
+        # 作用域指标选择不走"必须属于本轮证据"那条校验：用户是在告诉我们他说的
+        # 「业绩」指哪个指标，而那个指标本来就没被召回。伪造由签名 token 挡——
+        # token 已绑定 project/actor/问句/dataset 集/版本/实际展示的组合与 TTL。
+        if len(semantic_selection_ids) == 1 and semantic_selection_ids[0].startswith(
+            "scope_metric:"
+        ):
+            return (
+                selected_dataset_id,
+                None,
+                None,
+                None,
+                semantic_selection_ids[0].removeprefix("scope_metric:"),
+            )
         if len(semantic_selection_ids) > 1:
             raise SemanticParsingError(
                 "组合确认项携带了不支持的语义类型，请重新提问",
@@ -2741,7 +2904,7 @@ class AnalyticsQueryService:
         semantic_selection_id = semantic_selection_ids[0]
         element_id, element_type, time_id = self._parse_semantic_selection_id(semantic_selection_id)
         if element_id is not None or time_id is not None:
-            return selected_dataset_id, element_id, element_type, time_id
+            return selected_dataset_id, element_id, element_type, time_id, None
         raise SemanticParsingError(
             "确认项携带的语义选择已失效，请重新提问",
             code="CANDIDATE_NOT_FOUND",

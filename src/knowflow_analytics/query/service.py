@@ -493,8 +493,15 @@ class AnalyticsQueryService:
                             # 推荐给建模者的别名。
                             clarified_choice = chosen_choice.label
                 # 作用域定不下来恰恰是并集要解决的事，不能抢在它之前弹卡。
+                #
+                # 只在有 LLM 时启用：并集的意义是让**理解**先于路由，而 Rule 解析器
+                # 不理解问句、只做模式匹配。给它更大的词汇表不会让它更准，只会给它更多
+                # 把不同事实根的成员混进一条查询的机会——那样的查询没有任何作用域能
+                # 翻译，本来能答的问题反而整条失败（合同测试复现）。
                 union = (
-                    _union_scope(release, dataset_ids) if candidate_selection_id is None else None
+                    _union_scope(release, dataset_ids)
+                    if candidate_selection_id is None and self._orchestrator.llm_enabled
+                    else None
                 )
                 if (
                     union is not None
@@ -3842,7 +3849,7 @@ def _union_scope(
             for scope in scopes
         )
     )
-    qualified = _qualified_union_names(release, members)
+    qualified = _qualified_union_names(release, members, scopes)
     if qualified is None:
         return None
     # 事实根取路径最多的那个：它能到达最多实体，冻结路由也最宽。
@@ -3967,6 +3974,7 @@ def _retarget_tables(corrected_s2sql: str, dataset_name: str) -> str:
 def _qualified_union_names(
     release: SemanticRelease,
     members: tuple[object, ...],
+    scopes: list,
 ) -> dict[str, str] | None:
     """给并集里跨模型重名的成员一个限定名，返回 ``限定名 -> 成员 ID``。
 
@@ -3978,7 +3986,12 @@ def _qualified_union_names(
     成员名是模型名的子串时用模型名，否则模型名+成员名；限定名若已被别人占用就不写，
     残余冲突照旧 fail-closed 走原路径，交给建模诊断去修。
 
-    同一模型内部的重名不在此列：那是建模缺陷，限定名也区分不了，仍由既有的同名澄清处理。
+    两种情况限定名救不了，照旧回退原路径：
+    - 同一模型内部的重名——限定名一样，区分不了；
+    - 某个候选作用域**内部**就有这组重名——翻译发生在真实作用域上，那里的符号表只认
+      规范名，还原回去照样歧义（合同测试 test_a_cross_model_name_collision 复现：
+      两个同名维度都在销售经营里，还原后 LLM_S2SQL_AMBIGUOUS_SYMBOL）。这类本来就是
+      既有同名澄清卡的场合。
     """
 
     models = {item.id: item for item in release.models}
@@ -3996,14 +4009,21 @@ def _qualified_union_names(
             continue
         if len({item.model_id for item in group}) != len(group):
             return None
+        ids = {item.id for item in group}
+        if any(
+            len(ids & (set(scope.metric_ids) | set(scope.dimension_ids))) > 1 for scope in scopes
+        ):
+            return None
         for element in group:
             model = models.get(element.model_id)
             if model is None:
                 return None
+            # 沿用项目已有的限定规范名写法「模型名.成员名」——符号表文档里说的
+            # "编译器产出的限定规范名"就是这个形状（客户.业务数量总计）。不另造一套。
             name = (
                 model.name
                 if normalize_text(element.name) in normalize_text(model.name)
-                else f"{model.name}{element.name}"
+                else f"{model.name}.{element.name}"
             )
             key = normalize_text(name)
             if key in taken or key in qualified:

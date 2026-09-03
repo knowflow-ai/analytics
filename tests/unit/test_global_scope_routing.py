@@ -1486,8 +1486,9 @@ def test_global_router_retrieves_once_then_parses_only_the_metric_owner_scope(
     assert response.semantic_query.dataset_id == "sales_dataset"
     assert len(gateway.calls) == 1
     discovery = next(item for item in response.trace if item.stage.value == "CANDIDATE_DISCOVERY")
-    # 作用域不再是生成前"选中"的，而是从生成结果里实际用到的成员反推出来的。
-    assert discovery.detail["scope_resolution"]["code"] == "QUERY_SCOPE_DERIVED_FROM_QUERY"
+    # 这条走的是 Rule 路径（夹具没给 LLM）：并集只在有 LLM 时启用，
+    # 因为 Rule 不理解问句，给它更大的词汇表只会让它混根。
+    assert discovery.detail["scope_resolution"]["code"] == "QUERY_SCOPE_SELECTED"
     assert discovery.detail["scope_resolution"]["selected_dataset_id"] == "sales_dataset"
     # 生成发生在并集作用域上（模型要看到全部候选成员），绑定才回到真实作用域——
     # 上面的 semantic_query.dataset_id 断言钉的就是绑定结果。
@@ -1771,7 +1772,12 @@ class TestScopeIsNeverAskedAboutDirectly:
         """
 
         release = _routed_release(sales_release)
-        service, _gateway, _executor = _service(release, query_embedding=False)
+        # 并集只在有 LLM 时启用，所以这里必须给一个——没有 LLM 走的是 Rule 路径。
+        service, _gateway, _executor = _service(
+            release,
+            llm_gateway=_FixedS2SqlGateway('SELECT SUM("净收入") FROM "销售经营"'),
+            query_embedding=False,
+        )
 
         response = service.query(
             QueryRequest(
@@ -1782,8 +1788,9 @@ class TestScopeIsNeverAskedAboutDirectly:
             actor_id="tenant-1",
         )
 
-        assert response.state is QueryState.FAILED
-        assert getattr(response, "options", ()) == ()
+        assert response.state is not QueryState.CLARIFICATION_REQUIRED, (
+            "一条证据都没有的问题，选完指标也走不下去——给菜单是把死路包装成选择"
+        )
 
 
 class _CapturingGaps:

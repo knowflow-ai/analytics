@@ -28,6 +28,7 @@ import { Badge, Button, Empty, Spinner, useToast } from '@analytics/components/u
 import { describeError, formatDateTime } from '@analytics/lib/labels';
 import type { WorkbenchContext } from './index';
 import { GoldenSuiteCard } from './golden-suite-card';
+import { evaluationGateTask } from './publish-gate';
 import { QualityReportCard } from './quality-report-card';
 import { StructuredTrial } from './structured-trial';
 import { appPath } from '@analytics/api/edition';
@@ -103,7 +104,6 @@ export function PublishPanel({ projectId, revision, acceptRevision, readOnly }: 
     queryFn: () => getCurrentEvaluation(projectId, revision.id),
   });
   const evalReport = evaluation.data?.report ?? null;
-  const evalReady = Boolean(evalReport?.gate_passed);
   // 发布门禁有三道:结构校验、数据质量、黄金评测。此前界面一道都没体现,
   // 用户只能靠点发布撞 409 才知道差什么。
   const publishTasks = [
@@ -119,16 +119,7 @@ export function PublishPanel({ projectId, revision, acceptRevision, readOnly }: 
             ? `${report.blocking_count} 个阻断问题`
             : `${pendingReviewCount} 项指标样本待确认`,
     },
-    {
-      key: 'evaluation',
-      label: '评测集',
-      done: evalReady,
-      hint: evalReady
-        ? `${evalReport?.total} 条用例全部通过`
-        : evalReport === null
-          ? '尚未运行评测'
-          : `${evalReport.passed}/${evalReport.total} 通过`,
-    },
+    { label: '评测集', ...evaluationGateTask(evalReport) },
   ];
   const publishReady = publishTasks.every((task) => task.done);
 

@@ -11,6 +11,7 @@ import {
 import type { AnalyticsEvaluationReport, AnalyticsRevision } from '@analytics/api/types';
 import { Badge, Button, Spinner, useToast } from '@analytics/components/ui';
 import { describeError } from '@analytics/lib/labels';
+import { evaluationRunInvalidations } from './publish-gate';
 
 /**
  * 评测集:发布前的量化关。
@@ -40,7 +41,15 @@ export function GoldenSuiteCard({
 
   const run = useMutation({
     mutationFn: () => evaluateSuite(projectId, revision.id, record!.suite),
-    onSuccess: setReport,
+    onSuccess: (result) => {
+      setReport(result);
+      // 结果同时也存进了服务端，发布门禁读的是那一份。不失效的话，这张卡显示
+      // "1/1 通过"，右边的发布前检查还写着"尚未运行评测"、发布按钮点不动——
+      // 两个面板对着同一次运行给出相反的说法，用户只能靠刷新页面撞出来。
+      for (const queryKey of evaluationRunInvalidations(projectId)) {
+        queryClient.invalidateQueries({ queryKey });
+      }
+    },
     onError: (error) => toast.error(describeError(error)),
   });
   const toggleMemory = useMutation({

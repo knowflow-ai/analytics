@@ -15,10 +15,8 @@ from knowflow_analytics.modeling.ai_modeller import AiSemanticModeller
 from knowflow_analytics.modeling.dimension_aliases import DimensionValueAliasSuggester
 from knowflow_analytics.query.corrector import LlmPhysicalSqlCorrector, LlmSqlCorrector
 from knowflow_analytics.query.exemplars import GoldenSuiteExemplarProvider
-from knowflow_analytics.query.intent_adjudicator import LlmIntentAdjudicator
 from knowflow_analytics.query.multi_turn import MultiTurnRewriter
 from knowflow_analytics.query.parser import LlmS2SqlParser, TextualS2SqlCorrector
-from knowflow_analytics.query.weak_metric_adjudicator import LlmWeakMetricAdjudicator
 from knowflow_analytics.settings import AnalyticsSettings
 
 
@@ -102,12 +100,6 @@ def create_app() -> FastAPI:
         dry_run_before_execute=settings.dry_run_before_execute,
         modeling_max_concurrency=settings.modeling_max_concurrency,
         selection_secret=service_secret,
-        weak_metric_adjudicator=LlmWeakMetricAdjudicator(model_gateway),
-        weak_metric_adjudication_mode=settings.weak_metric_adjudication_mode,
-        intent_adjudicator=LlmIntentAdjudicator(model_gateway),
-        semantic_intent_adjudication_mode=settings.semantic_intent_adjudication_mode,
-        analysis_object_adjudication_mode=settings.analysis_object_adjudication_mode,
-        confirmation_memory_ttl_seconds=settings.confirmation_memory_ttl_seconds,
     )
     api = create_api(
         application=application,

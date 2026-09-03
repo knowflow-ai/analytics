@@ -202,16 +202,11 @@ from knowflow_analytics.query.diagnostics import (
     render_query_diagnostic_export,
 )
 from knowflow_analytics.query.errors import SemanticParsingError
-from knowflow_analytics.query.intent_adjudicator import IntentAdjudicator
 from knowflow_analytics.query.mapper import SemanticMapper
 from knowflow_analytics.query.multi_turn import MultiTurnRewriter
 from knowflow_analytics.query.orchestrator import CandidateOrchestrator
 from knowflow_analytics.query.parser import LlmS2SqlParser, TextualS2SqlCorrector
 from knowflow_analytics.query.service import AnalyticsQueryService, ReleaseProvider
-from knowflow_analytics.query.weak_metric_adjudicator import (
-    WeakMetricAdjudicationMode,
-    WeakMetricAdjudicator,
-)
 from knowflow_analytics.semantic.index import EmbeddingGateway, SemanticIndexBuilder
 from knowflow_analytics.semantic.translator import SemanticTranslator
 
@@ -505,18 +500,6 @@ class AnalyticsApplication:
         modeling_job_workers: int = 2,
         modeling_max_concurrency: int | None = None,
         selection_secret: str | bytes | None = None,
-        weak_metric_adjudicator: WeakMetricAdjudicator | None = None,
-        weak_metric_adjudication_mode: WeakMetricAdjudicationMode | str = (
-            WeakMetricAdjudicationMode.OFF
-        ),
-        intent_adjudicator: IntentAdjudicator | None = None,
-        semantic_intent_adjudication_mode: WeakMetricAdjudicationMode | str = (
-            WeakMetricAdjudicationMode.SHADOW
-        ),
-        analysis_object_adjudication_mode: WeakMetricAdjudicationMode | str = (
-            WeakMetricAdjudicationMode.OFF
-        ),
-        confirmation_memory_ttl_seconds: int = 2_592_000,
         query_diagnostic_ttl_seconds: int = QUERY_DIAGNOSTIC_DEFAULT_TTL_SECONDS,
         query_diagnostic_result_rows: int = 0,
         query_diagnostic_queue_size: int = 64,
@@ -583,18 +566,6 @@ class AnalyticsApplication:
         )
         self._dry_run_before_execute = dry_run_before_execute
         self._selection_secret = selection_secret or secrets.token_bytes(32)
-        self._weak_metric_adjudicator = weak_metric_adjudicator
-        self._weak_metric_adjudication_mode = WeakMetricAdjudicationMode(
-            weak_metric_adjudication_mode
-        )
-        self._intent_adjudicator = intent_adjudicator
-        self._semantic_intent_adjudication_mode = WeakMetricAdjudicationMode(
-            semantic_intent_adjudication_mode
-        )
-        self._analysis_object_adjudication_mode = WeakMetricAdjudicationMode(
-            analysis_object_adjudication_mode
-        )
-        self._confirmation_memory_ttl_seconds = confirmation_memory_ttl_seconds
         if not 0 < query_diagnostic_ttl_seconds <= QUERY_DIAGNOSTIC_MAX_TTL_SECONDS:
             raise ValueError("query diagnostic ttl is outside its retention limit")
         if not 0 <= query_diagnostic_result_rows <= QUERY_DIAGNOSTIC_MAX_RESULT_ROWS:
@@ -3304,68 +3275,6 @@ class AnalyticsApplication:
 
         return self.catalog.list_failures(project_id=project_id, limit=limit)
 
-    def list_confirmation_memories(self, *, project_id: str, actor_id: str):
-        return self.catalog.list_confirmation_memories(
-            actor_id=actor_id,
-            project_id=project_id,
-        )
-
-    def revoke_confirmation_memory(
-        self,
-        *,
-        project_id: str,
-        actor_id: str,
-        memory_id: str,
-    ) -> bool:
-        return self.catalog.revoke_confirmation_memory(
-            memory_id=memory_id,
-            actor_id=actor_id,
-            project_id=project_id,
-            revoked_at=datetime.now(UTC),
-        )
-
-    def list_confirmation_suggestions(self, *, project_id: str, actor_id: str):
-        from knowflow_analytics.query.confirmation_memory import ConfirmationSuggestion
-
-        grouped: dict[tuple[str, str, str | None, str | None], list] = {}
-        for memory in self.catalog.list_confirmation_memories(
-            actor_id=actor_id,
-            project_id=project_id,
-        ):
-            key = (
-                memory.normalized_phrase,
-                memory.selection_kind,
-                memory.semantic_element_id,
-                memory.dataset_id,
-            )
-            grouped.setdefault(key, []).append(memory)
-        return tuple(
-            ConfirmationSuggestion(
-                id=(
-                    "csug_"
-                    + content_hash(
-                        {
-                            "project_id": project_id,
-                            "normalized_phrase": key[0],
-                            "selection_kind": key[1],
-                            "semantic_element_id": key[2],
-                            "dataset_id": key[3],
-                        }
-                    ).removeprefix("sha256:")[:20]
-                ),
-                detected_text=max(items, key=lambda item: item.created_at).detected_text,
-                selection_kind=key[1],
-                semantic_element_id=key[2],
-                dataset_id=key[3],
-                confirmation_count=len(items),
-                latest_confirmed_at=max(item.created_at for item in items),
-            )
-            for key, items in sorted(
-                grouped.items(),
-                key=lambda item: tuple("" if value is None else value for value in item[0]),
-            )
-        )
-
     def list_golden_suites(self, revision_id: str) -> tuple[GoldenSuiteRecord, ...]:
         revision = self.catalog.get_revision(revision_id)
         return tuple(
@@ -4122,11 +4031,4 @@ class AnalyticsApplication:
             query_failures=self.catalog,
             dry_run_before_execute=self._dry_run_before_execute,
             selection_secret=self._selection_secret,
-            weak_metric_adjudicator=self._weak_metric_adjudicator,
-            weak_metric_adjudication_mode=self._weak_metric_adjudication_mode,
-            intent_adjudicator=self._intent_adjudicator,
-            semantic_intent_adjudication_mode=self._semantic_intent_adjudication_mode,
-            analysis_object_adjudication_mode=self._analysis_object_adjudication_mode,
-            confirmation_memories=self.catalog,
-            confirmation_memory_ttl_seconds=self._confirmation_memory_ttl_seconds,
         )

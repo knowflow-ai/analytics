@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Annotated, Any, Literal
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Path, Query, Request, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -1005,7 +1005,6 @@ def create_api(
             project_id=project_id, data_source_id=payload.data_source_id
         )
         return {"bound": True}
-
 
     @app.get("/v1/analytics/projects")
     def list_projects(
@@ -2252,72 +2251,6 @@ def create_api(
             "items": [
                 item.model_dump(mode="json")
                 for item in application.list_query_failures(project_id, limit=limit)
-            ]
-        }
-
-    @app.get("/v1/analytics/projects/{project_id}/confirmation-memories")
-    def list_confirmation_memories(
-        project_id: str,
-        request_context: Context,
-    ):
-        require_project(project_id, request_context)
-        return {
-            "items": [
-                {
-                    "id": item.id,
-                    "detected_text": item.detected_text,
-                    "selection_kind": item.selection_kind,
-                    "created_at": item.created_at.isoformat(),
-                    "expires_at": item.expires_at.isoformat(),
-                }
-                for item in application.list_confirmation_memories(
-                    project_id=project_id,
-                    actor_id=request_context.actor_id,
-                )
-            ]
-        }
-
-    @app.delete("/v1/analytics/projects/{project_id}/confirmation-memories/{memory_id}")
-    def revoke_confirmation_memory(
-        project_id: str,
-        memory_id: Annotated[str, Path(min_length=1, max_length=128)],
-        request_context: Context,
-    ):
-        require_project(project_id, request_context)
-        revoked = application.revoke_confirmation_memory(
-            project_id=project_id,
-            actor_id=request_context.actor_id,
-            memory_id=memory_id,
-        )
-        if not revoked:
-            raise HTTPException(status_code=404, detail="confirmation memory not found")
-        return {"revoked": True}
-
-    @app.get("/v1/analytics/projects/{project_id}/confirmation-suggestions")
-    def list_confirmation_suggestions(
-        project_id: str,
-        request_context: Context,
-    ):
-        require_project(project_id, request_context)
-        return {
-            "items": [
-                {
-                    "id": item.id,
-                    "detected_text": item.detected_text,
-                    "selection_kind": item.selection_kind,
-                    # 建模面要据此把「用户反复确认的说法」一键采纳为该元素的别名；
-                    # 不给 ID 就只能看不能做。这是建模 API，不是问数普通 wire——
-                    # 零泄漏合同约束的是后者，建模工作台本来就在编辑这些语义对象。
-                    # 业务名由建模端从已加载的目录解析，核心不重复维护一份。
-                    "semantic_element_id": item.semantic_element_id,
-                    "confirmation_count": item.confirmation_count,
-                    "latest_confirmed_at": item.latest_confirmed_at.isoformat(),
-                    "status": item.status,
-                }
-                for item in application.list_confirmation_suggestions(
-                    project_id=project_id,
-                    actor_id=request_context.actor_id,
-                )
             ]
         }
 

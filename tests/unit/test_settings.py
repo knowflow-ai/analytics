@@ -62,38 +62,3 @@ def test_modeling_concurrency_is_configurable():
 
     assert _settings().modeling_max_concurrency == 5
     assert _settings(modeling_max_concurrency=1).modeling_max_concurrency == 1
-
-
-def test_weak_metric_adjudication_defaults_to_shadow_and_supports_rollout_modes():
-    assert _settings().weak_metric_adjudication_mode == "shadow"
-    assert _settings(weak_metric_adjudication_mode="shadow").weak_metric_adjudication_mode == (
-        "shadow"
-    )
-    assert _settings(weak_metric_adjudication_mode="off").weak_metric_adjudication_mode == "off"
-
-
-def test_analysis_object_adjudication_has_an_independent_shadow_rollout():
-    assert _settings().analysis_object_adjudication_mode == "shadow"
-    assert (
-        _settings(analysis_object_adjudication_mode="auto").analysis_object_adjudication_mode
-        == "auto"
-    )
-
-
-def test_confirmation_memory_ttl_is_bounded_and_configurable():
-    assert _settings().confirmation_memory_ttl_seconds == 2_592_000
-    assert _settings(confirmation_memory_ttl_seconds=3600).confirmation_memory_ttl_seconds == 3600
-    assert (
-        _settings(analysis_object_adjudication_mode="off").analysis_object_adjudication_mode
-        == "off"
-    )
-
-
-def test_semantic_intent_adjudication_does_not_inherit_the_legacy_auto_gate():
-    settings = _settings(weak_metric_adjudication_mode="auto")
-    assert settings.weak_metric_adjudication_mode == "auto"
-    assert settings.semantic_intent_adjudication_mode == "shadow"
-    assert (
-        _settings(semantic_intent_adjudication_mode="auto").semantic_intent_adjudication_mode
-        == "auto"
-    )

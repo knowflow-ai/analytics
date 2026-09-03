@@ -6,7 +6,6 @@ import type {
   AnalyticsDimensionValue,
   AnalyticsEvaluationReport,
   AnalyticsGoldenSuiteRecord,
-  AnalyticsConfirmationSuggestion,
   AnalyticsQueryFailure,
   AnalyticsQueryDiagnosticExport,
   AnalyticsDictionaryPreview,
@@ -415,13 +414,6 @@ export const listQueryFailures = (projectId: string, limit = 100) =>
     projectId,
     query: { limit },
   });
-
-/** 线上反复被人工确认的说法：待审别名证据，不会自动改已发布版本。 */
-export const listConfirmationSuggestions = (projectId: string) =>
-  request<{ items: AnalyticsConfirmationSuggestion[] }>(
-    `${base(projectId)}/confirmation-suggestions`,
-    { projectId },
-  );
 
 /** 回滚线上 Release 到上一版。 */
 export const rollbackRelease = (projectId: string) =>

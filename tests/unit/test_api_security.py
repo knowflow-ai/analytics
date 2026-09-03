@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -15,7 +14,6 @@ from knowflow_analytics.api import (
     create_api,
 )
 from knowflow_analytics.contracts import QueryResult, SemanticQuery
-from knowflow_analytics.query.confirmation_memory import ConfirmationMemory
 from knowflow_analytics.query.contracts import (
     CompletedQueryResponse,
     DrilldownOption,
@@ -47,7 +45,6 @@ class _FakeApplication:
         self.last_dictionary_preview_request = None
         self.last_dictionary_apply_request = None
         self.last_query_rule_request = None
-        self.last_confirmation_memory_request = None
 
     def create_project(self, *, name, project_id):
         return {"id": project_id or "generated", "name": name, "active_release_id": None}
@@ -137,32 +134,6 @@ class _FakeApplication:
         self.last_dictionary_apply_request = kwargs
         return {"preview": {"id": kwargs["preview_id"]}, "revision": {"etag": 4}}
 
-    def list_confirmation_memories(self, **kwargs):
-        self.last_confirmation_memory_request = ("list", kwargs)
-        now = datetime(2026, 8, 29, tzinfo=UTC)
-        return (
-            ConfirmationMemory(
-                id="cmem-1",
-                actor_id=kwargs["actor_id"],
-                project_id=kwargs["project_id"],
-                release_id="release-1",
-                spec_hash="sha256:spec",
-                index_snapshot_id="idx-1",
-                detected_text="销售额",
-                normalized_phrase="销售额",
-                selection_kind="metric",
-                semantic_element_id="net_revenue",
-                candidate_set_hash="sha256:candidates",
-                exact_context_hash="sha256:context",
-                created_at=now,
-                expires_at=now + timedelta(days=30),
-            ),
-        )
-
-    def revoke_confirmation_memory(self, **kwargs):
-        self.last_confirmation_memory_request = ("revoke", kwargs)
-        return kwargs["memory_id"] == "cmem-1"
-
 
 def _client(application=None, **kwargs):
     return TestClient(
@@ -213,42 +184,6 @@ def test_signed_context_can_create_project_and_extra_input_is_rejected():
 
     assert accepted.status_code == 200
     assert rejected.status_code == 422
-
-
-def test_confirmation_memory_management_is_actor_and_project_scoped():
-    application = _FakeApplication()
-    client = _client(application)
-
-    listed = client.get(
-        "/v1/analytics/projects/sales/confirmation-memories",
-        headers=_HEADERS,
-    )
-    revoked = client.delete(
-        "/v1/analytics/projects/sales/confirmation-memories/cmem-1",
-        headers=_HEADERS,
-    )
-    missing = client.delete(
-        "/v1/analytics/projects/sales/confirmation-memories/unknown",
-        headers=_HEADERS,
-    )
-
-    assert listed.status_code == 200
-    memory_item = listed.json()["items"][0]
-    assert set(memory_item) == {
-        "id",
-        "detected_text",
-        "selection_kind",
-        "created_at",
-        "expires_at",
-    }
-    assert "actor_id" not in memory_item
-    assert "semantic_element_id" not in memory_item
-    assert revoked.json() == {"revoked": True}
-    assert missing.status_code == 404
-    assert application.last_confirmation_memory_request == (
-        "revoke",
-        {"project_id": "sales", "actor_id": "actor-1", "memory_id": "unknown"},
-    )
 
 
 def test_schema_snapshot_rejects_an_explicit_empty_table_scope():
@@ -892,45 +827,3 @@ def test_streaming_query_rejects_a_foreign_project():
     )
 
     assert response.status_code == 403
-
-
-class _ConfirmationSuggestionApplication(_FakeApplication):
-    def list_confirmation_suggestions(self, *, project_id, actor_id):
-        from datetime import UTC, datetime
-
-        from knowflow_analytics.query.confirmation_memory import ConfirmationSuggestion
-
-        assert project_id == "sales"
-        assert actor_id == "actor-1"
-        return (
-            ConfirmationSuggestion(
-                id="csug_1",
-                detected_text="销售额",
-                selection_kind="metric",
-                semantic_element_id="net_revenue",
-                dataset_id="sales_dataset",
-                confirmation_count=3,
-                latest_confirmed_at=datetime(2026, 9, 1, tzinfo=UTC),
-            ),
-        )
-
-
-def test_confirmation_suggestions_expose_the_target_element_to_the_modeling_surface():
-    """建模面要一键把说法采纳成该元素的别名，只给说法不给目标就只能看不能做。
-
-    这是建模 API；零泄漏合同约束的是问数普通 wire。作用域标识仍不外泄。
-    """
-
-    client = _client(_ConfirmationSuggestionApplication())
-
-    response = client.get(
-        "/v1/analytics/projects/sales/confirmation-suggestions", headers=_HEADERS
-    )
-
-    assert response.status_code == 200
-    item = response.json()["items"][0]
-    assert item["detected_text"] == "销售额"
-    assert item["semantic_element_id"] == "net_revenue"
-    assert item["confirmation_count"] == 3
-    # 作用域标识不进建模投影：采纳别名不需要知道它落在哪个 Scope。
-    assert "dataset_id" not in item

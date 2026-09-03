@@ -12,7 +12,6 @@ import secrets
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
 from fastapi import FastAPI
 from pydantic import Field
@@ -37,12 +36,8 @@ from knowflow_analytics.oss.gateways import (
 )
 from knowflow_analytics.query.corrector import LlmPhysicalSqlCorrector, LlmSqlCorrector
 from knowflow_analytics.query.exemplars import GoldenSuiteExemplarProvider
-from knowflow_analytics.query.intent_adjudicator import LlmIntentAdjudicator
 from knowflow_analytics.query.multi_turn import MultiTurnRewriter
 from knowflow_analytics.query.parser import LlmS2SqlParser, TextualS2SqlCorrector
-from knowflow_analytics.query.weak_metric_adjudicator import (
-    LlmWeakMetricAdjudicator,
-)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -69,14 +64,6 @@ class OssSettings(BaseSettings):
     modeling_max_concurrency: int = Field(default=3, ge=1, le=16)
     modeling_sample_values: bool = True
     multi_turn_enabled: bool = False
-    weak_metric_adjudication_mode: Literal["off", "shadow", "auto"] = "shadow"
-    semantic_intent_adjudication_mode: Literal["off", "shadow", "auto"] = "shadow"
-    analysis_object_adjudication_mode: Literal["off", "shadow", "auto"] = "shadow"
-    confirmation_memory_ttl_seconds: int = Field(
-        default=2_592_000,
-        ge=60,
-        le=31_536_000,
-    )
     # 自洽投票次数。1 = 单次生成(上游默认);调大后同一问题独立生成多次取多数,
     # 压 LLM 形态漂移,代价是每次问数的模型调用数 xN。
     self_consistency_number: int = Field(default=1, ge=1, le=8)
@@ -249,12 +236,6 @@ class OssRuntime:
             require_quality_report_for_publish=False,
             modeling_max_concurrency=settings.modeling_max_concurrency,
             selection_secret=self.service_secret,
-            weak_metric_adjudicator=LlmWeakMetricAdjudicator(model_gateway),
-            weak_metric_adjudication_mode=settings.weak_metric_adjudication_mode,
-            intent_adjudicator=LlmIntentAdjudicator(model_gateway),
-            semantic_intent_adjudication_mode=(settings.semantic_intent_adjudication_mode),
-            analysis_object_adjudication_mode=(settings.analysis_object_adjudication_mode),
-            confirmation_memory_ttl_seconds=settings.confirmation_memory_ttl_seconds,
         )
         api = create_api(
             application=application,

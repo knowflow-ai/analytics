@@ -11,7 +11,6 @@ from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from itertools import product
 from typing import Protocol
 
 from knowflow_analytics.catalog.store import PublishedRelease
@@ -36,11 +35,6 @@ from knowflow_analytics.query.ambiguity import (
     same_name_ambiguity,
     settle_after_parse,
 )
-from knowflow_analytics.query.confirmation_memory import (
-    ConfirmationMemory,
-    ConfirmationMemoryStore,
-    confirmation_candidate_set_hash,
-)
 from knowflow_analytics.query.contracts import (
     ClarificationOption,
     ClarificationQueryResponse,
@@ -49,7 +43,6 @@ from knowflow_analytics.query.contracts import (
     FailedQueryResponse,
     MapMode,
     MappingEvidence,
-    MappingEvidenceChannel,
     MappingResult,
     MatchMethod,
     ObservedTrace,
@@ -64,7 +57,6 @@ from knowflow_analytics.query.contracts import (
     QueryRowFilter,
     QueryStage,
     QueryTraceStep,
-    SchemaMatch,
     SemanticAmbiguityGroup,
     SemanticAmbiguityMember,
     SemanticDecision,
@@ -79,14 +71,6 @@ from knowflow_analytics.query.errors import (
 )
 from knowflow_analytics.query.failures import QueryFailureStore
 from knowflow_analytics.query.intent import reject_unsupported_intent
-from knowflow_analytics.query.intent_adjudicator import (
-    IntentAdjudicationBatchResult,
-    IntentAdjudicationCandidate,
-    IntentAdjudicationDecision,
-    IntentAdjudicationGroup,
-    IntentAdjudicationResult,
-    IntentAdjudicator,
-)
 from knowflow_analytics.query.multi_turn import (
     MultiTurnContext,
     MultiTurnRewriter,
@@ -98,12 +82,6 @@ from knowflow_analytics.query.rules import QueryRuleEngine
 from knowflow_analytics.query.scope_resolver import (
     QueryScopeResolutionStatus,
     QueryScopeResolver,
-)
-from knowflow_analytics.query.weak_metric_adjudicator import (
-    WeakMetricAdjudicationDecision,
-    WeakMetricAdjudicationMode,
-    WeakMetricAdjudicationResult,
-    WeakMetricAdjudicator,
 )
 from knowflow_analytics.semantic.index import (
     SemanticElementType,
@@ -214,19 +192,6 @@ class AnalyticsQueryService:
         dry_run_before_execute: bool = False,
         selection_secret: str | bytes | None = None,
         selection_token_ttl_seconds: int = 900,
-        weak_metric_adjudicator: WeakMetricAdjudicator | None = None,
-        weak_metric_adjudication_mode: WeakMetricAdjudicationMode | str = (
-            WeakMetricAdjudicationMode.OFF
-        ),
-        intent_adjudicator: IntentAdjudicator | None = None,
-        semantic_intent_adjudication_mode: WeakMetricAdjudicationMode | str = (
-            WeakMetricAdjudicationMode.SHADOW
-        ),
-        analysis_object_adjudication_mode: WeakMetricAdjudicationMode | str = (
-            WeakMetricAdjudicationMode.OFF
-        ),
-        confirmation_memories: ConfirmationMemoryStore | None = None,
-        confirmation_memory_ttl_seconds: int = 2_592_000,
     ) -> None:
         self._releases = releases
         self._orchestrator = orchestrator
@@ -254,21 +219,6 @@ class AnalyticsQueryService:
             raise ValueError("selection token ttl must be positive")
         self._selection_secret = secret
         self._selection_token_ttl_seconds = selection_token_ttl_seconds
-        self._weak_metric_adjudicator = weak_metric_adjudicator
-        self._weak_metric_adjudication_mode = WeakMetricAdjudicationMode(
-            weak_metric_adjudication_mode
-        )
-        self._intent_adjudicator = intent_adjudicator
-        self._semantic_intent_adjudication_mode = WeakMetricAdjudicationMode(
-            semantic_intent_adjudication_mode
-        )
-        self._analysis_object_adjudication_mode = WeakMetricAdjudicationMode(
-            analysis_object_adjudication_mode
-        )
-        if confirmation_memory_ttl_seconds <= 0:
-            raise ValueError("confirmation memory ttl must be positive")
-        self._confirmation_memories = confirmation_memories
-        self._confirmation_memory_ttl_seconds = confirmation_memory_ttl_seconds
 
     def query(
         self,
@@ -280,7 +230,6 @@ class AnalyticsQueryService:
     ) -> QueryResponse:
         query_id = request.query_id or f"q_{uuid.uuid4().hex}"
         tenant_id = str(actor_id or "").strip()
-        decision_now = datetime.now(UTC)
         # 列级权限白名单：None = 不收窄。核心只负责应用，不做权限判断——
         # 判断在宿主 BFF，与 dataset_ids 同源同一次请求传入。
         allowed_element_ids = (
@@ -300,18 +249,8 @@ class AnalyticsQueryService:
         published: PublishedRelease | None = None
         selection_context: _SelectionTokenContext | None = None
         selected_scope_dataset_id: str | None = None
-        ai_adjudicated_metric_id: str | None = None
-        ai_adjudicated_metric_ids: tuple[str, ...] = ()
-        memory_confirmed_metric_id: str | None = None
-        memory_confirmed_metric_ids: tuple[str, ...] = ()
-        semantic_intent_adjudication_detail: dict[str, object] | None = None
-        analysis_object_adjudication_detail: dict[str, object] | None = None
         decision_obligations: list[SemanticDecisionObligation] = []
         automatic_decisions: list[SemanticDecision] = []
-        pending_confirmation_memories: list[ConfirmationMemory] = []
-        confirmation_memory_detail: dict[str, object] | None = None
-        confirmation_memory_unavailable = False
-        weak_metric_adjudication_detail: dict[str, object] | None = None
         semantic_clarification_group: SemanticAmbiguityGroup | None = None
         option_dataset_ids: tuple[str, ...] = ()
         # 映射失败发生在多轮改写之前，那时 effective_question 还没赋值；失败记录
@@ -348,7 +287,6 @@ class AnalyticsQueryService:
                 selected_element_id,
                 selected_element_type,
                 selected_time_dimension_id,
-                selected_metric_bundle_ids,
             ) = self._selection(
                 request,
                 published,
@@ -365,8 +303,8 @@ class AnalyticsQueryService:
             # global evidence that produced its card. Pre-narrow only the legacy
             # time continuation; otherwise a competing root/member can disappear
             # before the signed choice is reconstructed and settled.
-            keep_global_selection_evidence = global_router_before_selection and (
-                selected_element_id is not None or selected_metric_bundle_ids
+            keep_global_selection_evidence = (
+                global_router_before_selection and selected_element_id is not None
             )
             if selected_scope_element_id is not None and not keep_global_selection_evidence:
                 dataset_ids = self._scope_datasets_to_selected_element(
@@ -416,101 +354,7 @@ class AnalyticsQueryService:
                     tenant_id=tenant_id,
                     allowed_element_ids=allowed_element_ids,
                 )
-                if selected_metric_bundle_ids:
-                    offered = self._weak_metric_confirmation(
-                        release=release,
-                        evidence=global_evidence,
-                        dataset_ids=dataset_ids,
-                        selection_context=selection_context,
-                    )
-                    chosen_bundle = next(
-                        (
-                            item
-                            for item in (offered[3] if offered is not None else ())
-                            if item.dataset_id == candidate_selection_id
-                            and tuple(
-                                selection_id.removeprefix("element:metric:")
-                                for selection_id in item.semantic_selection_ids
-                            )
-                            == selected_metric_bundle_ids
-                        ),
-                        None,
-                    )
-                    if offered is None or offered[0] != "metric_multi" or chosen_bundle is None:
-                        raise MappingError(
-                            "组合确认项不属于当前问题实际展示的候选。",
-                            code="CANDIDATE_NOT_FOUND",
-                        )
-                    phrase_groups = offered[5]
-                    selected_set = set(selected_metric_bundle_ids)
-                    selected_dataset = next(
-                        item for item in release.datasets if item.id == candidate_selection_id
-                    )
-                    selected_dataset_metrics = set(selected_dataset.metric_ids)
-                    selected_by_group: list[
-                        tuple[str, ClarificationOption, tuple[ClarificationOption, ...]]
-                    ] = []
-                    for detected_text, group_options in phrase_groups:
-                        choices = tuple(
-                            item for item in group_options if item.element_id in selected_set
-                        )
-                        if len(choices) != 1:
-                            raise MappingError(
-                                "组合确认项没有为每个业务说法选择唯一指标。",
-                                code="CANDIDATE_NOT_FOUND",
-                            )
-                        scoped_options = tuple(
-                            item.model_copy(
-                                update={
-                                    "candidate_id": self._selection_token(
-                                        release=release,
-                                        context=selection_context,
-                                        dataset_id=candidate_selection_id,
-                                        semantic_selection_id=(f"element:metric:{item.element_id}"),
-                                    ),
-                                    "dataset_id": candidate_selection_id or item.dataset_id,
-                                }
-                            )
-                            for item in group_options
-                            if item.element_id in selected_dataset_metrics
-                        )
-                        chosen = next(
-                            item
-                            for item in scoped_options
-                            if item.element_id == choices[0].element_id
-                        )
-                        selected_by_group.append((detected_text, chosen, scoped_options))
-                    if {
-                        item.element_id for _text, item, _options in selected_by_group
-                    } != selected_set:
-                        raise MappingError(
-                            "组合确认项与当前业务说法不一致。",
-                            code="CANDIDATE_NOT_FOUND",
-                        )
-                    for detected_text, chosen, group_options in selected_by_group:
-                        obligation = self._decision_obligation(
-                            release=release,
-                            detected_text=detected_text,
-                            source=SemanticDecisionSource.HUMAN,
-                            chosen=chosen,
-                            options=group_options,
-                        )
-                        if obligation is not None:
-                            decision_obligations.append(obligation)
-                        pending_memory = self._confirmation_memory_from_choice(
-                            actor_id=tenant_id,
-                            project_id=request.project_id,
-                            release=release,
-                            index_snapshot_id=index.id,
-                            detected_text=detected_text,
-                            chosen=chosen,
-                            options=group_options,
-                            exact_context_hash=self._exact_semantic_binding_hash(global_evidence),
-                            now=decision_now,
-                        )
-                        if pending_memory is not None:
-                            pending_confirmation_memories.append(pending_memory)
-                elif selected_element_id is not None and selected_element_type is not None:
+                if selected_element_id is not None and selected_element_type is not None:
                     offered = self._semantic_confirmation_for_current_evidence(
                         release=release,
                         evidence=global_evidence,
@@ -551,19 +395,6 @@ class AnalyticsQueryService:
                     )
                     if obligation is not None:
                         decision_obligations.append(obligation)
-                    pending_memory = self._confirmation_memory_from_choice(
-                        actor_id=tenant_id,
-                        project_id=request.project_id,
-                        release=release,
-                        index_snapshot_id=index.id,
-                        detected_text=offered_detected_text,
-                        chosen=chosen_option,
-                        options=offered_options,
-                        exact_context_hash=self._exact_semantic_binding_hash(global_evidence),
-                        now=decision_now,
-                    )
-                    if pending_memory is not None:
-                        pending_confirmation_memories.append(pending_memory)
                 confirmed_scope_id = candidate_selection_id
                 scope_resolution = QueryScopeResolver.from_release(release).resolve(
                     global_evidence.matches,
@@ -577,7 +408,6 @@ class AnalyticsQueryService:
                     selected_element_type=(
                         selected_element_type.value if selected_element_type is not None else None
                     ),
-                    human_confirmed_metric_ids=selected_metric_bundle_ids,
                 )
                 if candidate_selection_id is not None:
                     unselected_scope = QueryScopeResolver.from_release(release).resolve(
@@ -589,7 +419,6 @@ class AnalyticsQueryService:
                             if selected_element_type is not None
                             else None
                         ),
-                        human_confirmed_metric_ids=selected_metric_bundle_ids,
                     )
                     if unselected_scope.status is QueryScopeResolutionStatus.CLARIFICATION:
                         object_options = self._query_scope_options_for_dataset_ids(
@@ -612,21 +441,6 @@ class AnalyticsQueryService:
                             None,
                         )
                         if chosen_object is not None:
-                            pending_memory = self._confirmation_memory_from_choice(
-                                actor_id=tenant_id,
-                                project_id=request.project_id,
-                                release=release,
-                                index_snapshot_id=index.id,
-                                detected_text="业务记录粒度",
-                                chosen=chosen_object,
-                                options=object_options,
-                                exact_context_hash=self._exact_semantic_binding_hash(
-                                    global_evidence
-                                ),
-                                now=decision_now,
-                            )
-                            if pending_memory is not None:
-                                pending_confirmation_memories.append(pending_memory)
                             automatic_decisions.append(
                                 self._semantic_decision(
                                     detected_text="业务记录粒度",
@@ -733,171 +547,12 @@ class AnalyticsQueryService:
                             ),
                             options=options,
                         )
-                    if not ambiguous_metric_ids and options and candidate_selection_id is None:
-                        (
-                            remembered,
-                            remembered_option,
-                            confirmation_memory_unavailable,
-                        ) = self._recall_confirmation_memory(
-                            actor_id=tenant_id,
-                            project_id=request.project_id,
-                            release=release,
-                            index_snapshot_id=index.id,
-                            detected_text="业务记录粒度",
-                            options=options,
-                            exact_context_hash=self._exact_semantic_binding_hash(global_evidence),
-                            now=decision_now,
-                        )
-                        if confirmation_memory_unavailable:
-                            confirmation_memory_detail = {"status": "unavailable"}
-                        if remembered is not None and remembered_option is not None:
-                            remembered_scope = QueryScopeResolver.from_release(release).resolve(
-                                global_evidence.matches,
-                                allowed_dataset_ids=dataset_ids,
-                                selected_dataset_id=remembered_option.dataset_id,
-                                selected_element_id=(
-                                    effective_selected_element_id
-                                    if effective_selected_element_type
-                                    is not SemanticElementType.METRIC
-                                    else None
-                                ),
-                                selected_element_type=(
-                                    effective_selected_element_type.value
-                                    if effective_selected_element_type is not None
-                                    and effective_selected_element_type
-                                    is not SemanticElementType.METRIC
-                                    else None
-                                ),
-                                ai_adjudicated_metric_id=ai_adjudicated_metric_id,
-                                memory_confirmed_metric_id=memory_confirmed_metric_id,
-                                memory_confirmed_metric_ids=memory_confirmed_metric_ids,
-                            )
-                            if remembered_scope.status is QueryScopeResolutionStatus.SELECTED:
-                                scope_resolution = remembered_scope
-                                automatic_decisions.append(
-                                    self._semantic_decision(
-                                        detected_text="业务记录粒度",
-                                        source=SemanticDecisionSource.MEMORY,
-                                        chosen=remembered_option,
-                                        options=options,
-                                    )
-                                )
-                                confirmation_memory_detail = {
-                                    "status": "applied",
-                                    "candidate_set_hash": remembered.candidate_set_hash,
-                                }
-                    if (
-                        scope_resolution.status is QueryScopeResolutionStatus.CLARIFICATION
-                        and not confirmation_memory_unavailable
-                        and not ambiguous_metric_ids
-                        and options
-                        and candidate_selection_id is None
-                        and self._should_adjudicate_intent(
-                            confirmation_kind="analysis_object",
-                            options=options,
-                            mode=self._analysis_object_adjudication_mode,
-                        )
-                    ):
-                        intent_result = self._adjudicate_intent(
-                            intent_kind="analysis_object",
-                            question=effective_question,
-                            detected_text="业务记录粒度",
-                            candidates=self._intent_candidates_for_options(
-                                release=release,
-                                options=options,
-                                intent_kind="analysis_object",
-                            ),
-                            exact_context=self._exact_semantic_context(
-                                release,
-                                global_evidence,
-                            ),
-                            query_id=query_id,
-                            tenant_id=tenant_id,
-                            release=release,
-                        )
-                        analysis_object_adjudication_detail = self._intent_trace_detail(
-                            intent_result,
-                            mode=self._analysis_object_adjudication_mode,
-                        )
-                        if (
-                            self._analysis_object_adjudication_mode
-                            is WeakMetricAdjudicationMode.AUTO
-                            and intent_result.decision is IntentAdjudicationDecision.MATCH
-                        ):
-                            chosen_option = next(
-                                (
-                                    item
-                                    for item in options
-                                    if item.candidate_id == intent_result.selection_id
-                                ),
-                                None,
-                            )
-                            if chosen_option is not None:
-                                adjudicated_scope = QueryScopeResolver.from_release(
-                                    release
-                                ).resolve(
-                                    global_evidence.matches,
-                                    allowed_dataset_ids=dataset_ids,
-                                    selected_dataset_id=chosen_option.dataset_id,
-                                    selected_element_id=(
-                                        effective_selected_element_id
-                                        if effective_selected_element_type
-                                        is not SemanticElementType.METRIC
-                                        else None
-                                    ),
-                                    selected_element_type=(
-                                        effective_selected_element_type.value
-                                        if effective_selected_element_type is not None
-                                        and effective_selected_element_type
-                                        is not SemanticElementType.METRIC
-                                        else None
-                                    ),
-                                    ai_adjudicated_metric_id=ai_adjudicated_metric_id,
-                                    ai_adjudicated_metric_ids=ai_adjudicated_metric_ids,
-                                    memory_confirmed_metric_id=memory_confirmed_metric_id,
-                                    memory_confirmed_metric_ids=memory_confirmed_metric_ids,
-                                )
-                                if adjudicated_scope.status is QueryScopeResolutionStatus.SELECTED:
-                                    scope_resolution = adjudicated_scope
-                                    analysis_object_adjudication_detail["adopted"] = True
-                                    automatic_decisions.append(
-                                        self._semantic_decision(
-                                            detected_text="业务记录粒度",
-                                            source=SemanticDecisionSource.AI,
-                                            chosen=chosen_option,
-                                            options=options,
-                                        )
-                                    )
-                                else:
-                                    analysis_object_adjudication_detail.update(
-                                        {
-                                            "governance_code": adjudicated_scope.code,
-                                            "fallback": "human_confirmation",
-                                            "adopted": False,
-                                        }
-                                    )
-                        if scope_resolution.status is QueryScopeResolutionStatus.CLARIFICATION:
-                            analysis_object_adjudication_detail.setdefault("adopted", False)
-                            analysis_object_adjudication_detail.setdefault(
-                                "fallback", "human_confirmation"
-                            )
                     if scope_resolution.status is QueryScopeResolutionStatus.CLARIFICATION:
                         trace[-1] = QueryTraceStep(
                             stage=QueryStage.CANDIDATE_DISCOVERY,
                             status="clarification",
                             detail=(
-                                {
-                                    "scope_resolution": scope_resolution.to_trace_detail(),
-                                    **(
-                                        {
-                                            "analysis_object_adjudication": (
-                                                analysis_object_adjudication_detail
-                                            )
-                                        }
-                                        if analysis_object_adjudication_detail is not None
-                                        else {}
-                                    ),
-                                }
+                                {"scope_resolution": scope_resolution.to_trace_detail()}
                                 if request.include_diagnostics
                                 else {"clarification_kind": "semantic_or_business_object"}
                             ),
@@ -984,26 +639,6 @@ class AnalyticsQueryService:
                         **(
                             {"scope_resolution": scope_resolution.to_trace_detail()}
                             if scope_resolution is not None
-                            else {}
-                        ),
-                        **(
-                            {"weak_metric_adjudication": weak_metric_adjudication_detail}
-                            if weak_metric_adjudication_detail is not None
-                            else {}
-                        ),
-                        **(
-                            {"semantic_intent_adjudication": (semantic_intent_adjudication_detail)}
-                            if semantic_intent_adjudication_detail is not None
-                            else {}
-                        ),
-                        **(
-                            {"analysis_object_adjudication": (analysis_object_adjudication_detail)}
-                            if analysis_object_adjudication_detail is not None
-                            else {}
-                        ),
-                        **(
-                            {"confirmation_memory": confirmation_memory_detail}
-                            if confirmation_memory_detail is not None
                             else {}
                         ),
                         **{
@@ -1383,16 +1018,6 @@ class AnalyticsQueryService:
             defaults = tuple(
                 dict.fromkeys((*corrected.applied_defaults, *physical.applied_defaults))
             )
-            if pending_confirmation_memories and self._confirmation_memories is not None:
-                try:
-                    for pending_memory in pending_confirmation_memories:
-                        self._confirmation_memories.save_confirmation_memory(pending_memory)
-                except Exception:
-                    LOGGER.exception(
-                        "Failed to save confirmation memory project_id=%s query_id=%s",
-                        request.project_id,
-                        query_id,
-                    )
             if request.conversation_id is not None and self._query_history is not None:
                 self._query_history.save_success(
                     QueryHistoryTurn(
@@ -1782,389 +1407,6 @@ class AnalyticsQueryService:
             )
 
     @staticmethod
-    def _metric_matches(
-        projections: tuple[MappingResult, ...],
-        *,
-        methods: frozenset[MatchMethod],
-    ) -> tuple[SchemaMatch, ...]:
-        """Collect every surviving metric candidate from governed Scope views."""
-
-        return tuple(
-            match
-            for projection in projections
-            for match in projection.matches
-            if match.element_type is SemanticElementType.METRIC and match.method in methods
-        )
-
-    def _should_adjudicate_weak_metric(
-        self,
-        *,
-        confirmation_kind: str,
-        metric_ids: tuple[str, ...],
-    ) -> bool:
-        return (
-            self._weak_metric_adjudicator is not None
-            and self._weak_metric_adjudication_mode is not WeakMetricAdjudicationMode.OFF
-            and confirmation_kind == "metric"
-            and bool(metric_ids)
-        )
-
-    def _should_adjudicate_intent(
-        self,
-        *,
-        confirmation_kind: str,
-        options: tuple[ClarificationOption, ...],
-        mode: WeakMetricAdjudicationMode,
-    ) -> bool:
-        return (
-            self._intent_adjudicator is not None
-            and mode is not WeakMetricAdjudicationMode.OFF
-            and confirmation_kind in {"semantic_element", "metric_multi", "analysis_object"}
-            and bool(options)
-        )
-
-    @staticmethod
-    def _intent_candidates_for_options(
-        *,
-        release: SemanticRelease,
-        options: tuple[ClarificationOption, ...],
-        intent_kind: str,
-    ) -> tuple[IntentAdjudicationCandidate, ...]:
-        metrics = {item.id: item for item in release.metrics}
-        dimensions = {item.id: item for item in release.dimensions}
-        values = {item.id: item for item in release.dimension_values if item.enabled}
-        models = {item.id: item for item in release.models}
-        datasets = {item.id: item for item in release.datasets}
-        routes = {item.dataset_id: item for item in release.analysis_topic_routes}
-        candidates: list[IntentAdjudicationCandidate] = []
-        for option in options:
-            aliases: tuple[str, ...] = ()
-            context: list[str] = []
-            if option.kind == "metric" and option.element_id in metrics:
-                metric = metrics[option.element_id]
-                aliases = metric.aliases
-                context.extend(
-                    item
-                    for item in (
-                        f"聚合：{metric.aggregation.value}"
-                        if metric.aggregation is not None
-                        else None,
-                        f"单位：{metric.unit}" if metric.unit else None,
-                    )
-                    if item is not None
-                )
-            elif option.kind == "dimension" and option.element_id in dimensions:
-                dimension = dimensions[option.element_id]
-                aliases = dimension.aliases
-                context.append(f"维度类型：{dimension.semantic_type}")
-            elif option.kind == "dimension_value" and option.element_id in values:
-                value = values[option.element_id]
-                aliases = value.aliases
-                dimension = dimensions.get(value.dimension_id)
-                if dimension is not None:
-                    context.append(f"所属维度：{dimension.name}")
-            elif option.kind == "analysis_object":
-                route = routes.get(option.dataset_id)
-                model = models.get(route.root_model_id) if route is not None else None
-                dataset = datasets.get(option.dataset_id)
-                if model is not None:
-                    aliases = model.aliases
-                if dataset is not None:
-                    metric_names = [
-                        metrics[item].name for item in dataset.metric_ids if item in metrics
-                    ][:8]
-                    dimension_names = [
-                        dimensions[item].name
-                        for item in dataset.dimension_ids
-                        if item in dimensions
-                    ][:8]
-                    if metric_names:
-                        context.append(f"可分析指标：{'、'.join(metric_names)}")
-                    if dimension_names:
-                        context.append(f"可分析维度：{'、'.join(dimension_names)}")
-            candidates.append(
-                IntentAdjudicationCandidate(
-                    selection_id=option.candidate_id,
-                    kind=option.kind,
-                    label=option.label,
-                    description=option.description,
-                    aliases=aliases,
-                    business_context=tuple(context),
-                )
-            )
-        return tuple(candidates)
-
-    @staticmethod
-    def _group_metric_options_by_detected_text(
-        *,
-        projections: tuple[MappingResult, ...],
-        options: tuple[ClarificationOption, ...],
-    ) -> tuple[tuple[str, tuple[ClarificationOption, ...]], ...]:
-        detected_by_element: dict[str, set[str]] = {}
-        term_detected_text = {
-            match.entry_id: match.detected_text
-            for projection in projections
-            for match in projection.matches
-            if match.element_type is SemanticElementType.TERM
-        }
-        for projection in projections:
-            for match in projection.matches:
-                if match.element_type is SemanticElementType.METRIC and match.method in {
-                    MatchMethod.KEYWORD,
-                    MatchMethod.TERM,
-                    MatchMethod.EMBEDDING,
-                }:
-                    detected_text = match.detected_text
-                    if match.detected_span_source.startswith("term:"):
-                        detected_text = term_detected_text.get(
-                            match.detected_span_source.removeprefix("term:"),
-                            detected_text,
-                        )
-                    detected_by_element.setdefault(match.element_id, set()).add(detected_text)
-        grouped: dict[str, list[ClarificationOption]] = {}
-        display_text: dict[str, set[str]] = {}
-        for option in options:
-            if option.kind != "metric" or option.element_id is None:
-                continue
-            for detected_text in detected_by_element.get(option.element_id, ()):
-                key = normalize_text(detected_text)
-                if not key:
-                    continue
-                grouped.setdefault(key, []).append(option)
-                display_text.setdefault(key, set()).add(detected_text)
-        return tuple(
-            (
-                min(display_text[key], key=lambda value: (value.casefold(), value)),
-                tuple(
-                    {
-                        item.candidate_id: item
-                        for item in sorted(
-                            grouped[key],
-                            key=lambda candidate: candidate.candidate_id,
-                        )
-                    }.values()
-                ),
-            )
-            for key in sorted(grouped)
-        )
-
-    def _adjudicate_intent(
-        self,
-        *,
-        intent_kind: str,
-        question: str,
-        detected_text: str,
-        candidates: tuple[IntentAdjudicationCandidate, ...],
-        exact_context: tuple[str, ...],
-        query_id: str,
-        tenant_id: str,
-        release: SemanticRelease,
-    ) -> IntentAdjudicationResult:
-        assert self._intent_adjudicator is not None
-        try:
-            result = self._intent_adjudicator.adjudicate(
-                intent_kind=intent_kind,
-                question=question,
-                detected_text=detected_text,
-                candidates=candidates,
-                exact_context=exact_context,
-                query_id=query_id,
-                tenant_id=tenant_id,
-                release_id=release.id,
-                spec_hash=release.spec_hash,
-            )
-        except Exception:
-            LOGGER.warning(
-                "intent adjudicator failed query_id=%s kind=%s; using human confirmation",
-                query_id,
-                intent_kind,
-            )
-            return IntentAdjudicationResult(
-                decision=IntentAdjudicationDecision.UNAVAILABLE,
-                candidate_set_hash=content_hash(
-                    {
-                        "contract": "knowflow-intent-adjudication-v2",
-                        "intent_kind": intent_kind,
-                        "candidate_count": len(candidates),
-                    }
-                ),
-                failure_code="INTENT_ADJUDICATOR_FAILED",
-            )
-        offered = {item.selection_id for item in candidates}
-        if (
-            result.decision is IntentAdjudicationDecision.MATCH
-            and result.selection_id not in offered
-        ):
-            return IntentAdjudicationResult(
-                decision=IntentAdjudicationDecision.UNAVAILABLE,
-                candidate_set_hash=result.candidate_set_hash,
-                failure_code="MODEL_OUTPUT_INVALID",
-            )
-        return result
-
-    def _adjudicate_intent_many(
-        self,
-        *,
-        intent_kind: str,
-        question: str,
-        groups: tuple[IntentAdjudicationGroup, ...],
-        exact_context: tuple[str, ...],
-        query_id: str,
-        tenant_id: str,
-        release: SemanticRelease,
-    ) -> IntentAdjudicationBatchResult:
-        assert self._intent_adjudicator is not None
-        fallback_hash = content_hash(
-            [
-                {
-                    "detected_text": normalize_text(group.detected_text),
-                    "candidate_count": len(group.candidates),
-                }
-                for group in groups
-            ]
-        )
-        try:
-            result = self._intent_adjudicator.adjudicate_many(
-                intent_kind=intent_kind,
-                question=question,
-                groups=groups,
-                exact_context=exact_context,
-                query_id=query_id,
-                tenant_id=tenant_id,
-                release_id=release.id,
-                spec_hash=release.spec_hash,
-            )
-        except Exception:
-            LOGGER.warning(
-                "batch intent adjudicator failed query_id=%s kind=%s; using human confirmation",
-                query_id,
-                intent_kind,
-            )
-            return IntentAdjudicationBatchResult(
-                candidate_set_hash=fallback_hash,
-                failure_code="INTENT_ADJUDICATOR_FAILED",
-            )
-        offered = {
-            normalize_text(group.detected_text): {
-                candidate.selection_id for candidate in group.candidates
-            }
-            for group in groups
-        }
-        returned = {normalize_text(item.detected_text): item for item in result.items}
-        if len(returned) != len(result.items) or (
-            result.failure_code is None and set(returned) != set(offered)
-        ):
-            return IntentAdjudicationBatchResult(
-                candidate_set_hash=result.candidate_set_hash,
-                failure_code="MODEL_OUTPUT_INVALID",
-            )
-        for normalized, item in returned.items():
-            if (
-                item.result.decision is IntentAdjudicationDecision.MATCH
-                and item.result.selection_id not in offered[normalized]
-            ):
-                return IntentAdjudicationBatchResult(
-                    candidate_set_hash=result.candidate_set_hash,
-                    failure_code="MODEL_OUTPUT_INVALID",
-                )
-        return result
-
-    def _adjudicate_metric_option_groups(
-        self,
-        *,
-        question: str,
-        release: SemanticRelease,
-        phrase_groups: tuple[tuple[str, tuple[ClarificationOption, ...]], ...],
-        exact_context: tuple[str, ...],
-        query_id: str,
-        tenant_id: str,
-    ) -> tuple[
-        tuple[tuple[str, ClarificationOption, tuple[ClarificationOption, ...]], ...],
-        dict[str, object],
-    ]:
-        grouped = phrase_groups
-        batch = self._adjudicate_intent_many(
-            intent_kind="semantic_element",
-            question=question,
-            groups=tuple(
-                IntentAdjudicationGroup(
-                    detected_text=detected_text,
-                    candidates=self._intent_candidates_for_options(
-                        release=release,
-                        options=group_options,
-                        intent_kind="semantic_element",
-                    ),
-                )
-                for detected_text, group_options in grouped
-            ),
-            exact_context=exact_context,
-            query_id=query_id,
-            tenant_id=tenant_id,
-            release=release,
-        )
-        results_by_text = {normalize_text(item.detected_text): item.result for item in batch.items}
-        selected: list[tuple[str, ClarificationOption, tuple[ClarificationOption, ...]]] = []
-        group_details: list[dict[str, object]] = []
-        for detected_text, group_options in grouped:
-            result = results_by_text.get(
-                normalize_text(detected_text),
-                IntentAdjudicationResult(
-                    decision=IntentAdjudicationDecision.UNAVAILABLE,
-                    candidate_set_hash=batch.candidate_set_hash,
-                    failure_code=(batch.failure_code or "MODEL_OUTPUT_INVALID"),
-                ),
-            )
-            group_details.append(
-                {
-                    "detected_text": detected_text,
-                    "decision": result.decision.value,
-                    "candidate_set_hash": result.candidate_set_hash,
-                    **(
-                        {"failure_code": result.failure_code}
-                        if result.failure_code is not None
-                        else {}
-                    ),
-                }
-            )
-            if result.decision is not IntentAdjudicationDecision.MATCH:
-                continue
-            chosen = next(
-                (item for item in group_options if item.candidate_id == result.selection_id),
-                None,
-            )
-            if chosen is not None:
-                selected.append((detected_text, chosen, group_options))
-        complete = bool(grouped) and len(selected) == len(grouped)
-        detail: dict[str, object] = {
-            "mode": self._semantic_intent_adjudication_mode.value,
-            "decision": "MATCH" if complete else "AMBIGUOUS",
-            "candidate_set_hash": batch.candidate_set_hash,
-            "groups": group_details,
-            "adopted": False,
-        }
-        if batch.failure_code is not None:
-            detail["failure_code"] = batch.failure_code
-        if not complete:
-            detail["fallback"] = "human_confirmation"
-            return (), detail
-        return tuple(selected), detail
-
-    @staticmethod
-    def _intent_trace_detail(
-        result: IntentAdjudicationResult,
-        *,
-        mode: WeakMetricAdjudicationMode,
-    ) -> dict[str, object]:
-        detail: dict[str, object] = {
-            "mode": mode.value,
-            "decision": result.decision.value,
-            "candidate_set_hash": result.candidate_set_hash,
-        }
-        if result.failure_code:
-            detail["failure_code"] = result.failure_code
-        return detail
-
-    @staticmethod
     def _decision_obligation(
         *,
         release: SemanticRelease,
@@ -2232,633 +1474,6 @@ class AnalyticsQueryService:
             ),
         )
 
-    @staticmethod
-    def _confirmation_memory_hashes(
-        *,
-        options: tuple[ClarificationOption, ...],
-        exact_context_hash: str,
-    ) -> tuple[str, str]:
-        candidate_hash = confirmation_candidate_set_hash(
-            (
-                item.kind,
-                item.element_id or item.label,
-                item.dataset_id or None,
-            )
-            for item in options
-        )
-        return candidate_hash, exact_context_hash
-
-    def _recall_confirmation_memory(
-        self,
-        *,
-        actor_id: str,
-        project_id: str,
-        release: SemanticRelease,
-        index_snapshot_id: str,
-        detected_text: str,
-        options: tuple[ClarificationOption, ...],
-        exact_context_hash: str,
-        now: datetime,
-    ) -> tuple[ConfirmationMemory | None, ClarificationOption | None, bool]:
-        if self._confirmation_memories is None or not actor_id:
-            return None, None, False
-        candidate_hash, context_hash = self._confirmation_memory_hashes(
-            options=options,
-            exact_context_hash=exact_context_hash,
-        )
-        try:
-            memory = self._confirmation_memories.find_confirmation_memory(
-                actor_id=actor_id,
-                project_id=project_id,
-                release_id=release.id,
-                spec_hash=release.spec_hash,
-                index_snapshot_id=index_snapshot_id,
-                normalized_phrase=normalize_text(detected_text),
-                candidate_set_hash=candidate_hash,
-                exact_context_hash=context_hash,
-                now=now,
-            )
-        except Exception:
-            LOGGER.exception(
-                "Failed to read confirmation memory project_id=%s",
-                project_id,
-            )
-            return None, None, True
-        if memory is None:
-            return None, None, False
-        chosen = next(
-            (
-                item
-                for item in options
-                if item.kind == memory.selection_kind
-                and item.element_id == memory.semantic_element_id
-                and (memory.dataset_id is None or item.dataset_id == memory.dataset_id)
-            ),
-            None,
-        )
-        return (memory, chosen, False) if chosen is not None else (None, None, False)
-
-    def _confirmation_memory_from_choice(
-        self,
-        *,
-        actor_id: str,
-        project_id: str,
-        release: SemanticRelease,
-        index_snapshot_id: str,
-        detected_text: str,
-        chosen: ClarificationOption,
-        options: tuple[ClarificationOption, ...],
-        exact_context_hash: str,
-        now: datetime,
-    ) -> ConfirmationMemory | None:
-        if (
-            self._confirmation_memories is None
-            or not actor_id
-            or (chosen.kind != "analysis_object" and chosen.element_id is None)
-        ):
-            return None
-        candidate_hash, context_hash = self._confirmation_memory_hashes(
-            options=options,
-            exact_context_hash=exact_context_hash,
-        )
-        memory_identity = {
-            "actor_id": actor_id,
-            "project_id": project_id,
-            "release_id": release.id,
-            "spec_hash": release.spec_hash,
-            "index_snapshot_id": index_snapshot_id,
-            "normalized_phrase": normalize_text(detected_text),
-            "selection_kind": chosen.kind,
-            "semantic_element_id": (
-                None if chosen.kind == "analysis_object" else chosen.element_id
-            ),
-            "dataset_id": chosen.dataset_id or None,
-            "candidate_set_hash": candidate_hash,
-            "exact_context_hash": context_hash,
-        }
-        return ConfirmationMemory(
-            id=("cmem_" + content_hash(memory_identity).removeprefix("sha256:")[:32]),
-            actor_id=actor_id,
-            project_id=project_id,
-            release_id=release.id,
-            spec_hash=release.spec_hash,
-            index_snapshot_id=index_snapshot_id,
-            detected_text=detected_text,
-            normalized_phrase=normalize_text(detected_text),
-            selection_kind=chosen.kind,
-            semantic_element_id=(None if chosen.kind == "analysis_object" else chosen.element_id),
-            dataset_id=chosen.dataset_id or None,
-            candidate_set_hash=candidate_hash,
-            exact_context_hash=context_hash,
-            created_at=now,
-            expires_at=now + timedelta(seconds=self._confirmation_memory_ttl_seconds),
-        )
-
-    def _recall_metric_phrase_memories(
-        self,
-        *,
-        actor_id: str,
-        project_id: str,
-        release: SemanticRelease,
-        index_snapshot_id: str,
-        combination_options: tuple[ClarificationOption, ...],
-        phrase_groups: tuple[tuple[str, tuple[ClarificationOption, ...]], ...],
-        selection_context: _SelectionTokenContext,
-        exact_context_hash: str,
-        now: datetime,
-    ) -> tuple[
-        tuple[
-            str,
-            tuple[
-                tuple[
-                    str,
-                    ClarificationOption,
-                    tuple[ClarificationOption, ...],
-                    ConfirmationMemory,
-                ],
-                ...,
-            ],
-        ]
-        | None,
-        bool,
-    ]:
-        candidates = []
-        datasets = {item.id: item for item in release.datasets}
-        for dataset_id in dict.fromkeys(item.dataset_id for item in combination_options):
-            dataset = datasets.get(dataset_id)
-            if dataset is None:
-                continue
-            available_metrics = set(dataset.metric_ids)
-            selected_groups = []
-            for detected_text, group_options in phrase_groups:
-                scoped_options = tuple(
-                    item.model_copy(
-                        update={
-                            "candidate_id": self._selection_token(
-                                release=release,
-                                context=selection_context,
-                                dataset_id=dataset_id,
-                                semantic_selection_id=f"element:metric:{item.element_id}",
-                            ),
-                            "dataset_id": dataset_id,
-                        }
-                    )
-                    for item in group_options
-                    if item.element_id in available_metrics
-                )
-                memory, chosen, unavailable = self._recall_confirmation_memory(
-                    actor_id=actor_id,
-                    project_id=project_id,
-                    release=release,
-                    index_snapshot_id=index_snapshot_id,
-                    detected_text=detected_text,
-                    options=scoped_options,
-                    exact_context_hash=exact_context_hash,
-                    now=now,
-                )
-                if unavailable:
-                    return None, True
-                if memory is None or chosen is None:
-                    break
-                selected_groups.append((detected_text, chosen, scoped_options, memory))
-            if len(selected_groups) != len(phrase_groups):
-                continue
-            selected_metric_ids = tuple(
-                dict.fromkeys(
-                    chosen.element_id
-                    for _detected, chosen, _options, _memory in selected_groups
-                    if chosen.element_id is not None
-                )
-            )
-            if any(
-                item.dataset_id == dataset_id
-                and tuple(
-                    selection_id.removeprefix("element:metric:")
-                    for selection_id in item.semantic_selection_ids
-                )
-                == selected_metric_ids
-                for item in combination_options
-            ):
-                candidates.append((dataset_id, tuple(selected_groups)))
-        return (candidates[0] if len(candidates) == 1 else None), False
-
-    @staticmethod
-    def _exact_semantic_binding_hash(evidence: MappingEvidence) -> str:
-        """Hash governed exact identities, separate from the AI display text."""
-
-        return content_hash(
-            sorted(
-                {
-                    (
-                        match.element_type.value,
-                        match.element_id,
-                        match.dimension_id or "",
-                        type(match.raw_value).__name__,
-                        str(match.raw_value),
-                        match.channel.value,
-                        match.entry_source,
-                    )
-                    for match in evidence.matches
-                    if match.method is MatchMethod.EXACT
-                    and match.origin_term_entry_id is None
-                    and match.channel
-                    not in {
-                        MappingEvidenceChannel.TERM_DICTIONARY,
-                        MappingEvidenceChannel.TERM_DATABASE,
-                        MappingEvidenceChannel.TERM_EMBEDDING,
-                        MappingEvidenceChannel.MANIFEST,
-                    }
-                }
-            )
-        )
-
-    @staticmethod
-    def _exact_semantic_context(
-        release: SemanticRelease,
-        evidence: MappingEvidence,
-    ) -> tuple[str, ...]:
-        dimensions = {item.id: item for item in release.dimensions}
-        values = {item.id: item for item in release.dimension_values if item.enabled}
-        value_context: dict[str, set[str]] = {}
-        direct_dimensions: set[str] = set()
-        for match in evidence.matches:
-            if (
-                match.method is not MatchMethod.EXACT
-                or match.origin_term_entry_id is not None
-                or match.channel
-                in {
-                    MappingEvidenceChannel.TERM_DICTIONARY,
-                    MappingEvidenceChannel.TERM_DATABASE,
-                    MappingEvidenceChannel.TERM_EMBEDDING,
-                    MappingEvidenceChannel.MANIFEST,
-                }
-            ):
-                continue
-            if match.element_type is SemanticElementType.DIMENSION:
-                if match.element_id in dimensions:
-                    direct_dimensions.add(match.element_id)
-            elif match.element_type is SemanticElementType.DIMENSION_VALUE:
-                value = values.get(match.element_id)
-                if value is None or value.dimension_id not in dimensions:
-                    continue
-                value_context.setdefault(value.dimension_id, set()).add(value.display_name)
-        rendered = {
-            f"{dimensions[dimension_id].name} = {display_name}"
-            for dimension_id, display_names in value_context.items()
-            for display_name in display_names
-        }
-        rendered.update(
-            dimensions[dimension_id].name
-            for dimension_id in direct_dimensions - value_context.keys()
-        )
-        return tuple(sorted(rendered, key=str.casefold))
-
-    def _adjudicate_weak_metric(
-        self,
-        *,
-        question: str,
-        detected_text: str,
-        release: SemanticRelease,
-        metric_ids: tuple[str, ...],
-        evidence: MappingEvidence,
-        query_id: str,
-        tenant_id: str,
-    ) -> WeakMetricAdjudicationResult:
-        assert self._weak_metric_adjudicator is not None
-        try:
-            result = self._weak_metric_adjudicator.adjudicate(
-                question=question,
-                detected_text=detected_text,
-                release=release,
-                metric_ids=metric_ids,
-                exact_context=self._exact_semantic_context(release, evidence),
-                query_id=query_id,
-                tenant_id=tenant_id,
-            )
-        except Exception:
-            LOGGER.warning(
-                "weak metric adjudicator failed query_id=%s; using human confirmation",
-                query_id,
-            )
-            return WeakMetricAdjudicationResult(
-                decision=WeakMetricAdjudicationDecision.UNAVAILABLE,
-                candidate_set_hash=content_hash(
-                    {
-                        "contract": "knowflow-weak-metric-adjudication-v1",
-                        "candidate_count": len(metric_ids),
-                    }
-                ),
-                failure_code="WEAK_METRIC_ADJUDICATOR_FAILED",
-            )
-        if (
-            result.decision is WeakMetricAdjudicationDecision.MATCH
-            and result.metric_id not in metric_ids
-        ):
-            return WeakMetricAdjudicationResult(
-                decision=WeakMetricAdjudicationDecision.UNAVAILABLE,
-                candidate_set_hash=result.candidate_set_hash,
-                failure_code="MODEL_OUTPUT_INVALID",
-            )
-        return result
-
-    @staticmethod
-    def _adjudication_trace_detail(
-        result: WeakMetricAdjudicationResult,
-        *,
-        mode: WeakMetricAdjudicationMode,
-    ) -> dict[str, object]:
-        detail: dict[str, object] = {
-            "mode": mode.value,
-            "decision": result.decision.value,
-            "candidate_set_hash": result.candidate_set_hash,
-        }
-        if result.failure_code:
-            detail["failure_code"] = result.failure_code
-        return detail
-
-    @staticmethod
-    def _weak_metric_clarification_trace(
-        *,
-        scope_resolution,
-        confirmation_kind: str,
-        detected_text: str,
-        options: tuple[ClarificationOption, ...],
-        projections: tuple[MappingResult, ...],
-        adjudication_detail: dict[str, object] | None,
-        include_diagnostics: bool,
-        adjudication_key: str = "weak_metric_adjudication",
-    ) -> QueryTraceStep:
-        detail: dict[str, object] = {
-            "semantic_confirmation": {
-                "kind": confirmation_kind,
-                "detected_text": detected_text,
-            }
-        }
-        if include_diagnostics:
-            detail.update(
-                {
-                    "scope_resolution": scope_resolution.to_trace_detail(),
-                    "candidate_ids": [item.candidate_id for item in options],
-                    "mapping_attempts": [item.model_dump(mode="json") for item in projections],
-                }
-            )
-            if adjudication_detail is not None:
-                detail[adjudication_key] = adjudication_detail
-        return QueryTraceStep(
-            stage=QueryStage.CANDIDATE_DISCOVERY,
-            status="clarification",
-            detail=detail,
-        )
-
-    @staticmethod
-    def _weak_metric_clarification_response(
-        *,
-        query_id: str,
-        release: SemanticRelease,
-        index_snapshot_id: str,
-        trace: list[QueryTraceStep],
-        confirmation_kind: str,
-        question: str,
-        options: tuple[ClarificationOption, ...],
-    ) -> ClarificationQueryResponse:
-        return ClarificationQueryResponse(
-            query_id=query_id,
-            release_id=release.id,
-            spec_hash=release.spec_hash,
-            index_snapshot_id=index_snapshot_id,
-            trace=tuple(trace),
-            diagnostics=QueryDiagnosis(
-                category=QueryDiagnosticCategory.AMBIGUITY,
-                stage=QueryStage.CANDIDATE_DISCOVERY.value,
-                severity="warning",
-                summary=(
-                    "问题中的指标说法尚未成为已治理精确语义。"
-                    if confirmation_kind == "metric"
-                    else "同一说法可能对应不同类型的业务语义。"
-                ),
-                recommendation=(
-                    "确认业务指标；可在建模时把该说法审核为别名。"
-                    if confirmation_kind == "metric"
-                    else "确认指标或维度后重新执行。"
-                ),
-                user_hint=(
-                    "请选择你实际想查询的业务指标。"
-                    if confirmation_kind == "metric"
-                    else "请选择你实际表达的业务含义。"
-                ),
-            ),
-            question=question,
-            options=options,
-        )
-
-    def _weak_metric_confirmation(
-        self,
-        *,
-        release: SemanticRelease,
-        evidence: MappingEvidence,
-        dataset_ids: tuple[str, ...],
-        selection_context: _SelectionTokenContext,
-    ) -> (
-        tuple[
-            str,
-            str,
-            str,
-            tuple[ClarificationOption, ...],
-            tuple[MappingResult, ...],
-            tuple[tuple[str, tuple[ClarificationOption, ...]], ...],
-        ]
-        | None
-    ):
-        """Build candidate-only metric confirmation without making a choice.
-
-        Stage contract: run after global retrieval and exact Scope resolution,
-        before Rule/LLM parsing.  Existing per-Scope Mapper projection remains
-        the candidate authority.  Keyword/Term evidence is considered before
-        embedding evidence, but every surviving semantic ID in the chosen
-        evidence class is shown; scores and score gaps never select one.
-        """
-
-        moderate_projections = self._orchestrator.project_scope_evidence(
-            evidence=evidence,
-            dataset_ids=dataset_ids,
-            mode=MapMode.MODERATE,
-        )
-        loose_projections = self._orchestrator.project_scope_evidence(
-            evidence=evidence,
-            dataset_ids=dataset_ids,
-            mode=MapMode.LOOSE,
-        )
-        projections = (*moderate_projections, *loose_projections)
-        lexical_matches = self._metric_matches(
-            moderate_projections,
-            methods=frozenset({MatchMethod.KEYWORD, MatchMethod.TERM}),
-        )
-        embedding_matches = self._metric_matches(
-            projections,
-            methods=frozenset({MatchMethod.EMBEDDING}),
-        )
-        groups: dict[str, dict[str, SchemaMatch]] = {}
-        detected_by_group: dict[str, set[str]] = {}
-        term_detected_text = {
-            match.entry_id: match.detected_text
-            for projection in projections
-            for match in projection.matches
-            if match.element_type is SemanticElementType.TERM
-        }
-        evidence_classes: dict[str, dict[str, dict[str, SchemaMatch]]] = {}
-        for evidence_class, matches in (
-            ("lexical", lexical_matches),
-            ("embedding", embedding_matches),
-        ):
-            for match in matches:
-                detected_text = match.detected_text
-                if match.detected_span_source.startswith("term:"):
-                    detected_text = term_detected_text.get(
-                        match.detected_span_source.removeprefix("term:"),
-                        detected_text,
-                    )
-                normalized = "".join(str(detected_text).casefold().split())
-                if not normalized:
-                    continue
-                evidence_classes.setdefault(normalized, {}).setdefault(evidence_class, {})[
-                    match.element_id
-                ] = match
-                detected_by_group.setdefault(normalized, set()).add(detected_text)
-        for normalized, classes in evidence_classes.items():
-            # Evidence priority is phrase-local. A lexical hit for one phrase
-            # cannot erase an independent embedding-only metric phrase.
-            if classes.get("lexical"):
-                groups[normalized] = classes["lexical"]
-            else:
-                groups[normalized] = classes.get("embedding", {})
-        if not groups:
-            return None
-        # One continuation token confirms one phrase. Multiple independent weak
-        # metric phrases always remain fail-closed in V1, even when their
-        # candidates share an owner; owner-local weak settlement is deferred to
-        # the reviewed V2 design.
-        if len(groups) > 1:
-            detected_text = "、".join(min(detected_by_group[key]) for key in sorted(groups))
-            phrase_groups = tuple(
-                (
-                    min(detected_by_group[key]),
-                    self._semantic_options(
-                        release,
-                        tuple(groups[key]),
-                        selection_context=selection_context,
-                        require_time=False,
-                        typed_members=tuple(
-                            SemanticAmbiguityMember(
-                                element_type=SemanticElementType.METRIC,
-                                element_id=element_id,
-                            )
-                            for element_id in groups[key]
-                        ),
-                        allowed_dataset_ids=dataset_ids,
-                    ),
-                )
-                for key in sorted(groups)
-            )
-            owner_by_metric = {item.id: item.model_id for item in release.metrics}
-            if phrase_groups and all(
-                len({owner_by_metric.get(choice.element_id or "") for choice in choices}) > 1
-                for choices in product(*(options for _phrase, options in phrase_groups))
-            ):
-                raise MappingError(
-                    "多个精确指标分别属于不同事实根，当前版本不支持跨事实查询，请拆分问题。",
-                    code="CROSS_FACT_METRICS_UNSUPPORTED",
-                )
-            options = self._bundle_metric_phrase_groups(
-                release=release,
-                evidence=evidence,
-                dataset_ids=dataset_ids,
-                groups=phrase_groups,
-                selection_context=selection_context,
-            )
-            return (
-                "metric_multi",
-                detected_text,
-                "问题中存在多个非精确指标说法，请分别使用已治理指标名称后重试。",
-                options,
-                projections,
-                phrase_groups,
-            )
-        normalized, candidates = next(iter(groups.items()))
-        detected_text = min(detected_by_group[normalized])
-        typed_members: dict[tuple[SemanticElementType, str], SemanticAmbiguityMember] = {
-            (SemanticElementType.METRIC, element_id): SemanticAmbiguityMember(
-                element_type=SemanticElementType.METRIC,
-                element_id=element_id,
-            )
-            for element_id in candidates
-        }
-        for projection in projections:
-            for group in projection.semantic_ambiguity_groups:
-                group_normalized = "".join(group.detected_text.casefold().split())
-                if group_normalized != normalized and not any(
-                    "".join(match.detected_text.casefold().split()) == group_normalized
-                    for match in candidates.values()
-                ):
-                    continue
-                if not any(
-                    member.element_type is SemanticElementType.METRIC
-                    and member.element_id in candidates
-                    for member in group.members
-                ):
-                    continue
-                for member in group.members:
-                    typed_members[(member.element_type, member.element_id)] = member
-        members = tuple(
-            typed_members[key]
-            for key in sorted(typed_members, key=lambda item: (item[0].value, item[1]))
-        )
-        if len(members) > _MAX_SEMANTIC_CONFIRMATION_OPTIONS:
-            return (
-                "metric_overflow",
-                detected_text,
-                "候选业务指标过多，请使用更具体的指标名称后重试。",
-                (),
-                projections,
-                (),
-            )
-        member_ids = tuple(dict.fromkeys(member.element_id for member in members))
-        options = self._semantic_options(
-            release,
-            member_ids,
-            selection_context=selection_context,
-            require_time=False,
-            typed_members=members,
-            allowed_dataset_ids=dataset_ids,
-        )
-        phrase_groups = ((detected_text, options),)
-        options = self._bundle_semantic_scope_options(
-            release=release,
-            evidence=evidence,
-            dataset_ids=dataset_ids,
-            options=options,
-            selection_context=selection_context,
-        )
-        if not options:
-            return None
-        confirmation_kind = (
-            "metric" if all(item.kind == "metric" for item in options) else "semantic_element"
-        )
-        question = (
-            f"你说的「{detected_text}」是否指指标「{options[0].label}」？"
-            if len(options) == 1 and confirmation_kind == "metric"
-            else f"你说的「{detected_text}」可能对应多个业务指标，请确认具体口径。"
-            if confirmation_kind == "metric"
-            else f"你说的「{detected_text}」可能对应多个业务含义，请确认具体对象。"
-        )
-        return (
-            confirmation_kind,
-            detected_text,
-            question,
-            options,
-            projections,
-            phrase_groups,
-        )
-
     def _semantic_confirmation_for_current_evidence(
         self,
         *,
@@ -2921,23 +1536,6 @@ class AnalyticsQueryService:
                 for item in exact_confirmation[1]
             ):
                 return exact_confirmation
-        if not resolution.exact_metric_ids:
-            weak = self._weak_metric_confirmation(
-                release=release,
-                evidence=evidence,
-                dataset_ids=dataset_ids,
-                selection_context=selection_context,
-            )
-            if weak is not None:
-                candidate = (weak[1], weak[3])
-                if any(
-                    item.element_type == selected_element_type.value
-                    and item.element_id == selected_element_id
-                    and (selected_dataset_id is None or item.dataset_id == selected_dataset_id)
-                    for item in candidate[1]
-                ):
-                    return candidate
-
         projections = self._card_mapping_projections(
             question=question,
             release=release,
@@ -3466,15 +2064,14 @@ class AnalyticsQueryService:
         dataset = next((item for item in release.datasets if item.id == query.dataset_id), None)
         if dataset is None:
             return ()
+
         # 下钻卡是**主动**向用户推销他没问过的成员名，是列级权限泄漏面最大的一处：
         # 用户不需要猜就能看到「原来还有这些指标」。名字表在这里就收窄，下面所有
         # 签发循环（新增维度、替换指标、移除、换值、换时间窗）自动跟着收窄。
         def _visible(element_id: str) -> bool:
             return allowed_element_ids is None or element_id in allowed_element_ids
 
-        dimension_names = {
-            item.id: item.name for item in release.dimensions if _visible(item.id)
-        }
+        dimension_names = {item.id: item.name for item in release.dimensions if _visible(item.id)}
         metric_names = {item.id: item.name for item in release.metrics if _visible(item.id)}
         context_ref = self._drilldown_context_ref(
             project_id=project_id,
@@ -3855,85 +2452,6 @@ class AnalyticsQueryService:
                 )
         return tuple(bundled)
 
-    def _bundle_metric_phrase_groups(
-        self,
-        *,
-        release: SemanticRelease,
-        evidence: MappingEvidence,
-        dataset_ids: tuple[str, ...],
-        groups: tuple[tuple[str, tuple[ClarificationOption, ...]], ...],
-        selection_context: _SelectionTokenContext,
-    ) -> tuple[ClarificationOption, ...]:
-        """Issue one opaque option for one choice in every weak metric phrase."""
-
-        if not groups or any(not options for _detected, options in groups):
-            return ()
-        combination_count = 1
-        for _detected, options in groups:
-            combination_count *= len(options)
-            if combination_count > _MAX_SEMANTIC_CONFIRMATION_OPTIONS:
-                return ()
-        resolver = QueryScopeResolver.from_release(release)
-        routes = {item.dataset_id: item for item in release.analysis_topic_routes}
-        models = {item.id: item for item in release.models}
-        bundled: list[ClarificationOption] = []
-        option_groups = tuple(options for _detected, options in groups)
-        for choices in product(*option_groups):
-            if any(choice.element_id is None for choice in choices):
-                continue
-            metric_ids = tuple(dict.fromkeys(choice.element_id for choice in choices))
-            resolution = resolver.resolve(
-                evidence.matches,
-                allowed_dataset_ids=dataset_ids,
-                human_confirmed_metric_ids=metric_ids,
-            )
-            candidate_ids = (
-                (resolution.selected_dataset_id,)
-                if resolution.status is QueryScopeResolutionStatus.SELECTED
-                and resolution.selected_dataset_id is not None
-                else resolution.candidate_dataset_ids
-                if resolution.status is QueryScopeResolutionStatus.CLARIFICATION
-                else ()
-            )
-            root_ids = tuple(
-                routes[dataset_id].root_model_id
-                for dataset_id in candidate_ids
-                if dataset_id in routes
-            )
-            if (
-                not candidate_ids
-                or len(root_ids) != len(candidate_ids)
-                or len(root_ids) != len(set(root_ids))
-            ):
-                continue
-            semantic_ids = tuple(f"element:metric:{metric_id}" for metric_id in metric_ids)
-            label = "；".join(
-                f"{detected_text}：{choice.label}"
-                for (detected_text, _options), choice in zip(groups, choices, strict=True)
-            )
-            description = "；".join(choice.description for choice in choices)
-            for dataset_id in candidate_ids:
-                root = models.get(routes[dataset_id].root_model_id)
-                rendered_description = description
-                if len(candidate_ids) > 1 and root is not None:
-                    rendered_description += f"；分析粒度：{root.name}"
-                bundled.append(
-                    ClarificationOption(
-                        candidate_id=self._selection_token(
-                            release=release,
-                            context=selection_context,
-                            dataset_id=dataset_id,
-                            semantic_selection_ids=semantic_ids,
-                        ),
-                        kind="metric",
-                        label=label,
-                        description=rendered_description,
-                        dataset_id=dataset_id,
-                        semantic_selection_ids=semantic_ids,
-                    )
-                )
-        return tuple(bundled)
-
     def _semantic_options_for_ambiguous_scopes(
         self,
         *,
@@ -4070,8 +2588,7 @@ class AnalyticsQueryService:
             metric_names = [
                 metrics[item].name
                 for item in dataset.metric_ids
-                if item in metrics
-                and (allowed_element_ids is None or item in allowed_element_ids)
+                if item in metrics and (allowed_element_ids is None or item in allowed_element_ids)
             ][:8]
             description_parts = [model.description or f"按{model.name}业务记录分析"]
             if metric_names:
@@ -4183,16 +2700,10 @@ class AnalyticsQueryService:
         published: PublishedRelease,
         *,
         selection_context: _SelectionTokenContext,
-    ) -> tuple[
-        str | None,
-        str | None,
-        SemanticElementType | None,
-        str | None,
-        tuple[str, ...],
-    ]:
+    ) -> tuple[str | None, str | None, SemanticElementType | None, str | None]:
         selected_id = request.selected_candidate_id
         if selected_id is None:
-            return None, None, None, None, ()
+            return None, None, None, None
         release = published.release
         if (
             request.expected_release_id != release.id
@@ -4209,25 +2720,8 @@ class AnalyticsQueryService:
             context=selection_context,
         )
         if not semantic_selection_ids:
-            return selected_dataset_id, None, None, None, ()
+            return selected_dataset_id, None, None, None
         if len(semantic_selection_ids) > 1:
-            parsed = tuple(
-                self._parse_semantic_selection_id(selection_id)
-                for selection_id in semantic_selection_ids
-            )
-            if all(
-                element_id is not None
-                and element_type is SemanticElementType.METRIC
-                and time_id is None
-                for element_id, element_type, time_id in parsed
-            ):
-                return (
-                    selected_dataset_id,
-                    None,
-                    None,
-                    None,
-                    tuple(element_id for element_id, _type, _time in parsed if element_id),
-                )
             raise SemanticParsingError(
                 "组合确认项携带了不支持的语义类型，请重新提问",
                 code="CANDIDATE_NOT_FOUND",
@@ -4235,7 +2729,7 @@ class AnalyticsQueryService:
         semantic_selection_id = semantic_selection_ids[0]
         element_id, element_type, time_id = self._parse_semantic_selection_id(semantic_selection_id)
         if element_id is not None or time_id is not None:
-            return selected_dataset_id, element_id, element_type, time_id, ()
+            return selected_dataset_id, element_id, element_type, time_id
         raise SemanticParsingError(
             "确认项携带的语义选择已失效，请重新提问",
             code="CANDIDATE_NOT_FOUND",
@@ -4580,9 +3074,7 @@ class AnalyticsQueryService:
         if output_columns:
             dimension_columns = [item for item in output_columns if item.kind == "dimension"]
             value_columns = [
-                item
-                for item in output_columns
-                if item.kind in {"metric", "calculation", "ratio"}
+                item for item in output_columns if item.kind in {"metric", "calculation", "ratio"}
             ]
             # 时间维优先做横轴：两个维度时另一个维度是分组系列（对齐上游趋势图
             # 的 dateColumnName / categoryColumnName 分工）。只取第一个维度做 x
@@ -4630,9 +3122,7 @@ class AnalyticsQueryService:
             ]
         else:
             x_id = query.dimension_ids[0] if query.dimension_ids else None
-            x_is_time = bool(
-                x_id in dimensions and dimensions[x_id].semantic_type == "time"
-            )
+            x_is_time = bool(x_id in dimensions and dimensions[x_id].semantic_type == "time")
             series_id = None
             y_ids = list(query.metric_ids)
             y_units = [units.get(metric_id) for metric_id in query.metric_ids]
@@ -4675,8 +3165,7 @@ class AnalyticsQueryService:
         governed = {item.id: item.name for item in release.dimensions}
         governed.update({item.id: item.name for item in release.metrics})
         return tuple(
-            governed.get(item.element_id) or _display_alias(item.name)
-            for item in output_columns
+            governed.get(item.element_id) or _display_alias(item.name) for item in output_columns
         )
 
     @staticmethod
@@ -4723,9 +3212,7 @@ def _apply_drilldown(base: SemanticQuery, action: str, element_id: str) -> Seman
         return base.model_copy(
             update={
                 "dimension_ids": remaining,
-                "order_by": tuple(
-                    item for item in base.order_by if item.element_id != element_id
-                ),
+                "order_by": tuple(item for item in base.order_by if item.element_id != element_id),
             }
         )
     kept_order = tuple(

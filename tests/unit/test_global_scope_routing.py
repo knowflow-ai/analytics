@@ -24,19 +24,10 @@ from knowflow_analytics.query.contracts import (
     SemanticAmbiguityMember,
 )
 from knowflow_analytics.query.errors import SemanticParsingError
-from knowflow_analytics.query.intent_adjudicator import (
-    IntentAdjudicationDecision,
-    IntentAdjudicationResult,
-)
 from knowflow_analytics.query.mapper import SemanticMapper
 from knowflow_analytics.query.orchestrator import CandidateOrchestrator
 from knowflow_analytics.query.parser import LlmS2SqlParser
 from knowflow_analytics.query.service import AnalyticsQueryService
-from knowflow_analytics.query.weak_metric_adjudicator import (
-    WeakMetricAdjudicationDecision,
-    WeakMetricAdjudicationMode,
-    WeakMetricAdjudicationResult,
-)
 from knowflow_analytics.semantic import SemanticTranslator
 from knowflow_analytics.semantic.index import (
     EmbeddingBatch,
@@ -87,33 +78,6 @@ class _Executor:
         return QueryResult(columns=("value",), rows=((1,),), row_count=1)
 
 
-class _ConfirmationMemoryStore:
-    def __init__(self) -> None:
-        self.saved = []
-
-    def save_confirmation_memory(self, memory) -> None:
-        self.saved.append(memory)
-
-    def find_confirmation_memory(self, **kwargs):
-        for memory in reversed(self.saved):
-            if memory.revoked_at is not None or memory.expires_at <= kwargs["now"]:
-                continue
-            if all(getattr(memory, key) == value for key, value in kwargs.items() if key != "now"):
-                return memory
-        return None
-
-    def list_confirmation_memories(self, **_kwargs):
-        return tuple(self.saved)
-
-    def revoke_confirmation_memory(self, **_kwargs):
-        return False
-
-
-class _FailingConfirmationMemoryStore(_ConfirmationMemoryStore):
-    def find_confirmation_memory(self, **_kwargs):
-        raise RuntimeError("confirmation memory database unavailable")
-
-
 class _InvalidS2SqlGateway:
     def generate_json(self, **_kwargs):
         return {"thought": "invalid", "sql": 'SELECT "未知指标" FROM "销售经营"'}
@@ -156,61 +120,11 @@ class _AmbiguityOnlyEmbeddingGateway:
         return EmbeddingBatch(model_id="ambiguity-only", dimension=2, vectors=vectors)
 
 
-class _ScriptedWeakMetricAdjudicator:
-    def __init__(self, result: WeakMetricAdjudicationResult | Exception) -> None:
-        self.result = result
-        self.calls: list[dict[str, object]] = []
-
-    def adjudicate(self, **kwargs) -> WeakMetricAdjudicationResult:
-        self.calls.append(kwargs)
-        if isinstance(self.result, Exception):
-            raise self.result
-        return self.result
-
-
-class _LabelChoosingIntentAdjudicator:
-    def __init__(
-        self,
-        *,
-        target_label: str | None = None,
-        target_kind: str | None = None,
-        decision: IntentAdjudicationDecision = IntentAdjudicationDecision.MATCH,
-    ) -> None:
-        self.target_label = target_label
-        self.target_kind = target_kind
-        self.decision = decision
-        self.calls: list[dict[str, object]] = []
-
-    def adjudicate(self, **kwargs) -> IntentAdjudicationResult:
-        self.calls.append(kwargs)
-        selection_id = None
-        if self.decision is IntentAdjudicationDecision.MATCH:
-            selection_id = next(
-                item.selection_id
-                for item in kwargs["candidates"]
-                if item.label == self.target_label
-                and (self.target_kind is None or item.kind == self.target_kind)
-            )
-        return IntentAdjudicationResult(
-            decision=self.decision,
-            selection_id=selection_id,
-            candidate_set_hash="sha256:intent-candidates",
-            reason="根据业务定义判断",
-        )
-
-
 def _service(
     release,
     *,
     llm_gateway=None,
     query_embedding: bool = True,
-    weak_metric_adjudicator=None,
-    adjudication_mode: WeakMetricAdjudicationMode | None = None,
-    intent_adjudicator=None,
-    analysis_object_adjudication_mode: WeakMetricAdjudicationMode = (
-        WeakMetricAdjudicationMode.OFF
-    ),
-    confirmation_memories=None,
     query_failures=None,
 ):
     gateway = _CountingEmbeddingGateway()
@@ -225,24 +139,6 @@ def _service(
         ),
         translator=SemanticTranslator(),
         executor=executor,
-        weak_metric_adjudicator=weak_metric_adjudicator,
-        weak_metric_adjudication_mode=(
-            adjudication_mode
-            if adjudication_mode is not None
-            else WeakMetricAdjudicationMode.AUTO
-            if weak_metric_adjudicator is not None
-            else WeakMetricAdjudicationMode.OFF
-        ),
-        intent_adjudicator=intent_adjudicator,
-        semantic_intent_adjudication_mode=(
-            adjudication_mode
-            if adjudication_mode is not None
-            else WeakMetricAdjudicationMode.AUTO
-            if intent_adjudicator is not None
-            else WeakMetricAdjudicationMode.SHADOW
-        ),
-        analysis_object_adjudication_mode=analysis_object_adjudication_mode,
-        confirmation_memories=confirmation_memories,
         query_failures=query_failures,
     )
     return service, gateway, executor
@@ -482,9 +378,6 @@ def _ambiguity_service(
     *,
     embedding_gateway=None,
     llm_gateway=None,
-    intent_adjudicator=None,
-    weak_mode: WeakMetricAdjudicationMode = WeakMetricAdjudicationMode.OFF,
-    object_mode: WeakMetricAdjudicationMode = WeakMetricAdjudicationMode.OFF,
 ):
     index_gateway = embedding_gateway or _CountingEmbeddingGateway()
     index = SemanticIndexBuilder(index_gateway).build(release)
@@ -498,10 +391,6 @@ def _ambiguity_service(
         ),
         translator=SemanticTranslator(),
         executor=executor,
-        intent_adjudicator=intent_adjudicator,
-        weak_metric_adjudication_mode=weak_mode,
-        semantic_intent_adjudication_mode=weak_mode,
-        analysis_object_adjudication_mode=object_mode,
     )
     return service, llm_gateway, executor
 
@@ -945,79 +834,6 @@ def test_typed_semantic_options_do_not_inject_a_same_id_dimension_value(
         "element:metric:net_revenue",
         "element:dimension:channel",
     }
-
-
-def test_ai_selection_reaches_final_mapping_for_two_weak_metrics_in_one_scope(
-    sales_release,
-) -> None:
-    release = _weak_sales_metric_release(sales_release).model_copy(
-        update={
-            "metrics": tuple(
-                item.model_copy(update={"aliases": ("退款销售额",)})
-                if item.id == "refund_amount"
-                else item
-                for item in _weak_sales_metric_release(sales_release).metrics
-            )
-        }
-    )
-    adjudicator = _ScriptedWeakMetricAdjudicator(
-        WeakMetricAdjudicationResult(
-            decision=WeakMetricAdjudicationDecision.MATCH,
-            metric_id="net_revenue",
-            candidate_set_hash="sha256:same-scope",
-        )
-    )
-    llm = _FixedS2SqlGateway('SELECT SUM("净收入") FROM "销售经营"')
-    service, _embedding, _executor = _service(
-        release,
-        llm_gateway=llm,
-        query_embedding=False,
-        weak_metric_adjudicator=adjudicator,
-    )
-
-    response = service.query(
-        QueryRequest(
-            project_id="sales",
-            question="销售额是多少",
-            include_diagnostics=True,
-        ),
-        actor_id="tenant-1",
-    )
-
-    assert response.state is QueryState.COMPLETED, response.model_dump_json(indent=2)
-    final = next(item for item in response.trace if item.stage.value == "FINAL_PARSING")
-    competing_weak_matches = [
-        item
-        for item in final.detail["final_mapping"]["matches"]
-        if item["element_id"] == "refund_amount" and item["method"] != "all_field"
-    ]
-    assert competing_weak_matches == []
-    assert response.semantic_query.metric_ids == ("net_revenue",)
-
-
-def test_confirmation_memory_read_failure_disables_auto_adjudication(
-    sales_release,
-) -> None:
-    adjudicator = _LabelChoosingIntentAdjudicator(
-        target_label="业务数量总计",
-        target_kind="metric",
-    )
-    service, _embedding, executor = _service(
-        _routed_cross_type_same_name_release(sales_release),
-        query_embedding=False,
-        intent_adjudicator=adjudicator,
-        adjudication_mode=WeakMetricAdjudicationMode.AUTO,
-        confirmation_memories=_FailingConfirmationMemoryStore(),
-    )
-
-    response = service.query(
-        QueryRequest(project_id="sales", question="业务数量"),
-        actor_id="tenant-1",
-    )
-
-    assert response.state is QueryState.CLARIFICATION_REQUIRED
-    assert adjudicator.calls == []
-    assert executor.calls == 0
 
 
 def test_scope_fallback_is_presented_as_business_objects_not_datasets(
@@ -1740,16 +1556,8 @@ def test_distinct_exact_metrics_from_different_roots_fail_before_s2sql_parsing(
             ),
         }
     )
-    adjudicator = _ScriptedWeakMetricAdjudicator(
-        WeakMetricAdjudicationResult(
-            decision=WeakMetricAdjudicationDecision.MATCH,
-            metric_id="net_revenue",
-            candidate_set_hash="sha256:not-called",
-        )
-    )
     service, gateway, executor = _service(
         release,
-        weak_metric_adjudicator=adjudicator,
     )
 
     response = service.query(QueryRequest(project_id="sales", question="净收入和客户数量"))
@@ -1758,7 +1566,6 @@ def test_distinct_exact_metrics_from_different_roots_fail_before_s2sql_parsing(
     assert response.error.code == "CROSS_FACT_METRICS_UNSUPPORTED"
     assert response.diagnostics.category == "routing"
     assert "拆开提问" in response.diagnostics.user_hint
-    assert adjudicator.calls == []
     assert len(gateway.calls) == 1
     assert executor.calls == 0
 

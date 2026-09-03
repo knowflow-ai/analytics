@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Literal
-
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -37,17 +35,6 @@ class AnalyticsSettings(BaseSettings):
     physical_sql_corrector_enabled: bool = False
     # Multi-turn rewrite is opt-in by default.
     multi_turn_enabled: bool = False
-    # Weak metric 候选先交给受限 AI 业务裁决；失败仍回退人工确认。
-    weak_metric_adjudication_mode: Literal["off", "shadow", "auto"] = "shadow"
-    # V2 cross-type / multi-phrase semantic adjudication has its own rollout gate.
-    semantic_intent_adjudication_mode: Literal["off", "shadow", "auto"] = "shadow"
-    # 无指标锚点的多事实粒度单独灰度，便于只回滚业务对象自动选择。
-    analysis_object_adjudication_mode: Literal["off", "shadow", "auto"] = "shadow"
-    confirmation_memory_ttl_seconds: int = Field(
-        default=2_592_000,
-        ge=60,
-        le=31_536_000,
-    )
     auto_create_schema: bool = False
     allow_debug_sql: bool = False
     dry_run_before_execute: bool = False

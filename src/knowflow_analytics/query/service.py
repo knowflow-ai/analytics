@@ -14,6 +14,9 @@ from datetime import UTC, datetime, timedelta
 from difflib import SequenceMatcher
 from typing import Protocol
 
+import sqlglot
+from sqlglot import exp
+
 from knowflow_analytics.catalog.store import PublishedRelease
 from knowflow_analytics.contracts import (
     DimensionValueSpec,
@@ -253,6 +256,9 @@ class AnalyticsQueryService:
         published: PublishedRelease | None = None
         selection_context: _SelectionTokenContext | None = None
         selected_scope_dataset_id: str | None = None
+        # 生成阶段用的 Release / 证据：无并集时就是真实那份。
+        generation_release: SemanticRelease | None = None
+        generation_evidence: MappingEvidence | None = None
         decision_obligations: list[SemanticDecisionObligation] = []
         automatic_decisions: list[SemanticDecision] = []
         clarified_choice: str | None = None
@@ -485,6 +491,22 @@ class AnalyticsQueryService:
                             # 等这次真的答出来了再落库：没答出来的选择不该变成
                             # 推荐给建模者的别名。
                             clarified_choice = chosen_choice.label
+                # 作用域定不下来恰恰是并集要解决的事，不能抢在它之前弹卡。
+                union = (
+                    _union_scope(release, dataset_ids) if candidate_selection_id is None else None
+                )
+                if (
+                    union is not None
+                    and scope_resolution.status is not QueryScopeResolutionStatus.REFUSED
+                ):
+                    scope_resolution = scope_resolution.model_copy(
+                        update={
+                            "status": QueryScopeResolutionStatus.SELECTED,
+                            "code": "QUERY_SCOPE_DEFERRED_TO_GENERATION",
+                            "message": "作用域改由生成后的确定性反推决定。",
+                            "selected_dataset_id": _UNION_DATASET_ID,
+                        }
+                    )
                 if (
                     scope_resolution.status is QueryScopeResolutionStatus.CLARIFICATION
                     and not global_evidence.matches
@@ -652,16 +674,30 @@ class AnalyticsQueryService:
                         details={"scope_resolution": scope_resolution.to_trace_detail()},
                     )
                 assert scope_resolution.selected_dataset_id is not None
-                candidate_set = self._orchestrator.discover_selected_scope(
-                    question=effective_question,
-                    release=release,
-                    evidence=global_evidence,
-                    dataset_id=scope_resolution.selected_dataset_id,
-                    now=now,
-                    selected_element_id=effective_selected_element_id,
-                    selected_element_type=effective_selected_element_type,
-                    selected_time_dimension_id=selected_time_dimension_id,
-                )
+                if union is not None:
+                    generation_release, union_id = union
+                    generation_evidence = _union_evidence(global_evidence, union_id)
+                    candidate_set = self._orchestrator.discover_selected_scope(
+                        question=effective_question,
+                        release=generation_release,
+                        evidence=generation_evidence,
+                        dataset_id=union_id,
+                        now=now,
+                        selected_element_id=effective_selected_element_id,
+                        selected_element_type=effective_selected_element_type,
+                        selected_time_dimension_id=selected_time_dimension_id,
+                    )
+                else:
+                    candidate_set = self._orchestrator.discover_selected_scope(
+                        question=effective_question,
+                        release=release,
+                        evidence=global_evidence,
+                        dataset_id=scope_resolution.selected_dataset_id,
+                        now=now,
+                        selected_element_id=effective_selected_element_id,
+                        selected_element_type=effective_selected_element_type,
+                        selected_time_dimension_id=selected_time_dimension_id,
+                    )
             else:
                 candidate_set = self._orchestrator.discover(
                     question=effective_question,
@@ -838,23 +874,61 @@ class AnalyticsQueryService:
                 )
             trace.append(QueryTraceStep(stage=QueryStage.FINAL_PARSING, status="started"))
             translation_holder = {}
+            bound_scope_holder: dict[str, str] = {}
 
             def validate_and_translate(candidate: ParsedSemanticCandidate) -> None:
                 if request.include_diagnostics:
                     diagnostic_context["last_candidate"] = candidate.model_dump(mode="json")
-                translation_holder["value"] = self._s2sql_translator.translate(
-                    release=release,
-                    dataset_id=candidate.dataset_id,
-                    corrected_s2sql=candidate.corrected_s2sql,
-                    visible_element_ids=allowed_element_ids,
-                    row_filters=row_filters,
-                    dialect=self._targets.for_project(release.project_id).dialect,
-                )
+                dialect = self._targets.for_project(release.project_id).dialect
+
+                def translate(dataset_id: str, *, retarget: bool = False):
+                    s2sql = candidate.corrected_s2sql
+                    if retarget:
+                        s2sql = _retarget_tables(
+                            s2sql, next(d for d in release.datasets if d.id == dataset_id).name
+                        )
+                    return self._s2sql_translator.translate(
+                        release=release,
+                        dataset_id=dataset_id,
+                        corrected_s2sql=s2sql,
+                        visible_element_ids=allowed_element_ids,
+                        row_filters=row_filters,
+                        dialect=dialect,
+                    )
+
+                if candidate.dataset_id != _UNION_DATASET_ID:
+                    translation_holder["value"] = translate(candidate.dataset_id)
+                    return
+                # 并集只用于生成。真实作用域由「哪个能确定性地翻译出这条查询」反推：
+                # 翻译已经在验证成员归属、冻结路由可达性与治理规则，比另写一套集合
+                # 判断更严也更少一处漂移。恰好一个成功即绑定；零个说明这条查询跨了
+                # 事实根（实测模型确实会写出来），多个按粒度收敛取最粗的那个。
+                bound: dict[str, object] = {}
+                for dataset_id in dataset_ids:
+                    try:
+                        bound[dataset_id] = translate(dataset_id, retarget=True)
+                    except (AnalyticsError, ValueError):
+                        continue
+                if not bound:
+                    raise MappingError(
+                        "这个问题用到的业务对象不能放在同一次分析里；请拆开提问。",
+                        code="CROSS_FACT_METRICS_UNSUPPORTED",
+                    )
+                chosen = self._coarsest_scope(release, tuple(bound))
+                if chosen is None:
+                    raise MappingError(
+                        "多个业务分析范围都能执行这个问题，系统不敢替你选。",
+                        code="AMBIGUOUS_QUERY_SCOPE",
+                    )
+                bound_scope_holder["value"] = chosen
+                translation_holder["value"] = bound[chosen]
 
             corrected = self._orchestrator.final_parse(
                 question=effective_question,
                 query_id=query_id,
-                release=release,
+                # 并集只在生成阶段存在：最终 LLM 要看到全部候选作用域的成员，
+                # 而绑定与执行仍在反推出的真实作用域上。
+                release=generation_release or release,
                 index=index,
                 selected=selected,
                 now=now,
@@ -868,9 +942,15 @@ class AnalyticsQueryService:
                 if request.include_diagnostics
                 else None,
                 tenant_id=tenant_id,
-                mapping_evidence=global_evidence,
+                mapping_evidence=generation_evidence or global_evidence,
                 allowed_element_ids=allowed_element_ids,
             )
+            # 并集只用于生成。绑定完成后，候选立刻改挂到反推出的真实作用域上——
+            # 后面的查询规则、历史、诊断都必须看到那个作用域，而不是生成期的并集。
+            bound_scope = bound_scope_holder.get("value")
+            if bound_scope is not None:
+                corrected = corrected.model_copy(update={"dataset_id": bound_scope})
+                selected_scope_dataset_id = bound_scope
             rule_application = self._query_rule_engine.apply(
                 release=release,
                 dataset_id=corrected.dataset_id,
@@ -2487,6 +2567,26 @@ class AnalyticsQueryService:
         )
 
     @staticmethod
+    def _coarsest_scope(release: SemanticRelease, dataset_ids: tuple[str, ...]) -> str | None:
+        """多个作用域都能执行同一条查询时，取粒度最粗的那个。
+
+        明细/主表这类嵌套作用域对同一条查询都成立，但答案不同：细粒度会因扇出重复
+        计数。取链的最粗端是唯一无扇出的解释。构不成全序从属链就 fail-closed。
+        """
+
+        if len(dataset_ids) == 1:
+            return dataset_ids[0]
+        resolver = QueryScopeResolver.from_release(release)
+        coarsest = [
+            item
+            for item in dataset_ids
+            if not any(
+                resolver._fine_to_coarse(item, other) for other in dataset_ids if other != item
+            )
+        ]
+        return coarsest[0] if len(coarsest) == 1 else None
+
+    @staticmethod
     def _scope_roots(release: SemanticRelease, dataset_ids: tuple[str, ...]) -> dict[str, object]:
         """候选作用域各自的业务事实根。
 
@@ -3636,6 +3736,10 @@ def _filter_operator_label(value: str) -> str:
     }.get(value, value)
 
 
+# 并集作用域：只在生成阶段存在，用来让最终 LLM 看到全部候选作用域的成员。
+# 它不是发布资源、不参与授权、也不执行——执行永远发生在反推出的那个真实作用域上。
+_UNION_DATASET_ID = "dataset:union:generation"
+
 _SUGGESTION_SIMILARITY = 0.6
 # 作用域澄清卡的选项上限：再多用户就挑不动了，与其铺满不如让建模者去补词典。
 _SCOPE_CHOICE_MAX_OPTIONS = 12
@@ -3651,6 +3755,116 @@ def _equality_filter_values(query: SemanticQuery) -> tuple[tuple[str, object], .
         elif item.operator is FilterOperator.IN and isinstance(item.value, (list, tuple)):
             values.extend((item.dimension_id, entry) for entry in item.value)
     return tuple(values)
+
+
+def _union_scope(
+    release: SemanticRelease,
+    dataset_ids: tuple[str, ...],
+) -> tuple[SemanticRelease, str] | None:
+    """把候选作用域的成员并成一个，只为生成阶段用。
+
+    作用域选择本来是一道**理解题**——「业绩」「销量」「都卖了些什么」指的是什么，
+    要读懂问句才知道。路由器按合同不读问句、只看词典命中，用局部信息做了一个不可逆
+    的决定；判错之后模型被锁在错误的范围里，只能拿手头的指标硬凑（实机：「这些门店的
+    销量」返回门店数量）。
+
+    改为让读得懂的那个先说话：模型看到全部候选作用域的成员，写出业务名 S2SQL，
+    再由编译器**确定性地**反推哪个真实作用域能执行它。模型提议，编译器裁定——它
+    自始至终没有拿到 Scope 权威。
+
+    实测（demo_cafe，27 题）：并集成员只比最宽的作用域多 1.27 倍；直答正确 14→22，
+    澄清 10→4，静默错答 2→0。
+    """
+
+    datasets = {item.id: item for item in release.datasets}
+    routes = {item.dataset_id: item for item in release.analysis_topic_routes}
+    scopes = [datasets[item] for item in dataset_ids if item in datasets and item in routes]
+    if len(scopes) < 2:
+        return None
+    # 前置条件：成员业务名在候选作用域之间唯一。否则并集会把两个各自作用域内无歧义
+    # 的同名成员（两个都叫「净收入」）摆到一起，凭空造出单个作用域里不存在的重名，
+    # 让模型无法用名字表达选择。跨作用域重名本身是建模问题，已有
+    # CROSS_SCOPE_METRIC_NAME_SHARED 诊断和限定别名去治理；在那之前老实走原路径。
+    names: dict[str, str] = {}
+    for element in (*release.metrics, *release.dimensions):
+        if not any(
+            element.id in scope.metric_ids or element.id in scope.dimension_ids
+            for scope in scopes
+        ):
+            continue
+        key = normalize_text(element.name)
+        if names.setdefault(key, element.id) != element.id:
+            return None
+    # 事实根取路径最多的那个：它能到达最多实体，冻结路由也最宽。
+    finest = max(scopes, key=lambda item: len(routes[item.id].paths))
+    metrics = tuple(dict.fromkeys(item for scope in scopes for item in scope.metric_ids))
+    dimensions = tuple(dict.fromkeys(item for scope in scopes for item in scope.dimension_ids))
+    models = tuple(dict.fromkeys(item for scope in scopes for item in scope.model_ids))
+    paths = tuple(
+        {path.target_model_id: path for scope in scopes for path in routes[scope.id].paths}.values()
+    )
+    union = finest.model_copy(
+        update={
+            "id": _UNION_DATASET_ID,
+            # 这个名字会出现在模型写的 S2SQL 的 FROM 里，用最细事实根那个作用域的
+            # 名字，模型看到的措辞与单作用域时一致。
+            "name": finest.name,
+            "biz_name": "union_generation",
+            "model_ids": models,
+            "metric_ids": metrics,
+            "dimension_ids": dimensions,
+        }
+    )
+    # 默认计数保留：去掉它，生成阶段的校验就会以
+    # `S2SQL_DEFAULT_COUNT_METRIC_REQUIRED` 拒掉所有 `COUNT(*)`（实测「上海有几家门店」
+    # 因此整条失败）。它只服务于生成期校验——按各真实作用域翻译时，`COUNT(*)` 会各自
+    # 绑到那个作用域自己的默认计数，多个成立时再由粒度收敛取最粗的那个。
+    union_route = routes[finest.id].model_copy(
+        update={"dataset_id": _UNION_DATASET_ID, "paths": paths}
+    )
+    return (
+        release.model_copy(
+            update={
+                "datasets": (*release.datasets, union),
+                "analysis_topic_routes": (*release.analysis_topic_routes, union_route),
+            }
+        ),
+        _UNION_DATASET_ID,
+    )
+
+
+def _retarget_tables(corrected_s2sql: str, dataset_name: str) -> str:
+    """把 S2SQL 里的表名换成目标作用域的业务名。
+
+    并集在 Prompt 里必须有个名字，模型会把它写进 `FROM`。拿这条 S2SQL 去按各个真实
+    作用域翻译时表名对不上，翻译一律失败（实测：所有 `COUNT(*)` 问题整条挂掉）。
+    表名在 S2SQL 里不承载语义——成员归属由列名决定——所以按目标作用域改写是安全的。
+    """
+
+    tree = sqlglot.parse_one(corrected_s2sql, read="postgres")
+    for table in tree.find_all(exp.Table):
+        table.set("this", exp.to_identifier(dataset_name, quoted=True))
+        table.set("db", None)
+        table.set("catalog", None)
+    return tree.sql(dialect="postgres")
+
+
+def _union_evidence(evidence: MappingEvidence, union_id: str) -> MappingEvidence:
+    """让并集作用域看得见每一条已经可见于某个真实作用域的证据。"""
+
+    return evidence.model_copy(
+        update={
+            "dataset_ids": (*evidence.dataset_ids, union_id),
+            "matches": tuple(
+                item.model_copy(
+                    update={"eligible_dataset_ids": (*item.eligible_dataset_ids, union_id)}
+                )
+                if item.eligible_dataset_ids
+                else item
+                for item in evidence.matches
+            ),
+        }
+    )
 
 
 def _unpublished_filter_values(

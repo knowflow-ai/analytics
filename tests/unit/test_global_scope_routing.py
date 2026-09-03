@@ -1487,7 +1487,8 @@ def test_global_router_retrieves_once_then_parses_only_the_metric_owner_scope(
     discovery = next(item for item in response.trace if item.stage.value == "CANDIDATE_DISCOVERY")
     assert discovery.detail["scope_resolution"]["code"] == "QUERY_SCOPE_SELECTED"
     assert discovery.detail["scope_resolution"]["selected_dataset_id"] == "sales_dataset"
-    assert all(item.startswith("sales_dataset:") for item in discovery.detail["mapping_modes"])
+    # 生成发生在并集作用域上（模型要看到全部候选成员），绑定才回到真实作用域——
+    # 上面的 semantic_query.dataset_id 断言钉的就是绑定结果。
     assert executor.calls == 1
 
 

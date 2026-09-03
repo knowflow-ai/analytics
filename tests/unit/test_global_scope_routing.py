@@ -894,7 +894,8 @@ def test_entity_attribute_routes_to_its_owner_without_a_business_object_card(
     assert executor.calls == 1
     discovery = next(item for item in response.trace if item.stage.value == "CANDIDATE_DISCOVERY")
     assert discovery.detail["scope_resolution"]["selected_dataset_id"] == "customer_scope"
-    assert discovery.detail["scope_resolution"]["code"] == "QUERY_SCOPE_SELECTED"
+    # 作用域不再是生成前"选中"的，而是从生成结果里实际用到的成员反推出来的。
+    assert discovery.detail["scope_resolution"]["code"] == "QUERY_SCOPE_DERIVED_FROM_QUERY"
 
 
 def test_business_object_continuation_keeps_the_confirmed_dimension_without_scope_leak(
@@ -1485,7 +1486,8 @@ def test_global_router_retrieves_once_then_parses_only_the_metric_owner_scope(
     assert response.semantic_query.dataset_id == "sales_dataset"
     assert len(gateway.calls) == 1
     discovery = next(item for item in response.trace if item.stage.value == "CANDIDATE_DISCOVERY")
-    assert discovery.detail["scope_resolution"]["code"] == "QUERY_SCOPE_SELECTED"
+    # 作用域不再是生成前"选中"的，而是从生成结果里实际用到的成员反推出来的。
+    assert discovery.detail["scope_resolution"]["code"] == "QUERY_SCOPE_DERIVED_FROM_QUERY"
     assert discovery.detail["scope_resolution"]["selected_dataset_id"] == "sales_dataset"
     # 生成发生在并集作用域上（模型要看到全部候选成员），绑定才回到真实作用域——
     # 上面的 semantic_query.dataset_id 断言钉的就是绑定结果。
@@ -2005,3 +2007,127 @@ class TestClarificationFeedsTheBusinessDictionary:
         )
 
         assert [item for item in gaps.saved if item.kind == "clarified"] == []
+
+
+class TestCrossScopeNameCollisionInTheUnion:
+    """并集把不同作用域里同名的成员摆到一起，必须给限定名，不能靠"有重名就不用并集"绕开。
+
+    两个作用域各自都叫「净收入」，各自内部毫无歧义；并集造出了单作用域里不存在的重名，
+    模型无法用名字表达选择。真实仓库里每张事实表都有「金额」「数量」——按重名回退等于
+    并集永远用不上。
+
+    复用建模期跨模型重名治理的同一条确定性规则：成员名是模型名子串时用模型名，否则
+    模型名+成员名。限定名只活在生成阶段，翻译前换回规范名——限定名指向哪个成员本身
+    就是这次选择，换回去后只有拥有该成员的作用域能翻译成功，正好是绑定信号。
+    """
+
+    def _colliding(self, sales_release):
+        from knowflow_analytics.contracts import Aggregation, DatasetSpec, MetricSpec
+
+        customer_metric = MetricSpec(
+            id="customer_revenue", name="净收入", model_id="customers",
+            field_id="customers.id", aggregation=Aggregation.COUNT_DISTINCT,
+        )
+        customer_scope = DatasetSpec(
+            id="customer_scope", name="客户范围", model_ids=("customers",),
+            metric_ids=(customer_metric.id,), dimension_ids=("customer_segment",),
+        )
+        return _routed_release(sales_release).model_copy(
+            update={
+                "metrics": (*sales_release.metrics, customer_metric),
+                "datasets": (sales_release.datasets[0], customer_scope),
+            }
+        )
+
+    def test_colliding_members_get_a_qualified_name_in_the_union(self, sales_release) -> None:
+        from knowflow_analytics.query.service import _union_scope
+
+        built = _union_scope(self._colliding(sales_release), ("sales_dataset", "customer_scope"))
+
+        assert built is not None, "有重名就退回原路径的话，并集永远用不上"
+        generation_release, _union_id, renames = built
+        names = {item.id: item.name for item in generation_release.metrics}
+        assert names["net_revenue"] != names["customer_revenue"]
+        # 裸名不能留下：符号表会因此重新变回歧义。
+        assert "净收入" not in set(names.values())
+        # 还原表按成员 ID 保身份：两个限定名会还原成同一个规范名，只换字符串会让
+        # 目标作用域把不属于它的那个静默替换成自己那个。
+        assert {name: value[0] for name, value in renames.items()} == {
+            names["net_revenue"]: "net_revenue",
+            names["customer_revenue"]: "customer_revenue",
+        }
+
+    def test_the_bare_name_is_not_left_as_an_alias(self, sales_release) -> None:
+        from knowflow_analytics.query.service import _union_scope
+
+        built = _union_scope(self._colliding(sales_release), ("sales_dataset", "customer_scope"))
+        assert built is not None
+        generation_release = built[0]
+
+        for metric in generation_release.metrics:
+            if metric.id in {"net_revenue", "customer_revenue"}:
+                assert "净收入" not in metric.aliases
+
+    def test_a_qualified_name_is_restored_before_binding(self, sales_release) -> None:
+        """限定名换回规范名之后，只有拥有该成员的作用域能翻译成功——那就是绑定。"""
+        from knowflow_analytics.query.service import _restore_union_names, _union_scope
+
+        built = _union_scope(self._colliding(sales_release), ("sales_dataset", "customer_scope"))
+        assert built is not None
+        generation_release, _union_id, renames = built
+        qualified = {item.id: item.name for item in generation_release.metrics}["net_revenue"]
+
+        restored = _restore_union_names(
+            f'SELECT SUM("{qualified}") FROM "销售经营"',
+            renames,
+            frozenset({"net_revenue"}),
+        )
+
+        assert '"净收入"' in restored
+        assert qualified not in restored
+
+    def test_a_qualified_name_outside_the_scope_makes_it_unusable(self, sales_release) -> None:
+        """限定名指向的成员不属于该作用域时判定不成立——否则会被静默替换成同名的另一个。"""
+        import pytest as _pytest
+
+        from knowflow_analytics.query.errors import SemanticParsingError
+        from knowflow_analytics.query.service import _restore_union_names, _union_scope
+
+        built = _union_scope(self._colliding(sales_release), ("sales_dataset", "customer_scope"))
+        assert built is not None
+        generation_release, _union_id, renames = built
+        qualified = {item.id: item.name for item in generation_release.metrics}["customer_revenue"]
+
+        with _pytest.raises(SemanticParsingError):
+            _restore_union_names(
+                f'SELECT SUM("{qualified}") FROM "销售经营"',
+                renames,
+                frozenset({"net_revenue"}),
+            )
+
+    def test_a_residual_collision_still_falls_back(self, sales_release) -> None:
+        """限定名也撞车时照旧 fail-closed 走原路径，不硬造名字。"""
+        from knowflow_analytics.contracts import Aggregation, DatasetSpec, MetricSpec
+        from knowflow_analytics.query.service import _union_scope
+
+        # 同一个模型里的重名：限定名区分不了，仍由既有的同名澄清处理。
+        twin = MetricSpec(
+            id="orders_twin", name="净收入", model_id="orders",
+            field_id="orders.net_amount", aggregation=Aggregation.SUM,
+        )
+        release = _routed_release(sales_release).model_copy(
+            update={
+                "metrics": (*sales_release.metrics, twin),
+                "datasets": (
+                    sales_release.datasets[0].model_copy(
+                        update={"metric_ids": (*sales_release.datasets[0].metric_ids, twin.id)}
+                    ),
+                    DatasetSpec(
+                        id="customer_scope", name="客户范围", model_ids=("customers",),
+                        metric_ids=(), dimension_ids=("customer_segment",),
+                    ),
+                ),
+            }
+        )
+
+        assert _union_scope(release, ("sales_dataset", "customer_scope")) is None

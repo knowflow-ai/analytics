@@ -259,6 +259,7 @@ class AnalyticsQueryService:
         # 生成阶段用的 Release / 证据：无并集时就是真实那份。
         generation_release: SemanticRelease | None = None
         generation_evidence: MappingEvidence | None = None
+        union_renames: dict[str, tuple[str, str]] = {}
         decision_obligations: list[SemanticDecisionObligation] = []
         automatic_decisions: list[SemanticDecision] = []
         clarified_choice: str | None = None
@@ -675,7 +676,7 @@ class AnalyticsQueryService:
                     )
                 assert scope_resolution.selected_dataset_id is not None
                 if union is not None:
-                    generation_release, union_id = union
+                    generation_release, union_id, union_renames = union
                     generation_evidence = _union_evidence(global_evidence, union_id)
                     candidate_set = self._orchestrator.discover_selected_scope(
                         question=effective_question,
@@ -860,7 +861,10 @@ class AnalyticsQueryService:
                 )
             )
             selected_scope_dataset_id = selected.dataset_id
-            unresolved = same_name_ambiguity(selected.mapping, release)
+            # 同名歧义的根因是"模型没法用名字表达选择"。并集已经给跨模型重名发了
+            # 限定名，在生成期那份目录里它们本来就不同名——检查必须看模型实际看到的
+            # 那份，否则会为一个已经不存在的歧义弹卡。
+            unresolved = same_name_ambiguity(selected.mapping, generation_release or release)
             if unresolved is not None:
                 semantic_clarification_group = unresolved
                 raise ClarificationSignal(
@@ -884,6 +888,12 @@ class AnalyticsQueryService:
                 def translate(dataset_id: str, *, retarget: bool = False):
                     s2sql = candidate.corrected_s2sql
                     if retarget:
+                        scope = next(d for d in release.datasets if d.id == dataset_id)
+                        s2sql = _restore_union_names(
+                            s2sql,
+                            union_renames,
+                            frozenset((*scope.metric_ids, *scope.dimension_ids)),
+                        )
                         s2sql = _retarget_tables(
                             s2sql, next(d for d in release.datasets if d.id == dataset_id).name
                         )
@@ -951,6 +961,28 @@ class AnalyticsQueryService:
             if bound_scope is not None:
                 corrected = corrected.model_copy(update={"dataset_id": bound_scope})
                 selected_scope_dataset_id = bound_scope
+                # 诊断也要说出反推的结果：生成期的并集不是任何人能观察的执行范围。
+                scope_resolution = scope_resolution.model_copy(
+                    update={
+                        "code": "QUERY_SCOPE_DERIVED_FROM_QUERY",
+                        "message": "作用域由生成结果中实际用到的成员确定性反推得到。",
+                        "selected_dataset_id": bound_scope,
+                    }
+                )
+                for position in range(len(trace) - 1, -1, -1):
+                    step = trace[position]
+                    if step.stage is not QueryStage.CANDIDATE_DISCOVERY:
+                        continue
+                    if "scope_resolution" in step.detail:
+                        trace[position] = step.model_copy(
+                            update={
+                                "detail": {
+                                    **step.detail,
+                                    "scope_resolution": scope_resolution.to_trace_detail(),
+                                }
+                            }
+                        )
+                    break
             rule_application = self._query_rule_engine.apply(
                 release=release,
                 dataset_id=corrected.dataset_id,
@@ -3760,7 +3792,7 @@ def _equality_filter_values(query: SemanticQuery) -> tuple[tuple[str, object], .
 def _union_scope(
     release: SemanticRelease,
     dataset_ids: tuple[str, ...],
-) -> tuple[SemanticRelease, str] | None:
+) -> tuple[SemanticRelease, str, dict[str, tuple[str, str]]] | None:
     """把候选作用域的成员并成一个，只为生成阶段用。
 
     作用域选择本来是一道**理解题**——「业绩」「销量」「都卖了些什么」指的是什么，
@@ -3781,20 +3813,17 @@ def _union_scope(
     scopes = [datasets[item] for item in dataset_ids if item in datasets and item in routes]
     if len(scopes) < 2:
         return None
-    # 前置条件：成员业务名在候选作用域之间唯一。否则并集会把两个各自作用域内无歧义
-    # 的同名成员（两个都叫「净收入」）摆到一起，凭空造出单个作用域里不存在的重名，
-    # 让模型无法用名字表达选择。跨作用域重名本身是建模问题，已有
-    # CROSS_SCOPE_METRIC_NAME_SHARED 诊断和限定别名去治理；在那之前老实走原路径。
-    names: dict[str, str] = {}
-    for element in (*release.metrics, *release.dimensions):
-        if not any(
+    members = tuple(
+        element
+        for element in (*release.metrics, *release.dimensions)
+        if any(
             element.id in scope.metric_ids or element.id in scope.dimension_ids
             for scope in scopes
-        ):
-            continue
-        key = normalize_text(element.name)
-        if names.setdefault(key, element.id) != element.id:
-            return None
+        )
+    )
+    qualified = _qualified_union_names(release, members)
+    if qualified is None:
+        return None
     # 事实根取路径最多的那个：它能到达最多实体，冻结路由也最宽。
     finest = max(scopes, key=lambda item: len(routes[item.id].paths))
     metrics = tuple(dict.fromkeys(item for scope in scopes for item in scope.metric_ids))
@@ -3803,6 +3832,33 @@ def _union_scope(
     paths = tuple(
         {path.target_model_id: path for scope in scopes for path in routes[scope.id].paths}.values()
     )
+    # 并集内部把重名成员改成限定名：模型因此能用名字表达选择。还原表用于生成之后、
+    # 按真实作用域翻译之前把名字换回规范名——限定名只活在生成阶段。
+    canonical = {item.id: item.name for item in members}
+    renames = {
+        name: (element_id, canonical[element_id]) for name, element_id in qualified.items()
+    }
+    by_id = {element_id: name for name, element_id in qualified.items()}
+
+    def relabel(items: tuple, kind: str) -> tuple:
+        return tuple(
+            item.model_copy(
+                update={
+                    "name": by_id[item.id],
+                    # 裸名不能留作别名：符号表会因此重新变回歧义。召回走的是索引，
+                    # 用户仍然可以说「净收入」。
+                    "aliases": tuple(
+                        alias
+                        for alias in item.aliases
+                        if normalize_text(alias) != normalize_text(item.name)
+                    ),
+                }
+            )
+            if item.id in by_id
+            else item
+            for item in items
+        )
+
     union = finest.model_copy(
         update={
             "id": _UNION_DATASET_ID,
@@ -3825,12 +3881,50 @@ def _union_scope(
     return (
         release.model_copy(
             update={
+                "metrics": relabel(release.metrics, "metric"),
+                "dimensions": relabel(release.dimensions, "dimension"),
                 "datasets": (*release.datasets, union),
                 "analysis_topic_routes": (*release.analysis_topic_routes, union_route),
             }
         ),
         _UNION_DATASET_ID,
+        renames,
     )
+
+
+def _restore_union_names(
+    corrected_s2sql: str,
+    renames: dict[str, tuple[str, str]],
+    member_ids: frozenset[str],
+) -> str:
+    """把生成阶段的限定名换回规范名，且**保住身份**。
+
+    限定名（「订单净收入」）只活在并集里，为的是让模型能在重名之间表达选择。翻译发生在
+    真实作用域上，那里的符号表只认规范名。
+
+    还原必须按成员 ID 判断该作用域收不收，不能只换字符串：两个限定名会还原成同一个
+    规范名（都叫「净收入」），目标作用域里只有其中一个，符号表就会把另一个**静默替换**
+    成自己那个——跨事实根的查询于是"翻译成功"（合同测试
+    test_cross_root_metric_phrase_ambiguity 复现）。限定名指向的成员不属于这个作用域时
+    直接判定不成立，让绑定去找真正拥有它的那个，或者一个都没有时拒答。
+    """
+
+    if not renames:
+        return corrected_s2sql
+    lookup = {normalize_text(name): value for name, value in renames.items()}
+    tree = sqlglot.parse_one(corrected_s2sql, read="postgres")
+    for node in tree.find_all(exp.Identifier):
+        entry = lookup.get(normalize_text(node.name))
+        if entry is None:
+            continue
+        element_id, canonical = entry
+        if element_id not in member_ids:
+            raise SemanticParsingError(
+                "限定名指向的成员不属于这个业务分析范围",
+                code="UNION_MEMBER_OUTSIDE_SCOPE",
+            )
+        node.set("this", canonical)
+    return tree.sql(dialect="postgres")
 
 
 def _retarget_tables(corrected_s2sql: str, dataset_name: str) -> str:
@@ -3847,6 +3941,54 @@ def _retarget_tables(corrected_s2sql: str, dataset_name: str) -> str:
         table.set("db", None)
         table.set("catalog", None)
     return tree.sql(dialect="postgres")
+
+
+def _qualified_union_names(
+    release: SemanticRelease,
+    members: tuple[object, ...],
+) -> dict[str, str] | None:
+    """给并集里跨模型重名的成员一个限定名，返回 ``限定名 -> 成员 ID``。
+
+    两个作用域各自都叫「净收入」，各自内部毫无歧义；并集把它们摆到一起，就造出了单个
+    作用域里不存在的重名，模型无法用名字表达选择。这是**命名**问题，不该靠"有重名就
+    不用并集"绕过去——真实仓库里每张事实表都有「金额」「数量」，那等于并集永远用不上。
+
+    复用建模期跨模型重名治理的同一条确定性规则（``qualify_cross_model_metric_aliases``）：
+    成员名是模型名的子串时用模型名，否则模型名+成员名；限定名若已被别人占用就不写，
+    残余冲突照旧 fail-closed 走原路径，交给建模诊断去修。
+
+    同一模型内部的重名不在此列：那是建模缺陷，限定名也区分不了，仍由既有的同名澄清处理。
+    """
+
+    models = {item.id: item for item in release.models}
+    groups: dict[str, list] = defaultdict(list)
+    for element in members:
+        groups[normalize_text(element.name)].append(element)
+    taken = {
+        normalize_text(spelling)
+        for element in members
+        for spelling in (element.name, *element.aliases)
+    }
+    qualified: dict[str, str] = {}
+    for group in groups.values():
+        if len(group) < 2:
+            continue
+        if len({item.model_id for item in group}) != len(group):
+            return None
+        for element in group:
+            model = models.get(element.model_id)
+            if model is None:
+                return None
+            name = (
+                model.name
+                if normalize_text(element.name) in normalize_text(model.name)
+                else f"{model.name}{element.name}"
+            )
+            key = normalize_text(name)
+            if key in taken or key in qualified:
+                return None
+            qualified[name] = element.id
+    return qualified
 
 
 def _union_evidence(evidence: MappingEvidence, union_id: str) -> MappingEvidence:

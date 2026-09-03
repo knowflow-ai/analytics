@@ -849,13 +849,14 @@ def test_scope_fallback_is_presented_as_governed_metrics_not_datasets(
         question="测试",
         dataset_ids=("sales_dataset", "customer_scope"),
     )
-    options = service._scope_metric_options(
+    options = service._scope_choice_options(
         release,
         ("sales_dataset", "customer_scope"),
         selection_context=context,
     )
 
-    assert {item.kind for item in options} == {"metric"}
+    # 指标与维度都给：问句可能压根没有指标意图。
+    assert {item.kind for item in options} <= {"metric", "dimension"}
     assert "净收入" in {item.label for item in options}
     rendered = " ".join(f"{item.label} {item.description}" for item in options)
     assert "销售经营" not in rendered
@@ -1430,7 +1431,7 @@ def test_same_root_internal_scopes_are_not_duplicate_user_choices(
         question="测试",
         dataset_ids=("sales_dataset", "sales_duplicate", "customer_scope"),
     )
-    options = service._scope_metric_options(
+    options = service._scope_choice_options(
         release,
         ("sales_dataset", "sales_duplicate", "customer_scope"),
         selection_context=context,
@@ -1771,8 +1772,11 @@ class TestScopeIsNeverAskedAboutDirectly:
         )
 
         assert response.state is QueryState.CLARIFICATION_REQUIRED
-        assert {item.kind for item in response.options} == {"metric"}
+        assert {item.kind for item in response.options} <= {"metric", "dimension"}
         assert "净收入" in {item.label for item in response.options}
+        # 指标排在维度前面：更常见的意图先出现。
+        kinds = [item.kind for item in response.options]
+        assert kinds == sorted(kinds, key=lambda kind: kind != "metric")
 
     def test_choosing_a_metric_fixes_the_fact_root_and_runs(self, sales_release) -> None:
         """选中的指标决定事实根——用户答的是业务问题，路由是系统的事。"""
@@ -1857,7 +1861,7 @@ class TestScopeIsNeverAskedAboutDirectly:
                 service, question="随便看看", dataset_ids=dataset_ids
             ),
             dataset_id="customer_scope",
-            semantic_selection_id="scope_metric:net_revenue",
+            semantic_selection_id="scope_choice:metric:net_revenue",
         )
 
         second = service.query(
@@ -1875,3 +1879,26 @@ class TestScopeIsNeverAskedAboutDirectly:
 
         assert second.state is QueryState.FAILED
         assert executor.calls == 0
+
+    def test_a_question_without_metric_intent_can_pick_a_dimension(
+        self, sales_release
+    ) -> None:
+        """「各门店都卖些什么」这类问题一个指标都不想要。
+
+        实测：只给指标时，它和「哪些门店售卖 X」都被逼着在「销售金额 / 销售数量」
+        里挑一个——与之前那张弱指标卡是同一个病，只是换了个位置。
+        """
+
+        release = _routed_release(sales_release)
+        service, _gateway, _executor = _service(release, query_embedding=False)
+
+        response = service.query(
+            QueryRequest(
+                project_id="sales",
+                question="随便看看",
+                dataset_ids=("sales_dataset", "customer_scope"),
+            ),
+            actor_id="tenant-1",
+        )
+
+        assert "dimension" in {item.kind for item in response.options}

@@ -291,7 +291,7 @@ class AnalyticsQueryService:
                 selected_element_id,
                 selected_element_type,
                 selected_time_dimension_id,
-                selected_scope_metric_id,
+                selected_scope_choice,
             ) = self._selection(
                 request,
                 published,
@@ -428,29 +428,30 @@ class AnalyticsQueryService:
                     if unselected_scope.status is QueryScopeResolutionStatus.CLARIFICATION:
                         # 重新推导上一轮实际展示过的那张卡，确认用户点的确实在里面，
                         # 并把这次选择变成 FINAL_PARSING 的结算义务：生成的 S2SQL
-                        # 必须真的用上他选的指标，否则不执行。
-                        metric_options = self._scope_metric_options(
+                        # 必须真的用上他选的那个成员，否则不执行。
+                        choice_options = self._scope_choice_options(
                             release,
                             unselected_scope.candidate_dataset_ids,
                             selection_context=selection_context,
                             allowed_element_ids=allowed_element_ids,
                         )
-                        chosen_metric = next(
+                        chosen_choice = next(
                             (
                                 item
-                                for item in metric_options
+                                for item in choice_options
                                 if item.dataset_id == candidate_selection_id
-                                and item.element_id == selected_scope_metric_id
+                                and f"{item.element_type}:{item.element_id}"
+                                == selected_scope_choice
                             ),
                             None,
                         )
-                        if selected_scope_metric_id is not None and chosen_metric is None:
+                        if selected_scope_choice is not None and chosen_choice is None:
                             raise MappingError(
-                                "确认的指标不属于当前问题实际展示的候选。",
+                                "确认的选项不属于当前问题实际展示的候选。",
                                 code="CANDIDATE_NOT_FOUND",
                             )
-                        if chosen_metric is not None:
-                            # 把这次选择作为一条 confirmed 证据放回去：该指标从未被
+                        if chosen_choice is not None:
+                            # 把这次选择作为一条 confirmed 证据放回去：该成员从未被
                             # 问句召回过（正因如此才需要问），不注入的话选定作用域的
                             # 映射可能整个是空的，照样以 NO_SEMANTIC_MAPPING 拒答；
                             # 注入后它也会出现在最终 LLM 的 mapped_constraints 里。
@@ -458,9 +459,12 @@ class AnalyticsQueryService:
                                 update={
                                     "matches": (
                                         *global_evidence.matches,
-                                        self._confirmed_metric_evidence(
+                                        self._confirmed_choice_evidence(
                                             release,
-                                            metric_id=chosen_metric.element_id or "",
+                                            element_type=SemanticElementType(
+                                                chosen_choice.element_type
+                                            ),
+                                            element_id=chosen_choice.element_id or "",
                                             dataset_id=candidate_selection_id,
                                         ),
                                     )
@@ -468,10 +472,10 @@ class AnalyticsQueryService:
                             )
                             obligation = self._decision_obligation(
                                 release=release,
-                                detected_text=chosen_metric.label,
+                                detected_text=chosen_choice.label,
                                 source=SemanticDecisionSource.HUMAN,
-                                chosen=chosen_metric,
-                                options=metric_options,
+                                chosen=chosen_choice,
+                                options=choice_options,
                             )
                             # 只登记义务，不另记一条决策：结算通过后 settlement 会
                             # 报同一次选择，两边都记会在回答卡上出现重复 chip。
@@ -526,7 +530,7 @@ class AnalyticsQueryService:
                         else bundled_scope_semantics[1]
                         if bundled_scope_semantics is not None
                         # 作用域是内部执行计划，不问用户。问指标：选中即确定事实根。
-                        else self._scope_metric_options(
+                        else self._scope_choice_options(
                             release,
                             scope_resolution.candidate_dataset_ids,
                             selection_context=selection_context,
@@ -594,7 +598,7 @@ class AnalyticsQueryService:
                         clarification_question = (
                             "同一说法对应多个业务指标，请确认具体口径。"
                             if ambiguous_metric_ids
-                            else "这个问题可以从几个角度分析，请确认你要看哪个指标。"
+                            else "这个问题可以从几个角度分析，请确认你要看什么。"
                             if options
                             # 没有选项有两种完全不同的原因，说法不能混：同一事实根
                             # 有多个内部作用域是编译产物重复（用户答不了，要重新发布）；
@@ -632,7 +636,7 @@ class AnalyticsQueryService:
                                     "确认指标后重新执行；反复出现同一说法时，"
                                     "把它补进业务词典的别名。"
                                 ),
-                                user_hint="请选择你要分析的指标。",
+                                user_hint="请选择你要分析的内容。",
                             ),
                             question=clarification_question,
                             options=options,
@@ -738,7 +742,7 @@ class AnalyticsQueryService:
             offered_candidates = self._clarification_scope_candidates(admitted_candidates)
             offered_scope_ids = tuple(dict.fromkeys(item.dataset_id for item in offered_candidates))
             # legacy 逐 Dataset 发现路径同样不问作用域：问指标。
-            scope_options = self._scope_metric_options(
+            scope_options = self._scope_choice_options(
                 release,
                 offered_scope_ids,
                 selection_context=selection_context,
@@ -788,10 +792,10 @@ class AnalyticsQueryService:
                             "确认指标后重新执行；反复出现同一说法时，"
                             "把它补进业务词典的别名。"
                         ),
-                        user_hint="请选择你要分析的指标。",
+                        user_hint="请选择你要分析的内容。",
                     ),
                     question=(
-                        "这个问题可以从几个角度分析，请确认你要看哪个指标。"
+                        "这个问题可以从几个角度分析，请确认你要看什么。"
                         if scope_options
                         else (
                             "当前发布版本存在无法区分的内部分析路径，"
@@ -2408,9 +2412,10 @@ class AnalyticsQueryService:
     def _semantic_selection_tokens(release: SemanticRelease) -> tuple[str, ...]:
         return (
             *(f"element:metric:{metric.id}" for metric in release.metrics),
-            # 作用域指标选择：与 `element:metric:` 分开，因为它不要求该指标出现在
-            # 本轮证据里——用户说「业绩」时，「销售金额」根本没被召回。
-            *(f"scope_metric:{metric.id}" for metric in release.metrics),
+            # 作用域澄清里的选择：与 `element:` 分开，因为它不要求该成员出现在本轮
+            # 证据里——用户说「业绩」时，「销售金额」根本没被召回。
+            *(f"scope_choice:metric:{metric.id}" for metric in release.metrics),
+            *(f"scope_choice:dimension:{item.id}" for item in release.dimensions),
             *(f"element:dimension:{dimension.id}" for dimension in release.dimensions),
             *(f"value:{value.id}" for value in release.dimension_values if value.enabled),
             *(
@@ -2421,28 +2426,30 @@ class AnalyticsQueryService:
         )
 
     @staticmethod
-    def _confirmed_metric_evidence(
+    def _confirmed_choice_evidence(
         release: SemanticRelease,
         *,
-        metric_id: str,
+        element_type: SemanticElementType,
+        element_id: str,
         dataset_id: str,
     ) -> MappingEvidenceMatch:
-        """用户在指标卡上的选择，作为一条独立来源的证据。
+        """用户在澄清卡上的选择，作为一条独立来源的证据。
 
-        provenance 单列：既不是 EXACT（问句里根本没出现这个指标的说法），也不是
+        provenance 单列：既不是 EXACT（问句里根本没出现这个成员的说法），也不是
         keyword/embedding 弱召回（它一次都没被召回）。只在用户选定的那个作用域内
         可见——事实根已经由这次选择定死了。
         """
 
-        metric = next(item for item in release.metrics if item.id == metric_id)
+        pool = release.metrics if element_type is SemanticElementType.METRIC else release.dimensions
+        element = next(item for item in pool if item.id == element_id)
         return MappingEvidenceMatch(
-            entry_id=f"confirmed:{metric_id}",
+            entry_id=f"confirmed:{element_id}",
             eligible_dataset_ids=(dataset_id,),
-            element_type=SemanticElementType.METRIC,
-            element_id=metric_id,
-            phrase=metric.name,
-            normalized_phrase=normalize_text(metric.name),
-            detected_text=metric.name,
+            element_type=element_type,
+            element_id=element_id,
+            phrase=element.name,
+            normalized_phrase=normalize_text(element.name),
+            detected_text=element.name,
             method=MatchMethod.CONFIRMED,
             score=1.0,
             priority=0,
@@ -2486,32 +2493,41 @@ class AnalyticsQueryService:
         return len(roots) != len({str(item) for item in roots})
 
     @staticmethod
-    def _scope_metric_owners(
+    def _scope_choice_owners(
         release: SemanticRelease,
         dataset_ids: tuple[str, ...],
         allowed_element_ids: frozenset[str] | None = None,
-    ) -> dict[str, set[str]]:
-        """候选作用域里每个受治理业务指标分别属于哪些候选作用域。
+    ) -> dict[tuple[str, str], set[str]]:
+        """候选作用域里每个受治理成员分别属于哪些候选作用域。
+
+        指标与维度都算。只给指标是错的：「各门店都卖些什么」「哪些门店售卖 X」这类
+        问题一个指标都不想要，逼用户挑指标与之前那张弱指标卡是同一个病（实测）。
 
         默认计数指标不算：它是「有多少个 X」的答案，不是用户说「业绩」时想要的。
         """
 
         metrics = {item.id for item in release.metrics}
+        dimensions = {item.id for item in release.dimensions}
         datasets = {item.id: item for item in release.datasets}
         routes = {item.dataset_id: item for item in release.analysis_topic_routes}
-        owners: dict[str, set[str]] = defaultdict(set)
+        owners: dict[tuple[str, str], set[str]] = defaultdict(set)
         for dataset_id in dataset_ids:
             dataset = datasets.get(dataset_id)
             if dataset is None:
                 continue
             route = routes.get(dataset_id)
             default_count = route.default_count_metric_id if route is not None else None
-            for metric_id in dataset.metric_ids:
-                if metric_id == default_count or metric_id not in metrics:
+            members = (
+                *(("metric", item) for item in dataset.metric_ids if item != default_count),
+                *(("dimension", item) for item in dataset.dimension_ids),
+            )
+            for kind, element_id in members:
+                known = metrics if kind == "metric" else dimensions
+                if element_id not in known:
                     continue
-                if allowed_element_ids is not None and metric_id not in allowed_element_ids:
+                if allowed_element_ids is not None and element_id not in allowed_element_ids:
                     continue
-                owners[metric_id].add(dataset_id)
+                owners[(kind, element_id)].add(dataset_id)
         return owners
 
     def _scope_metric_choice_is_fake(
@@ -2528,10 +2544,10 @@ class AnalyticsQueryService:
 
         if self._scopes_duplicate_a_root(release, dataset_ids):
             return True
-        owners = self._scope_metric_owners(release, dataset_ids, allowed_element_ids)
+        owners = self._scope_choice_owners(release, dataset_ids, allowed_element_ids)
         return bool(owners) and all(len(scopes) != 1 for scopes in owners.values())
 
-    def _scope_metric_options(
+    def _scope_choice_options(
         self,
         release: SemanticRelease,
         dataset_ids: tuple[str, ...],
@@ -2539,7 +2555,7 @@ class AnalyticsQueryService:
         selection_context: _SelectionTokenContext,
         allowed_element_ids: frozenset[str] | None = None,
     ) -> tuple[ClarificationOption, ...]:
-        """作用域定不下来时，问用户要分析哪个指标——绝不问要分析哪个对象。
+        """作用域定不下来时，问用户要看什么——绝不问要分析哪个对象。
 
         选项取候选作用域的**受治理业务指标目录**，不是 Mapper 证据：实测（demo_cafe，
         「各门店的业绩/营业额/收入」）证据里唯一的指标候选是从实体名「门店」召回的
@@ -2547,28 +2563,35 @@ class AnalyticsQueryService:
         被召回。默认计数指标因此也排除在选项外——它是「有多少个 X」的答案，不是用户
         说「业绩」时想要的东西。
 
-        只提供**恰好属于一个候选作用域**的指标：跨多个候选的指标选了也定不下事实根，
-        列出来等于给一个假选择。
+        指标与维度都给：问句可能压根没有指标（「各门店都卖些什么」「哪些门店售卖 X」），
+        只给指标就是逼用户挑一个他不想要的东西——和之前那张弱指标卡同病。
+
+        只提供**恰好属于一个候选作用域**的成员：跨多个候选的成员选了也定不下事实根，
+        列出来等于给一个假选择。指标排在维度前面（更常见的意图），整体有上限。
         """
 
         if self._scopes_duplicate_a_root(release, dataset_ids):
             return ()
-        metrics = {item.id: item for item in release.metrics}
+        elements = {
+            "metric": {item.id: item for item in release.metrics},
+            "dimension": {item.id: item for item in release.dimensions},
+        }
         models = {item.id: item for item in release.models}
         routes = {item.dataset_id: item for item in release.analysis_topic_routes}
-        owners = self._scope_metric_owners(release, dataset_ids, allowed_element_ids)
+        owners = self._scope_choice_owners(release, dataset_ids, allowed_element_ids)
 
         options: list[ClarificationOption] = []
-        for metric_id in sorted(owners):
-            scopes = owners[metric_id]
-            if len(scopes) != 1:
-                continue
-            dataset_id = next(iter(scopes))
-            metric = metrics[metric_id]
+        ordered = sorted(
+            (key for key, scopes in owners.items() if len(scopes) == 1),
+            key=lambda item: (item[0] != "metric", elements[item[0]][item[1]].name),
+        )
+        for kind, element_id in ordered[:_SCOPE_CHOICE_MAX_OPTIONS]:
+            dataset_id = next(iter(owners[(kind, element_id)]))
+            element = elements[kind][element_id]
             route = routes.get(dataset_id)
             owner_model = models.get(route.root_model_id) if route is not None else None
-            description = metric.description or (
-                f"{owner_model.name}的{metric.name}" if owner_model else metric.name
+            description = getattr(element, "description", "") or (
+                f"{owner_model.name}的{element.name}" if owner_model else element.name
             )
             options.append(
                 ClarificationOption(
@@ -2576,13 +2599,13 @@ class AnalyticsQueryService:
                         release=release,
                         context=selection_context,
                         dataset_id=dataset_id,
-                        semantic_selection_id=f"scope_metric:{metric_id}",
+                        semantic_selection_id=f"scope_choice:{kind}:{element_id}",
                     ),
-                    kind="metric",
-                    label=metric.name,
+                    kind=kind,
+                    label=element.name,
                     description=description,
-                    element_type="metric",
-                    element_id=metric_id,
+                    element_type=kind,
+                    element_id=element_id,
                     dataset_id=dataset_id,
                 )
             )
@@ -2883,18 +2906,18 @@ class AnalyticsQueryService:
         )
         if not semantic_selection_ids:
             return selected_dataset_id, None, None, None, None
-        # 作用域指标选择不走"必须属于本轮证据"那条校验：用户是在告诉我们他说的
-        # 「业绩」指哪个指标，而那个指标本来就没被召回。伪造由签名 token 挡——
+        # 作用域澄清的选择不走"必须属于本轮证据"那条校验：用户是在告诉我们他说的
+        # 「业绩」指哪个成员，而那个成员本来就没被召回。伪造由签名 token 挡——
         # token 已绑定 project/actor/问句/dataset 集/版本/实际展示的组合与 TTL。
         if len(semantic_selection_ids) == 1 and semantic_selection_ids[0].startswith(
-            "scope_metric:"
+            "scope_choice:"
         ):
             return (
                 selected_dataset_id,
                 None,
                 None,
                 None,
-                semantic_selection_ids[0].removeprefix("scope_metric:"),
+                semantic_selection_ids[0].removeprefix("scope_choice:"),
             )
         if len(semantic_selection_ids) > 1:
             raise SemanticParsingError(
@@ -3542,6 +3565,8 @@ def _filter_operator_label(value: str) -> str:
 
 
 _SUGGESTION_SIMILARITY = 0.6
+# 作用域澄清卡的选项上限：再多用户就挑不动了，与其铺满不如让建模者去补词典。
+_SCOPE_CHOICE_MAX_OPTIONS = 12
 
 
 def _equality_filter_values(query: SemanticQuery) -> tuple[tuple[str, object], ...]:

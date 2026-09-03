@@ -25,6 +25,7 @@ import {
   type QueryTurn,
 } from '@analytics/components/query-answer';
 import { Badge, Button, Empty, Spinner, useToast } from '@analytics/components/ui';
+import { feedbackRows } from './ask-feedback-state';
 import { describeError, formatDateTime } from '@analytics/lib/labels';
 import type { WorkbenchContext } from './index';
 import { GoldenSuiteCard } from './golden-suite-card';
@@ -484,27 +485,28 @@ function TrialQuestions({ projectId, revision }: Pick<WorkbenchContext, 'project
 
 
 /**
- * 没答上的问题:系统「听不懂什么」的一手数据。此前只写不读——别名缺口、
- * 术语挖掘、黄金问题种子都没有输入。列在发布历史下方,发布后回来看一眼
- * 就知道该补哪些说法。
+ * 系统没接住的说法:一手数据,发布后回来看一眼就知道该补哪些说法。
+ *
+ * 三种收场混在一起会误导——用户澄清后其实答出来了的,标成"没答上"是假话。
+ * 与「问数反馈」页共用同一套归并与措辞。
  */
 function QueryFailuresCard({ projectId }: { projectId: string }) {
   const failures = useQuery({
     queryKey: ['query-failures', projectId],
     queryFn: () => listQueryFailures(projectId, 50),
   });
-  const items = failures.data?.items ?? [];
-  if (failures.isPending || items.length === 0) return null;
+  const rows = feedbackRows(failures.data?.items ?? []);
+  if (failures.isPending || rows.length === 0) return null;
   return (
     <div className="mt-5">
       <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-        没答上的问题 {items.length}
+        系统没接住的说法 {rows.length}
       </div>
       <ul className="flex flex-col gap-1.5">
-        {items.slice(0, 20).map((item, index) => (
+        {rows.slice(0, 20).map((row, index) => (
           <li key={index} className="rounded-md border border-slate-200 px-2.5 py-1.5 text-[11px]">
-            <div className="text-slate-700">「{item.question}」</div>
-            <div className="mt-0.5 text-slate-400">{item.message || item.code}</div>
+            <div className="text-slate-700">「{row.question}」</div>
+            <div className="mt-0.5 text-slate-400">{row.what}</div>
           </li>
         ))}
       </ul>

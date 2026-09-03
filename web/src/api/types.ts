@@ -1228,19 +1228,6 @@ export interface AnalyticsModelingJob {
 }
 
 
-export interface AnalyticsQueryFailure {
-  question: string;
-  effective_question: string;
-  stage: string;
-  code: string;
-  message: string;
-  release_id: string;
-  spec_hash: string;
-  index_snapshot_id: string;
-  dataset_ids: string[];
-  details: Record<string, unknown>;
-}
-
 export interface AnalyticsReleaseSummary {
   id: string;
   revision_id: string;
@@ -1291,14 +1278,25 @@ export interface AnalyticsDictionaryDecision {
   enabled?: boolean | null;
 }
 
-/** 一条被拒答的问题:系统「听不懂什么」的一手数据,供别名/术语补全。 */
+/**
+ * 一条「系统没接住用户说法」的记录，系统「听不懂什么」的一手数据，供别名/术语补全。
+ *
+ * 三种收场记在同一处（`kind`）：拒答只知道失败了；用户澄清后答出来的**自带正解**；
+ * 用了系统不认识的取值则可能有近似建议。
+ */
 export interface AnalyticsQueryFailure {
+  kind?: 'refused' | 'clarified' | 'unknown_value';
+  /** 这次的正解：用户选中的成员名，或近似取值建议。没有就是空串。 */
+  resolution?: string;
   question: string;
   effective_question: string;
   stage: string;
   code: string;
   message: string;
   release_id: string;
+  spec_hash?: string;
+  index_snapshot_id?: string;
   dataset_ids: string[];
+  details?: Record<string, unknown>;
   created_at?: string;
 }

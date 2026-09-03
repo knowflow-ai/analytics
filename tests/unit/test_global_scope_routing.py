@@ -1902,3 +1902,105 @@ class TestScopeIsNeverAskedAboutDirectly:
         )
 
         assert "dimension" in {item.kind for item in response.options}
+
+
+class _CapturingGaps:
+    def __init__(self) -> None:
+        self.saved: list[object] = []
+
+    def save_failure(self, record, *, actor_id, project_id) -> None:
+        self.saved.append(record)
+
+
+class TestClarificationFeedsTheBusinessDictionary:
+    """澄清与拒答是同一个信号的两半：系统没接住用户的说法。
+
+    区别在这一轮怎么收场——拒答只知道失败了、正解未知，要人去诊断；澄清被回答则
+    **自带正解**（「业绩」→「销售金额」），可以在建模端一键采纳成别名。两者记在同
+    一处，靠 ``kind`` 与 ``resolution`` 区分。
+    """
+
+    def test_an_answered_clarification_is_kept_with_the_answer(self, sales_release) -> None:
+        release = _routed_release(sales_release)
+        gaps = _CapturingGaps()
+        llm = _FixedS2SqlGateway('SELECT SUM("净收入") FROM "销售经营"')
+        service, _gateway, _executor = _service(
+            release, llm_gateway=llm, query_embedding=False, query_failures=gaps
+        )
+        dataset_ids = ("sales_dataset", "customer_scope")
+
+        first = service.query(
+            QueryRequest(project_id="sales", question="随便看看", dataset_ids=dataset_ids),
+            actor_id="tenant-1",
+        )
+        chosen = next(item for item in first.options if item.label == "净收入")
+        service.query(
+            QueryRequest(
+                project_id="sales",
+                question="随便看看",
+                dataset_ids=dataset_ids,
+                selected_candidate_id=chosen.candidate_id,
+                expected_release_id=first.release_id,
+                expected_spec_hash=first.spec_hash,
+                expected_index_snapshot_id=first.index_snapshot_id,
+            ),
+            actor_id="tenant-1",
+        )
+
+        clarified = [item for item in gaps.saved if item.kind == "clarified"]
+        assert len(clarified) == 1
+        assert clarified[0].question == "随便看看"
+        assert clarified[0].resolution == "净收入"
+
+    def test_a_clarification_that_never_answers_is_not_a_suggestion(
+        self, sales_release
+    ) -> None:
+        """只弹了卡、用户没选，学不到任何东西——不能凭空生成别名建议。"""
+
+        release = _routed_release(sales_release)
+        gaps = _CapturingGaps()
+        service, _gateway, _executor = _service(
+            release, query_embedding=False, query_failures=gaps
+        )
+
+        service.query(
+            QueryRequest(
+                project_id="sales",
+                question="随便看看",
+                dataset_ids=("sales_dataset", "customer_scope"),
+            ),
+            actor_id="tenant-1",
+        )
+
+        assert [item for item in gaps.saved if item.kind == "clarified"] == []
+
+    def test_a_choice_whose_query_fails_is_not_suggested_either(self, sales_release) -> None:
+        """选了但没答出来：这次选择没被验证过，不该推荐给建模者。"""
+
+        release = _routed_release(sales_release)
+        gaps = _CapturingGaps()
+        llm = _FixedS2SqlGateway('SELECT SUM("退款金额") FROM "销售经营"')
+        service, _gateway, _executor = _service(
+            release, llm_gateway=llm, query_embedding=False, query_failures=gaps
+        )
+        dataset_ids = ("sales_dataset", "customer_scope")
+
+        first = service.query(
+            QueryRequest(project_id="sales", question="随便看看", dataset_ids=dataset_ids),
+            actor_id="tenant-1",
+        )
+        chosen = next(item for item in first.options if item.label == "净收入")
+        service.query(
+            QueryRequest(
+                project_id="sales",
+                question="随便看看",
+                dataset_ids=dataset_ids,
+                selected_candidate_id=chosen.candidate_id,
+                expected_release_id=first.release_id,
+                expected_spec_hash=first.spec_hash,
+                expected_index_snapshot_id=first.index_snapshot_id,
+            ),
+            actor_id="tenant-1",
+        )
+
+        assert [item for item in gaps.saved if item.kind == "clarified"] == []

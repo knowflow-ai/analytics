@@ -367,13 +367,24 @@ class QueryDiagnosis(FrozenModel):
 
 
 class QueryFailureRecord(FrozenModel):
-    """One refused question, kept so the vocabulary it reveals is not lost.
+    """一次「系统没接住用户说法」的记录，供离线术语挖掘，不参与任何在线链路。
 
-    成功的问句只为多轮改写而存（且要求 conversation_id）；失败的问句此前直接丢弃。
-    于是"系统听不懂哪些说法"这份最有价值的数据从未落地：术语挖掘、别名缺口、
-    黄金问题种子都没有输入。这条记录不参与任何在线链路，只供离线聚合。
+    同一个信号有三种收场，都记在这里（``kind``）：
+
+    - ``refused``：查询被拒答。只知道失败了，正解未知，要人去诊断。
+    - ``clarified``：弹了澄清卡，用户选了。**自带正解**——「业绩」→「销售金额」
+      可以直接采纳成别名，是三者里最有价值的一类。
+    - ``unknown_value``：过滤值不在该维度的已发布取值里，查询返回 0 行。正解可能
+      是近似建议（「卡布奇洛」→「卡布奇诺」），也可能确实没有。
+
+    ``resolution`` 是这次的正解（用户选中的成员名，或近似建议值），没有就留空。
+    历史原因保留 ``QueryFailureRecord`` 这个名字与 ``query-failures`` 路由；
+    三类都是同一个词汇缺口，只是这一轮怎么收场不同。
     """
 
+    kind: Literal["refused", "clarified", "unknown_value"] = "refused"
+    # 这次的正解：用户在澄清卡上选中的成员名，或未发布取值的近似建议。
+    resolution: str = Field(default="", max_length=256)
     question: str = Field(min_length=1, max_length=4_000)
     effective_question: str = Field(default="", max_length=4_000)
     stage: str

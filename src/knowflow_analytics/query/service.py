@@ -255,6 +255,7 @@ class AnalyticsQueryService:
         selected_scope_dataset_id: str | None = None
         decision_obligations: list[SemanticDecisionObligation] = []
         automatic_decisions: list[SemanticDecision] = []
+        clarified_choice: str | None = None
         semantic_clarification_group: SemanticAmbiguityGroup | None = None
         option_dataset_ids: tuple[str, ...] = ()
         # 映射失败发生在多轮改写之前，那时 effective_question 还没赋值；失败记录
@@ -481,6 +482,9 @@ class AnalyticsQueryService:
                             # 报同一次选择，两边都记会在回答卡上出现重复 chip。
                             if obligation is not None:
                                 decision_obligations.append(obligation)
+                            # 等这次真的答出来了再落库：没答出来的选择不该变成
+                            # 推荐给建模者的别名。
+                            clarified_choice = chosen_choice.label
                 if (
                     scope_resolution.status is QueryScopeResolutionStatus.CLARIFICATION
                     and not global_evidence.matches
@@ -1086,6 +1090,40 @@ class AnalyticsQueryService:
             defaults = tuple(
                 dict.fromkeys((*corrected.applied_defaults, *physical.applied_defaults))
             )
+            # 只有 0 行才需要解释：有结果就说明过滤生效了。投影不完整时我们并不
+            # 知道真实过滤条件，不能拿它去指认用户的说法。
+            unpublished_values = (
+                _unpublished_filter_values(
+                    release,
+                    filters=_equality_filter_values(translated.audit_query),
+                )
+                if audit_complete and result.row_count == 0
+                else ()
+            )
+            if clarified_choice is not None:
+                # 用户替系统补上了正解：三类信号里唯一自带答案的一类。
+                self._record_vocabulary_gap(
+                    request,
+                    kind="clarified",
+                    published=published,
+                    effective_question=effective_question,
+                    actor_id=actor_id,
+                    code="SEMANTIC_CLARIFIED",
+                    message=f"用户确认要看的是「{clarified_choice}」",
+                    resolution=clarified_choice,
+                )
+            for dimension_name, value, suggestion in unpublished_values:
+                # 用户说了一个系统不认识的取值。近似建议可能有、也可能确实没有。
+                self._record_vocabulary_gap(
+                    request,
+                    kind="unknown_value",
+                    published=published,
+                    effective_question=effective_question,
+                    actor_id=actor_id,
+                    code="UNKNOWN_FILTER_VALUE",
+                    message=f"「{value}」不在「{dimension_name}」的已发布取值里",
+                    resolution=suggestion or "",
+                )
             if request.conversation_id is not None and self._query_history is not None:
                 self._query_history.save_success(
                     QueryHistoryTurn(
@@ -1128,16 +1166,7 @@ class AnalyticsQueryService:
                         parser=corrected.parser,
                         llm_enabled=self._orchestrator.llm_enabled,
                         audit_complete=audit_complete,
-                        # 只有 0 行才需要解释：有结果就说明过滤生效了。投影不完整时
-                        # 我们并不知道真实过滤条件，不能拿它去指认用户的说法。
-                        unpublished_values=(
-                            _unpublished_filter_values(
-                                release,
-                                filters=_equality_filter_values(translated.audit_query),
-                            )
-                            if audit_complete and result.row_count == 0
-                            else ()
-                        ),
+                        unpublished_values=unpublished_values,
                     ),
                     include_diagnostics=request.include_diagnostics,
                 ),
@@ -2794,6 +2823,49 @@ class AnalyticsQueryService:
             )
             for dataset_id in dataset_ids
         )
+
+    def _record_vocabulary_gap(
+        self,
+        request: QueryRequest,
+        *,
+        kind: str,
+        published: PublishedRelease,
+        effective_question: str,
+        actor_id: str | None,
+        code: str,
+        message: str,
+        resolution: str = "",
+    ) -> None:
+        """记下一次「系统没接住用户的说法」。旁路，出错不影响这次回答。
+
+        与拒答同一张表：三类都是同一个词汇缺口，区别只在这一轮怎么收场。带
+        ``resolution`` 的那两类可以在建模端一键采纳成别名，拒答那类还得人去诊断。
+        """
+
+        if self._query_failures is None:
+            return
+        try:
+            self._query_failures.save_failure(
+                QueryFailureRecord(
+                    kind=kind,
+                    resolution=resolution[:256],
+                    question=request.question,
+                    effective_question=effective_question,
+                    stage=QueryStage.CANDIDATE_DISCOVERY.value,
+                    code=code,
+                    message=message[:4_000],
+                    release_id=published.release.id,
+                    spec_hash=published.release.spec_hash,
+                    index_snapshot_id=published.index_snapshot.id,
+                    dataset_ids=tuple(request.dataset_ids),
+                ),
+                actor_id=str(actor_id or "").strip(),
+                project_id=request.project_id,
+            )
+        except Exception:
+            LOGGER.exception(
+                "Failed to record vocabulary gap project_id=%s", request.project_id
+            )
 
     def _record_failure(
         self,

@@ -1252,6 +1252,21 @@ class AnalyticsQueryService:
                     message=f"用户确认要看的是「{clarified_choice}」",
                     resolution=clarified_choice,
                 )
+            for name in _inferred_member_names(release, translated.audit_query, global_evidence):
+                # 用户说了个词典里没有的说法，模型自己挑了个成员顶上。它可能猜对了
+                # ——实机「业绩」「营业额」都猜成了销售金额——但猜的结果不稳定，同一
+                # 句话可能这次 SUM(金额) 下次 SUM(数量)。同一说法被猜过很多次，本身
+                # 就是该把它写进业务词典的信号。
+                self._record_vocabulary_gap(
+                    request,
+                    kind="inferred",
+                    published=published,
+                    effective_question=effective_question,
+                    actor_id=actor_id,
+                    code="SEMANTIC_INFERRED",
+                    message=f"没有匹配到说法，模型自己选了「{name}」",
+                    resolution=name,
+                )
             for dimension_name, value, suggestion in unpublished_values:
                 # 用户说了一个系统不认识的取值。近似建议可能有、也可能确实没有。
                 self._record_vocabulary_gap(
@@ -4047,6 +4062,35 @@ def _union_evidence(evidence: MappingEvidence, union_id: str) -> MappingEvidence
                 for item in evidence.matches
             ),
         }
+    )
+
+
+def _inferred_member_names(
+    release: SemanticRelease,
+    query: SemanticQuery,
+    evidence: MappingEvidence | None,
+) -> tuple[str, ...]:
+    """答案里用到、但精确证据里根本没出现过的成员。
+
+    「各门店的销售额」不算：销售金额是词典精确命中的。「各门店的业绩」算：「业绩」谁都
+    没匹配上，是模型看着全部成员自己挑了销售金额。只记后者——把每次成功都记下来会把
+    真正需要补词典的说法淹掉。
+    """
+
+    if evidence is None:
+        return ()
+    recalled = {
+        item.element_id
+        for item in evidence.matches
+        if str(getattr(item.method, "value", item.method)) == "exact"
+    }
+    names = {item.id: item.name for item in (*release.metrics, *release.dimensions)}
+    return tuple(
+        dict.fromkeys(
+            names[element_id]
+            for element_id in (*query.metric_ids, *query.dimension_ids)
+            if element_id in names and element_id not in recalled
+        )
     )
 
 

@@ -373,7 +373,9 @@ class QueryFailureRecord(FrozenModel):
 
     - ``refused``：查询被拒答。只知道失败了，正解未知，要人去诊断。
     - ``clarified``：弹了澄清卡，用户选了。**自带正解**——「业绩」→「销售金额」
-      可以直接采纳成别名，是三者里最有价值的一类。
+      可以直接采纳成别名，是最有价值的一类。
+    - ``inferred``：没弹卡，模型自己挑了一个词典里没有的说法对应的成员。正解是**模型
+      猜的**，可能对也可能错，但同一说法被猜过很多次本身就是该补词典的信号。
     - ``unknown_value``：过滤值不在该维度的已发布取值里，查询返回 0 行。正解可能
       是近似建议（「卡布奇洛」→「卡布奇诺」），也可能确实没有。
 
@@ -382,7 +384,7 @@ class QueryFailureRecord(FrozenModel):
     三类都是同一个词汇缺口，只是这一轮怎么收场不同。
     """
 
-    kind: Literal["refused", "clarified", "unknown_value"] = "refused"
+    kind: Literal["refused", "clarified", "inferred", "unknown_value"] = "refused"
     # 这次的正解：用户在澄清卡上选中的成员名，或未发布取值的近似建议。
     resolution: str = Field(default="", max_length=256)
     question: str = Field(min_length=1, max_length=4_000)

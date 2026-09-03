@@ -25,6 +25,10 @@ describe('系统没接住的说法', () => {
         kind: 'unknown_value',
         message: '「摩卡」不在「商品名称」的已发布取值里',
       }),
+      record('各门店的营业额', 'SEMANTIC_INFERRED', {
+        kind: 'inferred',
+        resolution: '销售金额',
+      }),
       record('各门店的业绩', 'SEMANTIC_CLARIFIED', {
         kind: 'clarified',
         resolution: '销售金额',
@@ -33,9 +37,24 @@ describe('系统没接住的说法', () => {
 
     expect(rows.map((row) => row.kind)).toEqual([
       'clarified',
+      'inferred',
       'unknown_value',
       'refused',
     ]);
+  });
+
+  it('模型自己猜的排在用户确认之后、其余之前：正解不可靠但次数就是信号', () => {
+    const [row] = feedbackRows([
+      record('各门店的业绩', 'SEMANTIC_INFERRED', {
+        kind: 'inferred',
+        resolution: '销售金额',
+      }),
+    ]);
+
+    expect(row.what).toContain('模型自己选了');
+    expect(row.what).toContain('销售金额');
+    expect(row.fixableByAlias).toBe(true);
+    expect(row.what).not.toContain('inferred');
   });
 
   it('说的是发生了什么，不是内部状态名', () => {

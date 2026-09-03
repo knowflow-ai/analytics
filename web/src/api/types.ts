@@ -1285,7 +1285,7 @@ export interface AnalyticsDictionaryDecision {
  * 用了系统不认识的取值则可能有近似建议。
  */
 export interface AnalyticsQueryFailure {
-  kind?: 'refused' | 'clarified' | 'unknown_value';
+  kind?: 'refused' | 'clarified' | 'inferred' | 'unknown_value';
   /** 这次的正解：用户选中的成员名，或近似取值建议。没有就是空串。 */
   resolution?: string;
   question: string;

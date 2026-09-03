@@ -45,7 +45,7 @@ export function failureReason(code: string): {
   );
 }
 
-export type FeedbackKind = 'clarified' | 'unknown_value' | 'refused';
+export type FeedbackKind = 'clarified' | 'inferred' | 'unknown_value' | 'refused';
 
 /**
  * 一条「系统没接住的说法」。
@@ -68,8 +68,9 @@ export interface FeedbackRow {
 
 const KIND_ORDER: Record<FeedbackKind, number> = {
   clarified: 0,
-  unknown_value: 1,
-  refused: 2,
+  inferred: 1,
+  unknown_value: 2,
+  refused: 3,
 };
 
 function describe(item: AnalyticsQueryFailure): {
@@ -80,6 +81,12 @@ function describe(item: AnalyticsQueryFailure): {
   if (kind === 'clarified') {
     return {
       what: `系统没听懂，反问了一次；用户说他要看的是「${item.resolution ?? ''}」`,
+      fixableByAlias: true,
+    };
+  }
+  if (kind === 'inferred') {
+    return {
+      what: `没有匹配到这个说法，模型自己选了「${item.resolution ?? ''}」`,
       fixableByAlias: true,
     };
   }

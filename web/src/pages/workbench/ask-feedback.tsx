@@ -10,12 +10,14 @@ type Context = Pick<WorkbenchContext, "projectId">;
 /** 三种收场的说人话标签。用户读到的必须是"发生了什么"，不是内部状态名。 */
 const KIND_LABEL: Record<FeedbackKind, string> = {
   clarified: "用户替系统补了答案",
+  inferred: "模型自己猜的",
   unknown_value: "说了系统不认识的词",
   refused: "没答上来",
 };
 
-const KIND_TONE: Record<FeedbackKind, "green" | "amber" | "blue"> = {
+const KIND_TONE: Record<FeedbackKind, "green" | "violet" | "amber" | "blue"> = {
   clarified: "green",
+  inferred: "violet",
   unknown_value: "amber",
   refused: "blue",
 };
@@ -26,8 +28,9 @@ const KIND_TONE: Record<FeedbackKind, "green" | "amber" | "blue"> = {
  * 这一页只回答一个问题：**用户说了什么，系统没接住？**
  *
  * 三种收场是同一个信号的三种样子，所以放在一张表里，按能不能直接动手排序：
- * 用户澄清后答出来的自带正解（照着补别名就行），说了不认识的词的往往是拼写或
- * 说法没覆盖，没答上来的还得先诊断原因。
+ * 用户澄清后答出来的自带正解（照着补别名就行）；模型自己猜的正解不可靠，但同一说法
+ * 被猜过很多次本身就是该补词典的信号；说了不认识的词的往往是拼写或说法没覆盖；
+ * 没答上来的还得先诊断原因。
  *
  * 治理边界：这里只呈现证据，不改任何东西。补别名要到对应的指标/维度里去做，
  * 仍然走草稿版本与发布流程——一次线上提问不是长期业务口径。

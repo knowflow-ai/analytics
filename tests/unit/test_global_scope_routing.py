@@ -2029,3 +2029,54 @@ class TestCrossScopeNameCollisionInTheUnion:
         assert distinguishing, "一个能区分的成员都没有，卡就是空的"
         # 两个范围共有的成员不进选项：选了它也定不下范围。
         assert "customer_segment" not in distinguishing
+
+    def test_a_word_the_model_guessed_is_kept_as_a_weak_signal(self, sales_release) -> None:
+        """并集之后澄清接近于零，词典就没有输入了——除非把"模型猜的"也记下来。
+
+        「业绩」谁都没匹配上，模型看着全部成员自己挑了销售金额。它这次猜对了，但猜的
+        结果不稳定（实机见过同一句话这次 SUM(金额) 下次 SUM(数量)）。同一说法被猜过很
+        多次，本身就是该把它写进业务词典的信号——只是性质是"模型猜的"，不能和用户亲口
+        确认的混为一谈。
+        """
+
+        from knowflow_analytics.query.service import _inferred_member_names
+
+        release = _routed_release(sales_release)
+        service, _gateway, _executor = _service(release, query_embedding=False)
+        evidence = service._orchestrator.collect_evidence(
+            question="各门店的销售额",
+            dataset_ids=("sales_dataset",),
+            index=service._releases.published.index_snapshot,
+        )
+        from knowflow_analytics.contracts import SemanticQuery
+
+        # 精确命中的成员不算"猜的"。
+        assert (
+            _inferred_member_names(
+                release,
+                SemanticQuery(dataset_id="sales_dataset", metric_ids=("net_revenue",)),
+                evidence,
+            )
+            == ()
+        )
+        # 没被任何精确证据命中的才算。
+        assert "订单数" in _inferred_member_names(
+            release,
+            SemanticQuery(dataset_id="sales_dataset", metric_ids=("order_count",)),
+            evidence,
+        )
+
+    def test_nothing_is_guessed_when_there_is_no_evidence_at_all(self, sales_release) -> None:
+        """拿不到证据时不硬记：分不清是模型猜的还是根本没跑映射。"""
+
+        from knowflow_analytics.query.service import _inferred_member_names
+        from knowflow_analytics.contracts import SemanticQuery
+
+        assert (
+            _inferred_member_names(
+                _routed_release(sales_release),
+                SemanticQuery(dataset_id="sales_dataset", metric_ids=("net_revenue",)),
+                None,
+            )
+            == ()
+        )

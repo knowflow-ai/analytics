@@ -78,8 +78,9 @@ export function DataSourcesDialog({ open, onClose }: { open: boolean; onClose: (
         onClose={onClose}
         footer={<Button onClick={onClose}>关闭</Button>}
       >
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <p className="text-xs text-slate-400">
+        <div className="mb-3 flex items-start justify-between gap-3">
+          {/* min-w-0：让说明文字承担收缩，而不是把按钮挤变形。 */}
+          <p className="min-w-0 text-xs leading-relaxed text-slate-400">
             项目绑定数据源后，建模与问数都打到那个库。连接信息加密保存，保存后不再展示。
           </p>
           <Button

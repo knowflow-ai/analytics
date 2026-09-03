@@ -56,7 +56,10 @@ export function Button({
       type="button"
       disabled={disabled || loading}
       className={cx(
-        'inline-flex items-center justify-center rounded-md border font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+        // shrink-0 + whitespace-nowrap:按钮在 flex 行里被旁边的长文本挤窄时，
+        // 标签会换行并从固定高度里溢出（实测「新建」裂成两行）。按钮标签任何
+        // 时候都不该换行——挤不下应该是旁边的文字让位，不是按钮变形。
+        'inline-flex shrink-0 items-center justify-center whitespace-nowrap rounded-md border font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50',
         VARIANTS[variant],
         SIZES[size],
         className,
@@ -405,7 +408,22 @@ interface Toast {
   message: string;
 }
 
-const ToastContext = createContext<(tone: Toast['tone'], message: string) => void>(() => {});
+/**
+ * 默认值刻意**不是**静默空函数。
+ *
+ * 真实故障：宿主页面直接渲染 SPA 却漏挂 ToastProvider，于是整个嵌入版里所有的
+ * 成功/失败提示全部消失——不报错、不警告，表现为「点了保存没有任何反应」，而
+ * 请求其实成功了。一个什么都不做的默认值，让"忘了挂"变成了一种查不出来的故障。
+ *
+ * 现在它至少会在控制台喊一声，且把消息打出来，不至于一点线索都没有。
+ */
+const ToastContext = createContext<(tone: Toast['tone'], message: string) => void>(
+  (tone, message) => {
+    console.warn(
+      `[knowflow-analytics] toast 未挂载 ToastProvider，消息被丢弃：[${tone}] ${message}`,
+    );
+  },
+);
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);

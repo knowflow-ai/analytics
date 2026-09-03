@@ -8,16 +8,11 @@ from knowflow_analytics.application import AnalyticsApplication
 from knowflow_analytics.catalog.data_sources import DataSourceRegistry
 from knowflow_analytics.catalog.secrets import DataSourceSecretBox
 from knowflow_analytics.catalog.store import CatalogStore
-from knowflow_analytics.execution.executor import SqlExecutor
 from knowflow_analytics.gateways.embedding import HttpEmbeddingGateway
 from knowflow_analytics.gateways.knowledge import HttpKnowledgeGateway
 from knowflow_analytics.gateways.model import HttpModelGateway
 from knowflow_analytics.modeling.ai_modeller import AiSemanticModeller
 from knowflow_analytics.modeling.dimension_aliases import DimensionValueAliasSuggester
-from knowflow_analytics.modeling.introspector import SchemaIntrospector
-from knowflow_analytics.modeling.profile import ColumnStatisticsProfiler
-from knowflow_analytics.modeling.profiler import DimensionValueProfiler
-from knowflow_analytics.modeling.quality import ModelingQualityProfiler
 from knowflow_analytics.query.corrector import LlmPhysicalSqlCorrector, LlmSqlCorrector
 from knowflow_analytics.query.exemplars import GoldenSuiteExemplarProvider
 from knowflow_analytics.query.intent_adjudicator import LlmIntentAdjudicator
@@ -31,7 +26,6 @@ def create_app() -> FastAPI:
     settings = AnalyticsSettings()
     service_secret = settings.service_secret.get_secret_value()
     catalog_engine = create_engine(settings.catalog_database_url.get_secret_value())
-    datasource_engine = create_engine(settings.datasource_database_url.get_secret_value())
     catalog = CatalogStore(catalog_engine)
     if settings.auto_create_schema:
         catalog.create_schema()
@@ -52,7 +46,6 @@ def create_app() -> FastAPI:
         base_url=settings.ragflow_base_url,
         service_token=gateway_token,
     )
-    executor = SqlExecutor(settings.datasource_database_url.get_secret_value())
     # 数据源解析器。没绑数据源的项目回落到这个进程级默认库——存量项目一个绑定行
     # 都没有，不回落的话这次升级会让它们当场问不了数。
     data_sources = DataSourceRegistry(
@@ -65,21 +58,18 @@ def create_app() -> FastAPI:
         catalog=catalog,
         embedding_gateway=embedding_gateway,
     )
-    # 一次性迁移：把部署配置的那个库变成真实数据源，并绑上所有还没绑的项目。
-    # 数据源成为实体之前所有项目都连着它，升级后它们没有绑定行，而 for_project
-    # 已经不再回落。幂等，每次启动都跑。
-    data_sources.ensure_default_data_source()
+    # 一次性迁移：数据源实体之前建的项目没有绑定行，而 for_project 不回落。
+    # 幂等；没有存量项目要迁就什么都不建。
+    data_sources.migrate_legacy_projects()
+    # 连库的组件全部由 data_sources 按项目解析，这里一个都不传。
+    #
+    # 曾经在这里按 datasource_database_url 建过一整套引擎/执行器/画像器传进去，
+    # 但解析器优先，它们**一个都没被用过**——白建一个连接池，还让人误以为存在
+    # 一个"默认数据源"。
     application = AnalyticsApplication(
         catalog=catalog,
         data_sources=data_sources,
-        introspector=SchemaIntrospector(datasource_engine),
-        executor=executor,
         embedding_gateway=embedding_gateway,
-        semantic_profiler=DimensionValueProfiler(datasource_engine),
-        column_profiler=ColumnStatisticsProfiler(
-            datasource_engine, sample_values=settings.modeling_sample_values
-        ),
-        quality_profiler=ModelingQualityProfiler(datasource_engine, executor),
         ai_modeller=AiSemanticModeller(
             model_gateway=model_gateway,
             knowledge_gateway=knowledge_gateway,
@@ -134,8 +124,7 @@ def create_app() -> FastAPI:
         knowledge_gateway.close()
         model_gateway.close()
         embedding_gateway.close()
-        executor.close()
-        datasource_engine.dispose()
+        data_sources.close()
         catalog_engine.dispose()
 
     return api

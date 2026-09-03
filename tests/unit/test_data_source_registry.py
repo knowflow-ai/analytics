@@ -74,34 +74,61 @@ class TestNoFallback:
         assert excinfo.value.code == "DATA_SOURCE_NOT_BOUND"
 
 
-class TestDeploymentDefaultMigration:
-    """把部署配置的那个库变成真实数据源。
+class TestLegacyMigration:
+    """把数据源实体上线之前建的项目补上绑定。
 
-    不迁移的话，升级当天所有存量项目一起报"没绑数据源"。迁移之后 UI 里也不再需要
-    「默认库（部署配置）」这个魔法选项——它就是列表里一个普通数据源。
+    纯粹是一次性迁移，**没有"默认数据源"这个概念**。不迁移的话，升级当天所有存量
+    项目一起报"没绑数据源"。
     """
 
-    def test_migration_creates_a_real_data_source(self, registry: DataSourceRegistry):
-        data_source_id = registry.ensure_default_data_source()
+    def test_migration_creates_an_ordinary_data_source(self, registry: DataSourceRegistry):
+        data_source_id = registry.migrate_legacy_projects()
 
         assert data_source_id is not None
         record = registry.get(data_source_id)
         assert record is not None
-        assert record.name == "默认数据源"
+        # 名字取自连接串里的库名，一眼看得出是哪个库；不是「默认数据源」那种暗示
+        # 它有特殊地位的名字——它没有，就是一条普通记录。
+        assert "默认" not in record.name
+
+    def test_a_fresh_install_gets_nothing(self, catalog: CatalogStore):
+        """全新部署不该凭空多出一条谁也没配过的数据源。
+
+        那正是"默认"这个概念被制造出来的地方：一条自动出现的记录，用户没建过、
+        也不知道它连的是哪。没有存量项目要迁，就什么都不留。
+        """
+
+        empty = CatalogStore(create_engine("sqlite+pysqlite:///:memory:"))
+        empty.create_schema()
+        registry = DataSourceRegistry(
+            catalog=empty,
+            secret_box=DataSourceSecretBox(_SECRET),
+            default_database_url=_DEFAULT_URL,
+        )
+
+        assert registry.migrate_legacy_projects() is None
+        assert empty.list_data_sources() == ()
+
+    def test_an_already_migrated_install_stays_migrated(self, registry: DataSourceRegistry):
+        # 迁完之后所有项目都绑上了，unbound 为空；不能因此把记录当成"没迁过"
+        # 而在下次启动时重建。
+        first = registry.migrate_legacy_projects()
+
+        assert registry.migrate_legacy_projects() == first
 
     def test_migration_binds_every_unbound_project(
         self, catalog: CatalogStore, registry: DataSourceRegistry
     ):
         catalog.create_project(project_id="prj_2", name="p2")
 
-        data_source_id = registry.ensure_default_data_source()
+        data_source_id = registry.migrate_legacy_projects()
 
         assert catalog.get_project_data_source_id("prj_1") == data_source_id
         assert catalog.get_project_data_source_id("prj_2") == data_source_id
 
     def test_migrated_projects_resolve_again(self, registry: DataSourceRegistry):
         # 迁移的意义就在这：升级前能问数的项目，升级后还能问。
-        registry.ensure_default_data_source()
+        registry.migrate_legacy_projects()
 
         assert registry.for_project("prj_1").dialect is SqlDialect.POSTGRES
 
@@ -109,8 +136,8 @@ class TestDeploymentDefaultMigration:
         self, catalog: CatalogStore, registry: DataSourceRegistry
     ):
         # 每次启动都跑：不幂等的话每重启一次就多一个"默认数据源"。
-        first = registry.ensure_default_data_source()
-        second = registry.ensure_default_data_source()
+        first = registry.migrate_legacy_projects()
+        second = registry.migrate_legacy_projects()
 
         assert first == second
         assert len(catalog.list_data_sources()) == 1
@@ -125,14 +152,14 @@ class TestDeploymentDefaultMigration:
 
         chosen = _bind(catalog)
 
-        registry.ensure_default_data_source()
+        registry.migrate_legacy_projects()
 
         assert catalog.get_project_data_source_id("prj_1") == chosen
 
     def test_migration_stores_the_connection_string_encrypted(
         self, catalog: CatalogStore, registry: DataSourceRegistry
     ):
-        data_source_id = registry.ensure_default_data_source()
+        data_source_id = registry.migrate_legacy_projects()
 
         stored = catalog.read_data_source_dsn(data_source_id)
 
@@ -147,7 +174,7 @@ class TestDeploymentDefaultMigration:
             default_database_url="",
         )
 
-        assert registry.ensure_default_data_source() is None
+        assert registry.migrate_legacy_projects() is None
         assert catalog.list_data_sources() == ()
 
 

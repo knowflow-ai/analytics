@@ -14,7 +14,10 @@ class AnalyticsSettings(BaseSettings):
     )
 
     catalog_database_url: SecretStr
-    datasource_database_url: SecretStr
+    # **只给迁移用，全新部署不必填。** 数据源实体上线之前，所有项目都连着这一个
+    # 库；升级时启动迁移据此把那些项目补上绑定。之后它就没有用了——数据源由管理员
+    # 在界面上建，服务不再有"默认数据源"这个概念。
+    datasource_database_url: SecretStr = SecretStr("")
     service_secret: SecretStr = Field(min_length=32)
     ragflow_base_url: str
     ragflow_service_token: SecretStr = Field(min_length=16)

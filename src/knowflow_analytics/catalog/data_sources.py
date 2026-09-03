@@ -24,6 +24,7 @@ import threading
 from dataclasses import dataclass
 
 from sqlalchemy import Engine, create_engine
+from sqlalchemy.engine import make_url
 
 from knowflow_analytics.catalog.secrets import DataSourceSecretBox
 from knowflow_analytics.catalog.store import CatalogStore, DataSourceRecord
@@ -44,8 +45,8 @@ __all__ = [
 ]
 
 
-# 迁移出来的那个数据源用固定 id：每次启动都要能认出"已经迁过了"。
-_DEFAULT_DATA_SOURCE_ID = "ds_deployment_default"
+# 迁移出来的那条记录用固定 id：每次启动都要能认出"已经迁过了"。
+_MIGRATED_DATA_SOURCE_ID = "ds_migrated_legacy"
 
 
 class DataSourceError(AnalyticsError):
@@ -270,36 +271,44 @@ class DataSourceRegistry:
                 code="DATA_SOURCE_ENGINE_UNSUPPORTED",
             ) from exc
 
-    def ensure_default_data_source(self, *, name: str = "默认数据源") -> str | None:
-        """把部署配置的那个库变成一个真实的数据源，并绑上所有还没绑的项目。
+    def migrate_legacy_projects(self) -> str | None:
+        """把数据源实体上线之前建的项目补上绑定。
 
-        这是**一次性迁移**，不是运行时回落。数据源成为实体之前，所有项目都连着
-        ``datasource_database_url`` 那一个库；升级后它们没有绑定行，而
-        ``for_project`` 已经不再回落。不迁移的话，升级当天所有存量项目一起报
-        "没绑数据源"。
+        **纯粹是一次性迁移，没有"默认数据源"这个概念。** 数据源实体之前，所有项目
+        都连着 ``datasource_database_url`` 那一个库；升级后它们没有绑定行，而
+        ``for_project`` 不回落。不迁移的话，升级当天所有存量项目一起报"没绑数据源"。
 
-        迁移之后 UI 里也不再需要「默认库（部署配置）」这个魔法选项——它就是列表里
-        一个普通数据源，可以改名、可以被别的项目复用。
+        **没有要迁的项目就什么都不建。** 全新部署没有存量项目，也就不该凭空多出
+        一条谁也没配过的数据源记录——那正是"默认"这个概念被制造出来的地方。管理员
+        在界面上建自己的数据源，仅此而已。
 
-        幂等：固定 id，已存在就不重建；只绑还没绑的项目。每次启动都跑，所以中途
-        失败下次会补上。
+        迁出来的记录就是一条普通数据源：名字取自连接串里的库名，可以改名、可以被
+        别的项目复用、可以在没人用时删掉。
+
+        幂等：固定 id 认得出已经迁过；只绑还没绑的项目。每次启动都跑，中途失败
+        下次补上。
         """
 
         if not self._default_database_url.strip():
             return None
-        record = self._catalog.get_data_source(_DEFAULT_DATA_SOURCE_ID)
+        unbound = self._catalog.list_unbound_project_ids()
+        existing = self._catalog.get_data_source(_MIGRATED_DATA_SOURCE_ID)
+        if not unbound and existing is None:
+            # 全新部署：没有存量项目要迁，也就不留下任何痕迹。
+            return None
+        record = existing
         if record is None:
             self._catalog.create_data_source(
-                name=name,
+                name=_legacy_data_source_name(self._default_database_url),
                 engine=self._default_dialect.value,
                 secret=self._secret_box.encrypt(self._default_database_url),
-                data_source_id=_DEFAULT_DATA_SOURCE_ID,
+                data_source_id=_MIGRATED_DATA_SOURCE_ID,
             )
-        for project_id in self._catalog.list_unbound_project_ids():
+        for project_id in unbound:
             self._catalog.bind_project_data_source(
-                project_id=project_id, data_source_id=_DEFAULT_DATA_SOURCE_ID
+                project_id=project_id, data_source_id=_MIGRATED_DATA_SOURCE_ID
             )
-        return _DEFAULT_DATA_SOURCE_ID
+        return _MIGRATED_DATA_SOURCE_ID
 
     def invalidate(self, data_source_id: str) -> None:
         """丢掉某个数据源已缓存的连接。
@@ -372,3 +381,18 @@ class SingleDataSourceRegistry:
     def close(self) -> None:
         if self._binding.engine is not None:
             self._binding.engine.dispose()
+
+
+def _legacy_data_source_name(database_url: str) -> str:
+    """迁移出来那条记录的名字。
+
+    取连接串里的库名，让管理员一眼认出它是哪个库——而不是叫「默认数据源」那种
+    暗示它有特殊地位的名字。它没有：就是一条普通记录，可以改名可以删。
+    """
+
+    try:
+        database = make_url(database_url).database or ""
+    except Exception:  # noqa: BLE001 - 连接串形态千奇百怪，取不到名字不该拦住迁移
+        database = ""
+    database = database.rsplit("/", 1)[-1].strip()
+    return database or "原有数据库"

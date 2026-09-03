@@ -483,8 +483,10 @@ class AnalyticsApplication:
         self,
         *,
         catalog: CatalogStore,
-        introspector: SchemaIntrospector,
-        executor: SqlExecutor,
+        # 连库的组件由 data_sources 按项目解析。这两个只在单数据源装配下使用
+        # （OSS 单库部署、绝大多数测试）；商业版一个都不传。
+        introspector: SchemaIntrospector | None = None,
+        executor: SqlExecutor | None = None,
         embedding_gateway: EmbeddingGateway,
         ai_modeller: AiSemanticModeller | None = None,
         dimension_alias_suggester: DimensionValueAliasSuggester | None = None,
@@ -527,6 +529,12 @@ class AnalyticsApplication:
         self._executor = executor
         # 数据源解析器。没传就把构造参数包成单数据源装配——内部只有
         # ``self._sources`` 一条取法，不存在"配了/没配数据源"的分支。
+        if data_sources is None and (introspector is None or executor is None):
+            # 两条装配路子必须二选一说全：都缺的话，第一次连库时才会以
+            # AttributeError 炸开，离原因很远。
+            raise ValueError(
+                "either data_sources or both introspector and executor are required"
+            )
         self._sources = data_sources or SingleDataSourceRegistry(
             DataSourceBinding(
                 data_source_id=None,

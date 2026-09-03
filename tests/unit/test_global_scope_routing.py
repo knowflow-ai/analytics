@@ -2069,8 +2069,8 @@ class TestCrossScopeNameCollisionInTheUnion:
     def test_nothing_is_guessed_when_there_is_no_evidence_at_all(self, sales_release) -> None:
         """拿不到证据时不硬记：分不清是模型猜的还是根本没跑映射。"""
 
-        from knowflow_analytics.query.service import _inferred_member_names
         from knowflow_analytics.contracts import SemanticQuery
+        from knowflow_analytics.query.service import _inferred_member_names
 
         assert (
             _inferred_member_names(

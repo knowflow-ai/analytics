@@ -623,6 +623,10 @@ class QueryScopeResolver:
                     message=message,
                     exact_dimension_ids=exact_dimension_ids,
                 )
+            candidates = self._least_borrowing_scope_ids(
+                candidates=candidates,
+                dimension_groups=dimension_groups,
+            )
 
         return self._finish_scope_cardinality(
             candidates=candidates,
@@ -731,6 +735,49 @@ class QueryScopeResolver:
         if evidence_element_ids <= members:
             return coarsest
         return None
+
+    def _least_borrowing_scope_ids(
+        self,
+        *,
+        candidates: set[str],
+        dimension_groups: tuple[frozenset[str], ...],
+    ) -> set[str]:
+        """没有指标锚点时，按「借用了多少组精确证据」收窄候选。
+
+        成员关系表达的是可达：事实 scope 经冻结路由能到达它关联的每个实体，所以
+        「上海有哪些门店」时销售单、销售明细、门店三个 scope 全都可达，而用户没有
+        提到任何销售的东西。证据归属才是用户实际点名的对象：一组精确证据里只要有
+        一个成员归候选的事实根所有就不算借用，借用最少的候选留下（0 组即全部证据
+        都是它自己的）。零证据时所有候选借用数相同，不改变任何既有决定；只消费
+        exact 证据、不比较分数，剩下的并列仍交给粒度收敛或既有澄清。
+
+        同一短语落到不同实体的维度（「US」既是客户地区也是平台地区）是语义歧义，
+        不是借用问题：这种组不参与计数，否则会因为某个实体恰好没有自己的 scope
+        而把歧义悄悄判给另一边。
+        """
+
+        single_owner_groups = tuple(
+            group
+            for group in dimension_groups
+            if len({self._dimensions[dimension_id].model_id for dimension_id in group}) == 1
+        )
+        if not single_owner_groups or len(candidates) < 2:
+            return candidates
+
+        def borrowed(dataset_id: str) -> int:
+            root = self._routes[dataset_id].root_model_id
+            members = self._datasets[dataset_id].dimension_ids
+            return sum(
+                not any(
+                    dimension_id in members and self._dimensions[dimension_id].model_id == root
+                    for dimension_id in group
+                )
+                for group in single_owner_groups
+            )
+
+        ranked = {dataset_id: borrowed(dataset_id) for dataset_id in candidates}
+        fewest = min(ranked.values())
+        return {dataset_id for dataset_id, count in ranked.items() if count == fewest}
 
     def _finish_scope_cardinality(
         self,

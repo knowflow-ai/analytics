@@ -1506,7 +1506,11 @@ def _items_orders_relation(*, backward: bool = False) -> RelationSpec:
 def test_shared_dimension_converges_to_the_coarsest_fact_scope(
     backward: bool,
 ) -> None:
-    """两 scope 共享的维度证据不再出业务对象卡；两种关系建模方向都要认。"""
+    """两 scope 共享的维度证据不再出业务对象卡；两种关系建模方向都要认。
+
+    「地区」归订单所有、订单明细只是借用，所以证据归属先于粒度收敛就选定了
+    订单分析；收敛只剩零证据这一种入口。
+    """
 
     resolver = _granularity_resolver(
         relation=_items_orders_relation(backward=backward)
@@ -1517,7 +1521,7 @@ def test_shared_dimension_converges_to_the_coarsest_fact_scope(
     )
 
     assert resolution.status is QueryScopeResolutionStatus.SELECTED
-    assert resolution.code == "QUERY_SCOPE_GRANULARITY_CONVERGED"
+    assert resolution.code == "QUERY_SCOPE_SELECTED"
     assert resolution.selected_dataset_id == "orders_scope"
 
 
@@ -1547,8 +1551,13 @@ def test_fine_only_dimension_still_selects_the_fine_scope_directly() -> None:
     assert resolution.selected_dataset_id == "items_scope"
 
 
-def test_entity_count_scope_never_absorbs_the_query() -> None:
-    """事实→实体对（订单→客户范围）：最粗端只有实体计数，规则不适用。"""
+def test_entity_owned_attribute_selects_the_entity_scope_even_if_it_only_counts() -> None:
+    """事实→实体对（订单→客户范围）：用户只点名了实体的属性，就选实体 scope。
+
+    粒度收敛不把实体计数 scope 当去向，那是为了零证据时不把事实问题吸到实体上；
+    这里证据明确归实体所有，事实 scope 只是借用它。上海有哪些门店就是门店的事，
+    不需要用户在「销售单 / 销售明细 / 门店」里替系统挑执行计划。
+    """
 
     resolver = _granularity_resolver(
         relation=_items_orders_relation(),
@@ -1559,9 +1568,9 @@ def test_entity_count_scope_never_absorbs_the_query() -> None:
         (_Evidence("dimension", "region", "地区"),)
     )
 
-    assert resolution.status is QueryScopeResolutionStatus.CLARIFICATION
-    assert resolution.code == "AMBIGUOUS_QUERY_SCOPE"
-    assert resolution.selected_dataset_id is None
+    assert resolution.status is QueryScopeResolutionStatus.SELECTED
+    assert resolution.code == "QUERY_SCOPE_SELECTED"
+    assert resolution.selected_dataset_id == "orders_scope"
 
 
 def test_unrelated_fact_roots_keep_the_existing_clarification(
@@ -1585,3 +1594,202 @@ def test_convergence_refuses_a_coarse_scope_missing_the_evidence() -> None:
     )
 
     assert converged is None
+
+
+def _cafe_resolver() -> QueryScopeResolver:
+    """实机 demo_cafe 的形状：门店/商品是实体 scope，销售单、销售明细是事实 scope。
+
+    销售明细 —many_to_one→ 销售单 —many_to_one→ 门店；销售明细 —many_to_one→ 商品。
+    成员关系表达可达：三个 scope 全都能到「门店名称」，但只有门店 scope 拥有它。
+    """
+
+    metrics = (
+        _metric("store_count", owner="stores"),
+        _metric("product_count", owner="products"),
+        _metric("order_amount", owner="orders"),
+        _metric("item_amount", owner="items"),
+    )
+    dimensions = (
+        _dimension("store_name", model_id="stores"),
+        _dimension("store_city", model_id="stores"),
+        _dimension("product_name", model_id="products"),
+        _dimension("unit_price", model_id="products"),
+        _dimension("order_date", model_id="orders"),
+    )
+    values = (
+        DimensionValueSpec(
+            id="city_shanghai",
+            dimension_id="store_city",
+            value="上海",
+            display_name="上海",
+        ),
+    )
+    datasets = (
+        DatasetSpec(
+            id="stores_scope",
+            name="门店",
+            model_ids=("stores",),
+            metric_ids=("store_count",),
+            dimension_ids=("store_name", "store_city"),
+        ),
+        DatasetSpec(
+            id="products_scope",
+            name="商品",
+            model_ids=("products",),
+            metric_ids=("product_count",),
+            dimension_ids=("product_name", "unit_price"),
+        ),
+        DatasetSpec(
+            id="orders_scope",
+            name="销售单",
+            model_ids=("orders", "stores"),
+            metric_ids=("order_amount",),
+            dimension_ids=("order_date", "store_name", "store_city"),
+        ),
+        DatasetSpec(
+            id="items_scope",
+            name="销售明细",
+            model_ids=("items", "orders", "stores", "products"),
+            metric_ids=("item_amount",),
+            dimension_ids=(
+                "order_date",
+                "store_name",
+                "store_city",
+                "product_name",
+                "unit_price",
+            ),
+        ),
+    )
+
+    def relation(rel_id: str, left: str, right: str) -> RelationSpec:
+        return RelationSpec(
+            id=rel_id,
+            left_model_id=left,
+            right_model_id=right,
+            cardinality=Cardinality.MANY_TO_ONE,
+            conditions=(
+                RelationCondition(
+                    left_field_id=f"{left}.{right}_id",
+                    right_field_id=f"{right}.id",
+                ),
+            ),
+        )
+
+    relations = (
+        relation("orders_stores", "orders", "stores"),
+        relation("items_orders", "items", "orders"),
+        relation("items_products", "items", "products"),
+    )
+    routes = (
+        AnalysisTopicRouteSpec(
+            dataset_id="stores_scope",
+            root_model_id="stores",
+            default_count_metric_id="store_count",
+        ),
+        AnalysisTopicRouteSpec(
+            dataset_id="products_scope",
+            root_model_id="products",
+            default_count_metric_id="product_count",
+        ),
+        AnalysisTopicRouteSpec(
+            dataset_id="orders_scope",
+            root_model_id="orders",
+            paths=(
+                AnalysisTopicPathSpec(
+                    target_model_id="stores",
+                    relation_ids=("orders_stores",),
+                ),
+            ),
+        ),
+        AnalysisTopicRouteSpec(
+            dataset_id="items_scope",
+            root_model_id="items",
+            paths=(
+                AnalysisTopicPathSpec(
+                    target_model_id="orders",
+                    relation_ids=("items_orders",),
+                ),
+                AnalysisTopicPathSpec(
+                    target_model_id="stores",
+                    relation_ids=("items_orders", "orders_stores"),
+                ),
+                AnalysisTopicPathSpec(
+                    target_model_id="products",
+                    relation_ids=("items_products",),
+                ),
+            ),
+        ),
+    )
+    return QueryScopeResolver(
+        datasets=datasets,
+        routes=routes,
+        metrics=metrics,
+        dimensions=dimensions,
+        values=values,
+        relations=relations,
+    )
+
+
+def test_entity_owned_evidence_selects_the_entity_scope_without_asking() -> None:
+    """实机回放「上海有哪些门店，什么时候开业的」：三个 scope 都可达，只有门店拥有证据。
+
+    用户点名的是门店的属性，一个销售的词都没提；可达性把销售单/销售明细也拉进
+    候选，再让用户在「销售单 / 销售明细 / 门店」里选，是把内部执行计划当业务问题
+    问出去。证据归属是确定性的：每组精确证据的成员归谁的事实根所有，谁就不算借用。
+    """
+
+    resolution = _cafe_resolver().resolve(
+        (
+            _Evidence("dimension_value", "city_shanghai", "上海"),
+            _Evidence("dimension", "store_name", "门店"),
+        )
+    )
+
+    assert resolution.status is QueryScopeResolutionStatus.SELECTED
+    assert resolution.selected_dataset_id == "stores_scope"
+
+
+def test_attribute_owned_by_another_entity_selects_that_entity_scope() -> None:
+    """「咖啡单价大于 20 有哪些」：单价归商品所有，销售明细只是借用它。"""
+
+    resolution = _cafe_resolver().resolve((_Evidence("dimension", "unit_price", "单价"),))
+
+    assert resolution.status is QueryScopeResolutionStatus.SELECTED
+    assert resolution.selected_dataset_id == "products_scope"
+
+
+def test_evidence_owned_by_two_entities_falls_to_the_only_scope_reaching_both() -> None:
+    """门店 + 商品：没有 scope 拥有全部证据，只有销售明细能同时到达两者。"""
+
+    resolution = _cafe_resolver().resolve(
+        (
+            _Evidence("dimension_value", "city_shanghai", "上海"),
+            _Evidence("dimension", "product_name", "商品"),
+        )
+    )
+
+    assert resolution.status is QueryScopeResolutionStatus.SELECTED
+    assert resolution.selected_dataset_id == "items_scope"
+
+
+def test_fact_owned_evidence_prefers_the_owning_fact_over_a_borrowing_one() -> None:
+    """「各日期」：日期归销售单所有；销售明细可达但借用。不经粒度收敛也不出卡。"""
+
+    resolution = _cafe_resolver().resolve((_Evidence("dimension", "order_date", "日期"),))
+
+    assert resolution.status is QueryScopeResolutionStatus.SELECTED
+    assert resolution.selected_dataset_id == "orders_scope"
+
+
+def test_ownership_never_overrides_an_exact_metric_owner() -> None:
+    """有指标锚点时事实根由指标所有者决定：门店属性只是过滤/分组，不改事实根。"""
+
+    resolution = _cafe_resolver().resolve(
+        (
+            _Evidence("metric", "item_amount", "销售金额"),
+            _Evidence("dimension_value", "city_shanghai", "上海"),
+        )
+    )
+
+    assert resolution.status is QueryScopeResolutionStatus.SELECTED
+    assert resolution.selected_dataset_id == "items_scope"

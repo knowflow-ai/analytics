@@ -1045,21 +1045,17 @@ def test_scope_fallback_is_presented_as_business_objects_not_datasets(
     assert "查询作用域" not in rendered
 
 
-def test_analysis_object_ai_match_routes_internally_without_exposing_scope(
+def test_entity_attribute_routes_to_its_owner_without_a_business_object_card(
     sales_release,
 ) -> None:
+    """「客户分层」归客户所有；销售经营可达但只是借用，不再问用户要分析什么。"""
+
     release = _routed_release(sales_release)
-    adjudicator = _LabelChoosingIntentAdjudicator(
-        target_label="订单",
-        target_kind="analysis_object",
-    )
-    llm = _FixedS2SqlGateway('SELECT "客户分层" FROM "销售经营"')
+    llm = _FixedS2SqlGateway('SELECT "客户分层" FROM "客户范围"')
     service, _embedding, executor = _service(
         release,
         llm_gateway=llm,
         query_embedding=False,
-        intent_adjudicator=adjudicator,
-        analysis_object_adjudication_mode=WeakMetricAdjudicationMode.AUTO,
     )
 
     response = service.query(
@@ -1073,109 +1069,12 @@ def test_analysis_object_ai_match_routes_internally_without_exposing_scope(
     )
 
     assert response.state is QueryState.COMPLETED, response.model_dump_json(indent=2)
-    assert response.semantic_query.dataset_id == "sales_dataset"
+    assert response.semantic_query.dataset_id == "customer_scope"
     assert response.semantic_query.dimension_ids == ("customer_segment",)
     assert executor.calls == 1
-    assert len(adjudicator.calls) == 1
-    assert adjudicator.calls[0]["intent_kind"] == "analysis_object"
     discovery = next(item for item in response.trace if item.stage.value == "CANDIDATE_DISCOVERY")
-    assert discovery.detail["analysis_object_adjudication"]["decision"] == "MATCH"
-    assert discovery.detail["analysis_object_adjudication"]["adopted"] is True
-    assert response.semantic_decisions[0].source == "ai"
-    assert response.semantic_decisions[0].chosen.label == "订单"
-
-
-def test_analysis_object_shadow_keeps_the_business_card_and_records_the_decision(
-    sales_release,
-) -> None:
-    release = _routed_release(sales_release)
-    adjudicator = _LabelChoosingIntentAdjudicator(
-        target_label="订单",
-        target_kind="analysis_object",
-    )
-    service, _embedding, executor = _service(
-        release,
-        query_embedding=False,
-        intent_adjudicator=adjudicator,
-        analysis_object_adjudication_mode=WeakMetricAdjudicationMode.SHADOW,
-    )
-
-    response = service.query(
-        QueryRequest(
-            project_id="sales",
-            question="客户分层",
-            dataset_ids=("sales_dataset", "customer_scope"),
-            include_diagnostics=True,
-        ),
-        actor_id="tenant-1",
-    )
-
-    assert response.state is QueryState.CLARIFICATION_REQUIRED
-    assert {item.kind for item in response.options} == {"analysis_object"}
-    assert {item.label for item in response.options} == {"订单", "客户"}
-    assert executor.calls == 0
-    discovery = next(item for item in response.trace if item.stage.value == "CANDIDATE_DISCOVERY")
-    assert discovery.detail["analysis_object_adjudication"] == {
-        "mode": "shadow",
-        "decision": "MATCH",
-        "candidate_set_hash": "sha256:intent-candidates",
-        "adopted": False,
-        "fallback": "human_confirmation",
-    }
-
-
-def test_explicit_analysis_object_choice_is_reused_without_another_card(
-    sales_release,
-) -> None:
-    release = _routed_release(sales_release)
-    llm = _FixedS2SqlGateway('SELECT "客户分层" FROM "销售经营"')
-    memories = _ConfirmationMemoryStore()
-    service, _embedding, executor = _service(
-        release,
-        llm_gateway=llm,
-        query_embedding=False,
-        confirmation_memories=memories,
-    )
-    question = "客户分层"
-    dataset_ids = ("sales_dataset", "customer_scope")
-    first = service.query(
-        QueryRequest(project_id="sales", question=question, dataset_ids=dataset_ids),
-        actor_id="tenant-1",
-    )
-    assert first.state is QueryState.CLARIFICATION_REQUIRED
-    selected_orders = next(item for item in first.options if item.label == "订单")
-    second = service.query(
-        QueryRequest(
-            project_id="sales",
-            question=question,
-            dataset_ids=dataset_ids,
-            selected_candidate_id=selected_orders.candidate_id,
-            expected_release_id=first.release_id,
-            expected_spec_hash=first.spec_hash,
-            expected_index_snapshot_id=first.index_snapshot_id,
-        ),
-        actor_id="tenant-1",
-    )
-    assert second.state is QueryState.COMPLETED
-    assert memories.saved[0].selection_kind == "analysis_object"
-    assert memories.saved[0].dataset_id == "sales_dataset"
-
-    third = service.query(
-        QueryRequest(
-            project_id="sales",
-            question=question,
-            dataset_ids=dataset_ids,
-            include_diagnostics=True,
-        ),
-        actor_id="tenant-1",
-    )
-
-    assert third.state is QueryState.COMPLETED, third.model_dump_json(indent=2)
-    assert third.semantic_query.dataset_id == "sales_dataset"
-    assert third.semantic_decisions[0].source == "memory"
-    assert third.semantic_decisions[0].chosen.label == "订单"
-    assert llm.calls == 2
-    assert executor.calls == 2
+    assert discovery.detail["scope_resolution"]["selected_dataset_id"] == "customer_scope"
+    assert discovery.detail["scope_resolution"]["code"] == "QUERY_SCOPE_SELECTED"
 
 
 def test_business_object_continuation_keeps_the_confirmed_dimension_without_scope_leak(
@@ -1446,8 +1345,9 @@ def test_business_object_and_semantic_confirmation_are_bundled_in_the_first_card
         )
         for option in first.options
     } == {
+        # 归属决定作用域：客户分层归客户所有，销售经营只是借用，所以不再
+        # 提供「销售经营 × 客户分层」这种让用户替系统挑执行计划的组合。
         ("sales_dataset", "element:dimension:region"),
-        ("sales_dataset", "element:dimension:customer_segment"),
         ("customer_scope", "element:dimension:customer_segment"),
     }
     selected_customer_segment = next(
@@ -1459,7 +1359,7 @@ def test_business_object_and_semantic_confirmation_are_bundled_in_the_first_card
             question="共享维度",
             dataset_ids=dataset_ids,
         )
-        == ("sales_dataset", "element:dimension:customer_segment")
+        == ("sales_dataset", "element:dimension:region")
     )
 
     second = service.query(

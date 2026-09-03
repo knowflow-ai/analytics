@@ -844,3 +844,89 @@ export async function searchGrantSubjects(
     })
     .filter((item) => item.id);
 }
+
+// ---- 数据源 ---------------------------------------------------------------
+//
+// 全局数据源不在任何项目之下，走的是宿主 BFF 的专办路由（核心的直通道只放行
+// projects/{id}/... ）。项目绑定那两个端点仍走直通道，天然沿用项目归属判定。
+//
+// **连接串只进不出。** 请求里带 dsn，返回值里没有装它的地方——这不是"记得别显示"，
+// 是类型上就没有那个字段。
+
+// 写成核心的路径，由 client 的 rewritePath 决定去哪：嵌入版转成
+// `/v1/analytics/core/...`（宿主 BFF 的专办路由，带全局 admin 闸门），独立版原样
+// 打核心。**不要在这里写死 `/core`**——那会被再重写一次，变成 `core/core`，静默 404。
+const DATA_SOURCE_BASE = '/v1/analytics';
+
+export interface DataSource {
+  id: string;
+  name: string;
+  /** 'postgres' | 'mysql'。用后端给的原值，前端不做枚举，多一处就多一处会漂的真相。 */
+  engine: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export const listDataSources = async (): Promise<DataSource[]> => {
+  const data = (await request<{ items?: DataSource[] }>(
+    `${DATA_SOURCE_BASE}/data-sources`,
+  )) as { items?: DataSource[] } | null;
+  return data?.items ?? [];
+};
+
+export const createDataSource = (input: {
+  name: string;
+  engine: string;
+  dsn: string;
+}): Promise<DataSource> =>
+  request<DataSource>(`${DATA_SOURCE_BASE}/data-sources`, {
+    method: 'POST',
+    body: input,
+  });
+
+export const testDataSource = (input: { engine: string; dsn: string }): Promise<unknown> =>
+  request(`${DATA_SOURCE_BASE}/data-sources:test`, {
+    method: 'POST',
+    body: input,
+  });
+
+export const updateDataSource = (
+  dataSourceId: string,
+  input: { name?: string; dsn?: string },
+): Promise<DataSource> =>
+  request<DataSource>(
+    `${DATA_SOURCE_BASE}/data-sources/${encodeURIComponent(dataSourceId)}`,
+    { method: 'PUT', body: input },
+  );
+
+export const deleteDataSource = (dataSourceId: string): Promise<unknown> =>
+  request(`${DATA_SOURCE_BASE}/data-sources/${encodeURIComponent(dataSourceId)}`, {
+    method: 'DELETE',
+  });
+
+/** 项目当前绑的数据源；没绑返回 null（那种项目回落到部署的默认库）。 */
+export const getProjectDataSource = async (
+  projectId: string,
+): Promise<DataSource | null> => {
+  const data = (await request<{ data_source?: DataSource | null }>(
+    `/v1/analytics/projects/${encodeURIComponent(projectId)}/data-source`,
+    { projectId },
+  )) as { data_source?: DataSource | null } | null;
+  return data?.data_source ?? null;
+};
+
+export const bindProjectDataSource = (
+  projectId: string,
+  dataSourceId: string,
+): Promise<unknown> =>
+  request(`/v1/analytics/projects/${encodeURIComponent(projectId)}/data-source`, {
+    method: 'PUT',
+    projectId,
+    body: { data_source_id: dataSourceId },
+  });
+
+export const unbindProjectDataSource = (projectId: string): Promise<unknown> =>
+  request(`/v1/analytics/projects/${encodeURIComponent(projectId)}/data-source`, {
+    method: 'DELETE',
+    projectId,
+  });

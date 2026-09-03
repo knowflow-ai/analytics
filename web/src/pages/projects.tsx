@@ -1,12 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, UserPlus } from 'lucide-react';
+import { Database, Plus, UserPlus } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate } from '@analytics/lib/router';
 import { createProject, listProjects } from '@analytics/api/analytics';
 import type { AnalyticsProject } from '@analytics/api/types';
 import { Button, Dialog, Empty, Field, Input, Spinner, useToast } from '@analytics/components/ui';
 import { avatarGradientOf, avatarStripeOf } from '@analytics/lib/avatar-gradient';
+import { DataSourcesDialog } from './data-sources';
 import { ProjectAuthorizeDialog } from './project-authorize';
+import { ProjectDataSourceDialog } from './project-data-source';
 import { describeError, formatDateTime } from '@analytics/lib/labels';
 import { EDITION, appPath } from '@analytics/api/edition';
 import { projectGridTemplateColumns } from '@analytics/lib/layout';
@@ -21,11 +23,14 @@ function ProjectCard({
   project,
   onOpen,
   onAuthorize,
+  onPickDataSource,
 }: {
   project: AnalyticsProject;
   onOpen: () => void;
   /** 仅嵌入版传入：开源独立版不提供多用户 RBAC，不渲染授权入口。 */
   onAuthorize?: () => void;
+  /** 仅嵌入版传入：独立版只有一个由设置页配置的数据源，没有可挑的。 */
+  onPickDataSource?: () => void;
 }) {
   const status = projectStatusOf(project);
   const name = project.name ?? '';
@@ -40,19 +45,36 @@ function ProjectCard({
       }}
       className="group relative w-full cursor-pointer overflow-hidden rounded-xl border border-slate-200 bg-white text-left shadow-[0_1px_3px_rgba(15,23,42,0.05)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md"
     >
-      {onAuthorize && (
-        <button
-          type="button"
-          title="授权"
-          onClick={(event) => {
-            event.stopPropagation();
-            onAuthorize();
-          }}
-          className="absolute right-2 top-2 z-10 rounded-md bg-white/85 p-1.5 text-slate-500 opacity-0 shadow-sm transition-opacity hover:text-slate-900 focus:opacity-100 group-hover:opacity-100"
-        >
-          <UserPlus className="h-4 w-4" />
-        </button>
-      )}
+      {/* 卡片内的次要动作。按钮不能嵌套按钮，所以外层是 div + role=button，
+          这里每个都要 stopPropagation，否则点它们会连带打开项目。 */}
+      <div className="absolute right-2 top-2 z-10 flex items-center gap-1">
+        {onPickDataSource && (
+          <button
+            type="button"
+            title="数据源"
+            onClick={(event) => {
+              event.stopPropagation();
+              onPickDataSource();
+            }}
+            className="rounded-md bg-white/85 p-1.5 text-slate-500 opacity-0 shadow-sm transition-opacity hover:text-slate-900 focus:opacity-100 group-hover:opacity-100"
+          >
+            <Database className="h-4 w-4" />
+          </button>
+        )}
+        {onAuthorize && (
+          <button
+            type="button"
+            title="授权"
+            onClick={(event) => {
+              event.stopPropagation();
+              onAuthorize();
+            }}
+            className="rounded-md bg-white/85 p-1.5 text-slate-500 opacity-0 shadow-sm transition-opacity hover:text-slate-900 focus:opacity-100 group-hover:opacity-100"
+          >
+            <UserPlus className="h-4 w-4" />
+          </button>
+        )}
+      </div>
       <div className="h-11 w-full" style={{ background: avatarStripeOf(name) }} />
       <div className="-mt-5 flex min-w-0 flex-col px-4 pb-4">
         <div className="flex min-w-0 items-start gap-3">
@@ -83,6 +105,8 @@ export function ProjectsPage({ ready }: { ready: boolean }) {
   const queryClient = useQueryClient();
   const projects = useQuery({ queryKey: ['projects'], queryFn: listProjects, enabled: ready });
   const [creating, setCreating] = useState(false);
+  const [managingSources, setManagingSources] = useState(false);
+  const [pickingSourceFor, setPickingSourceFor] = useState<AnalyticsProject | null>(null);
   const [authorizing, setAuthorizing] = useState<AnalyticsProject | null>(null);
   const [name, setName] = useState('');
   const create = useMutation({
@@ -126,9 +150,19 @@ export function ProjectsPage({ ready }: { ready: boolean }) {
             一个项目对应一套语义模型：导入表、建关系、AI 建模、发布，然后用自然语言提问。
           </p>
         </div>
-        <Button variant="primary" icon={<Plus className="h-4 w-4" />} onClick={() => setCreating(true)}>
-          新建项目
-        </Button>
+        <div className="flex items-center gap-2">
+          {EDITION === 'embedded' && (
+            <Button
+              icon={<Database className="h-4 w-4" />}
+              onClick={() => setManagingSources(true)}
+            >
+              数据源
+            </Button>
+          )}
+          <Button variant="primary" icon={<Plus className="h-4 w-4" />} onClick={() => setCreating(true)}>
+            新建项目
+          </Button>
+        </div>
       </div>
       {projects.isPending && <Spinner />}
       {projects.isError && (
@@ -160,9 +194,28 @@ export function ProjectsPage({ ready }: { ready: boolean }) {
                   ? () => setAuthorizing(project)
                   : undefined
               }
+              onPickDataSource={
+                EDITION === 'embedded'
+                  ? () => setPickingSourceFor(project)
+                  : undefined
+              }
             />
           ))}
         </div>
+      )}
+
+      <DataSourcesDialog
+        open={managingSources}
+        onClose={() => setManagingSources(false)}
+      />
+
+      {pickingSourceFor && (
+        <ProjectDataSourceDialog
+          open
+          projectId={pickingSourceFor.id}
+          projectName={pickingSourceFor.name ?? ''}
+          onClose={() => setPickingSourceFor(null)}
+        />
       )}
 
       {authorizing && (

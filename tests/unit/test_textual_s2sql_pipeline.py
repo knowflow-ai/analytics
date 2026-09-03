@@ -1437,3 +1437,83 @@ def test_period_ratio_still_rejects_ungrouped_non_aggregate_projection(
         )
 
     assert raised.value.code == "S2SQL_RATIO_SHAPE_INVALID"
+
+
+class TestModelGivingUpIsNotAnEmptyResult:
+    """模型写出永远不成立的条件时，不能当成"查询成功但没有数据"。
+
+    实机（2026-09-03，demo_cafe）：问「哪些门店售卖卡布奇洛」，作用域落到门店分析，
+    模型自己在 rationale 里写明"没有产品或销售相关的维度……为了不忽略该条件，使用一个
+    永不成立的过滤条件（1=0）来表示该条件无法被满足"，产出
+    ``SELECT "门店名称" FROM "门店" WHERE 1=0``。执行成功、0 行，界面显示"查询成功，
+    但没有返回数据"——用户读到的是"没有门店卖这个"，一句关于他自己业务的假话。
+
+    空结果和"模型放弃了"必须分开：前者是数据事实，后者是系统没能表达问题。这里在
+    翻译阶段确定性识别后者并拒绝，让既有重试链有机会重新生成候选。
+    """
+
+    def test_impossible_predicate_is_refused_instead_of_returning_zero_rows(
+        self, sales_release
+    ) -> None:
+        for s2sql in (
+            'SELECT "区域" FROM "销售经营" WHERE 1=0',
+            'SELECT "区域" FROM "销售经营" WHERE 1 = 0',
+            'SELECT "区域" FROM "销售经营" WHERE FALSE',
+            'SELECT "区域" FROM "销售经营" WHERE "区域" = \'华东\' AND 1=0',
+        ):
+            with pytest.raises(SemanticParsingError) as raised:
+                S2SqlSemanticTranslator().translate(
+                    release=sales_release,
+                    dataset_id="sales_dataset",
+                    corrected_s2sql=s2sql,
+                )
+
+            assert raised.value.code == "S2SQL_CONTRADICTORY_FILTER", s2sql
+
+    def test_a_contradiction_inside_a_subquery_is_also_giving_up(
+        self, sales_release
+    ) -> None:
+        """子查询里的矛盾同样是放弃，只是藏得深一点。"""
+
+        with pytest.raises(SemanticParsingError) as raised:
+            S2SqlSemanticTranslator().translate(
+                release=sales_release,
+                dataset_id="sales_dataset",
+                corrected_s2sql=(
+                    'SELECT "区域" FROM "销售经营" '
+                    'WHERE "区域" IN (SELECT "区域" FROM "销售经营" WHERE 1=0)'
+                ),
+            )
+
+        assert raised.value.code == "S2SQL_CONTRADICTORY_FILTER"
+
+    def test_no_op_true_predicates_are_left_alone(self, sales_release) -> None:
+        """``1=1`` 是无害的占位，不是放弃——拒了它会误伤正常查询。"""
+
+        translated = S2SqlSemanticTranslator().translate(
+            release=sales_release,
+            dataset_id="sales_dataset",
+            corrected_s2sql=(
+                'SELECT "区域", SUM("净收入") FROM "销售经营" '
+                "WHERE 1=1 AND \"区域\" = '华东' GROUP BY \"区域\""
+            ),
+        )
+
+        assert "华东" in translated.physical_query.parameters.values()
+
+    def test_ordinary_filters_including_or_branches_still_translate(
+        self, sales_release
+    ) -> None:
+        """OR 分支投影不出结构化过滤项，但它不是矛盾，必须照常执行。"""
+
+        translated = S2SqlSemanticTranslator().translate(
+            release=sales_release,
+            dataset_id="sales_dataset",
+            corrected_s2sql=(
+                'SELECT "区域" FROM "销售经营" '
+                "WHERE \"区域\" = '华东' OR \"区域\" = '华南'"
+            ),
+        )
+
+        assert translated.audit_complete is False
+        assert "华东" in translated.physical_query.parameters.values()

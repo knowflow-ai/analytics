@@ -3439,6 +3439,24 @@ def _error_diagnosis(exc: AnalyticsError) -> QueryDiagnosis:
             recommendation="发布改名或删除维度后，需要同步更新受影响主体的数据范围配置。",
             user_hint=str(exc),
         )
+    if exc.code == "S2SQL_CONTRADICTORY_FILTER":
+        # 模型用"永不成立的条件"顶掉了它表达不了的那部分。照通用文案说"没能理解"
+        # 会丢掉最有用的一句：条件没有被悄悄丢掉，只是这个范围里表达不出来。
+        return QueryDiagnosis(
+            category=QueryDiagnosticCategory.TRANSLATION,
+            stage=QueryStage.FINAL_PARSING.value,
+            severity="error",
+            summary="问题中的某个条件在选中的分析范围里无法表达",
+            recommendation=(
+                "检查条件里的名称是否存在于已发布语义（拼写、别名），"
+                "以及该范围是否包含这个条件所需的实体。"
+            ),
+            user_hint=(
+                "这个问题里有一个条件在当前分析范围里表达不出来。"
+                "系统没有把它悄悄丢掉，所以也不会给出结果——"
+                "请确认其中的名称是否正确，或换一种说法。"
+            ),
+        )
     if exc.code == "CROSS_FACT_METRICS_UNSUPPORTED":
         return QueryDiagnosis(
             category=QueryDiagnosticCategory.ROUTING,

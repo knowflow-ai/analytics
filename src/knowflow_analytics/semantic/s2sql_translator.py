@@ -8,6 +8,7 @@ from typing import Any, Protocol
 
 import sqlglot
 from sqlglot import exp
+from sqlglot.optimizer.simplify import simplify
 
 from knowflow_analytics.contracts import (
     Aggregation,
@@ -1054,6 +1055,7 @@ class S2SqlSemanticTranslator:
             row_filters=dict(row_filters or {}),
             dialect=dialect,
         )
+        _reject_contradictory_predicates(statement.corrected_s2sql)
         trace: list[str] = []
         for parser in self._parsers:
             parser.parse(statement)
@@ -1105,6 +1107,37 @@ class S2SqlSemanticTranslator:
             audit_query=semantic_query,
             audit_complete=audit_complete,
         )
+
+
+def _reject_contradictory_predicates(corrected_s2sql: str) -> None:
+    """拒绝永远不可能返回行的查询。
+
+    模型表达不了用户的某个条件时，会自己发明一个"永不成立"的过滤条件把它顶掉——
+    实机 2026-09-03「哪些门店售卖卡布奇洛」，作用域落到门店分析，模型在 rationale
+    里写明"没有产品或销售相关的维度……使用一个永不成立的过滤条件（1=0）来表示该条件
+    无法被满足"，产出 ``SELECT "门店名称" FROM "门店" WHERE 1=0``。执行成功、0 行，
+    界面显示"查询成功，但没有返回数据"——用户读到的是"没有门店卖这个"，一句关于他
+    自己业务的假话。
+
+    空结果是数据事实，矛盾条件是系统没能表达问题，两者必须分开。判据是确定性的常量
+    折叠：任一 SELECT 的 WHERE/HAVING 归约成常量 FALSE 即拒绝，不读问题文本、不猜
+    模型意图。``1=1`` 这类无害占位折叠成 TRUE 或被吸收，不受影响。
+
+    拒绝发生在翻译阶段，候选因此被既有重试链回收，还有机会重新生成。
+    """
+
+    tree = validate_textual_s2sql(corrected_s2sql)
+    for select in tree.find_all(exp.Select):
+        for key in ("where", "having"):
+            clause = select.args.get(key)
+            if clause is None:
+                continue
+            reduced = simplify(clause.this.copy())
+            if isinstance(reduced, exp.Boolean) and reduced.this is False:
+                raise _invalid(
+                    "query can never return rows; the model could not express a condition",
+                    code="S2SQL_CONTRADICTORY_FILTER",
+                )
 
 
 def _set_query_selects(tree: exp.Query) -> tuple[exp.Select, ...]:

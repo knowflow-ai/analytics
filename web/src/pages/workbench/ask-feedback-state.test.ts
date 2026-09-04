@@ -300,3 +300,38 @@ describe('feedbackEmptyCopy', () => {
     expect(feedbackEmptyCopy('archived').title).toContain('归档');
   });
 });
+
+describe('列表 key', () => {
+  it('同一句问话按不同说法聚合出的两行，key 必须不同', () => {
+    // key 相同会让 React 复用错 DOM 节点——实测切到归档时，上一屏待办的行留在
+    // 原地不动，× 和「恢复」两种动作同时出现在一个列表里。
+    const rows = feedbackRows([
+      {
+        question: '各城市有多少门店',
+        effective_question: '各城市有多少门店',
+        stage: 'FINAL_PARSING',
+        code: 'SEMANTIC_INFERRED',
+        message: '',
+        release_id: 'rel',
+        dataset_ids: [],
+        kind: 'inferred',
+        resolution: '门店数量',
+      },
+      {
+        question: '各城市有多少门店',
+        effective_question: '各城市有多少门店',
+        stage: 'FINAL_PARSING',
+        code: 'SEMANTIC_INFERRED',
+        message: '',
+        release_id: 'rel',
+        dataset_ids: [],
+        kind: 'inferred',
+        resolution: '门店数量',
+        unmatched_phrases: ['多少'],
+      },
+    ]);
+
+    expect(rows).toHaveLength(2);
+    expect(new Set(rows.map((row) => row.key)).size).toBe(2);
+  });
+});

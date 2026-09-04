@@ -145,7 +145,7 @@ export function AskFeedbackPanel({
         <ul className="mt-4 overflow-hidden rounded-lg border border-slate-200">
           {rows.map(({ row, fix }) => (
             <li
-              key={`${row.kind}-${row.question}-${row.code}-${row.resolution}`}
+              key={row.key}
               className="flex items-start gap-4 border-b border-slate-100 px-4 py-3.5 last:border-b-0"
             >
               <div className="w-10 shrink-0 pt-0.5 text-center">
@@ -162,6 +162,14 @@ export function AskFeedbackPanel({
                     按钮才知道。压成一行，一眼读完这条是什么、能不能补。 */}
                 <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
                   <Badge tone={KIND_TONE[row.kind]}>{KIND_LABEL[row.kind]}</Badge>
+                  {/* 说法是这一页的主角，也是聚合依据：不显示它，同一句问话按不同
+                      说法聚合出的几行看起来就一模一样，读者只会觉得列表在重复。 */}
+                  {row.phrase && (
+                    <span>
+                      说法
+                      <span className="font-medium text-slate-700">「{row.phrase}」</span>
+                    </span>
+                  )}
                   <span>{row.what}</span>
                   {fix ? (
                     <span>

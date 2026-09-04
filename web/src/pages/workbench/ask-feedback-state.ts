@@ -54,6 +54,15 @@ export type FeedbackKind = 'clarified' | 'inferred' | 'unknown_value' | 'refused
  * （用户已经把答案告诉系统了，照着补别名即可），拒答排后面（还得先诊断原因）。
  */
 export interface FeedbackRow {
+  /**
+   * 列表渲染用的稳定标识，与聚合口径同源。
+   *
+   * 组件那边曾经自己拼一个 `kind-question-code-resolution`——漏了 phrase，于是
+   * 同一句问话下按不同说法聚合出的两行拿到完全相同的 React key，React 复用错
+   * DOM 节点：切到归档时上一屏待办的行留在原地，× 和「恢复」并存。key 由聚合
+   * 方生成，两者就不可能再漂移。
+   */
+  key: string;
   kind: FeedbackKind;
   question: string;
   code: string;
@@ -152,6 +161,7 @@ export function feedbackRows(items: AnalyticsQueryFailure[]): FeedbackRow[] {
     }
     const { what, fixableByAlias } = describe(item);
     groups.set(key, {
+      key,
       kind,
       question,
       code: item.code,

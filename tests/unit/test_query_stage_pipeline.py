@@ -183,7 +183,8 @@ def _release_with_order_primary_dimension(sales_release):
 
 def test_llm_contract_and_query_type_follow_textual_s2sql(sales_release):
     properties = _LlmS2SqlOutput.model_json_schema()["properties"]
-    assert set(properties) == {"thought", "sql"}
+    # inferred_terms 是给反馈页做术语预填的旁路观察项，不参与查询语义。
+    assert set(properties) == {"thought", "sql", "inferred_terms"}
 
     aggregate = LlmS2SqlParser(
         _Gateway(

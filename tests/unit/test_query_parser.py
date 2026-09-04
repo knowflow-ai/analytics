@@ -74,10 +74,15 @@ def _exact_region_value_mapping() -> MappingResult:
 
 
 def test_llm_contract_exposes_text_s2sql_instead_of_parallel_filter_json():
+    """查询语义只能由 textual S2SQL 表达，不能另开一条平行的结构化过滤通道。
+
+    ``inferred_terms`` 不违反这条：它不参与任何查询语义，是给反馈页做术语预填的旁路
+    观察项（"这个说法我理解成了那个成员"）。丢掉它对这次问数的结果没有任何影响。
+    """
+
     schema = _LlmS2SqlOutput.model_json_schema()
 
-    assert set(schema["properties"]) == {"thought", "sql"}
-    assert "$defs" not in schema
+    assert set(schema["properties"]) == {"thought", "sql", "inferred_terms"}
 
 
 def test_llm_prompt_preserves_explicit_time_only_rule(sales_release):

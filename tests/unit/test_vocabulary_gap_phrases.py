@@ -104,3 +104,42 @@ def test_the_same_phrase_is_not_repeated() -> None:
     """同一个片段出现两次只记一条——它是聚合的键，重复会让计数虚高。"""
 
     assert _unmatched_phrases("业绩，业绩", None) == ("业绩",)
+
+
+class TestTheModelsOwnReportIsVerified:
+    """模型报的说法要过一道确定性校验才采用。
+
+    对照实验（demo_cafe 12 题）里模型 10/12、span 补集 7/12，差距主要在"该沉默时
+    沉默"。但模型报的东西不能直接信——一次 ``in`` 判断就能把"编造"这个风险归零。
+    """
+
+    @staticmethod
+    def _verify(pairs, question):
+        from knowflow_analytics.query.parser import InferredTerm, _verified_terms
+
+        return _verified_terms(
+            tuple(InferredTerm(phrase=p, member=m) for p, m in pairs), question
+        )
+
+    def test_a_phrase_taken_from_the_question_is_kept(self) -> None:
+        assert self._verify([("业绩", "销售金额")], "各门店的业绩") == (("业绩", "销售金额"),)
+
+    def test_a_phrase_that_is_not_in_the_question_is_dropped(self) -> None:
+        """模型编的词拿去预填，用户会补进一个自己没说过的说法。"""
+
+        assert self._verify([("利润率", "销售金额")], "各门店的业绩") == ()
+
+    def test_a_pair_without_a_member_is_dropped(self) -> None:
+        """没有配对就失去了它相对 span 补集的全部优势——预填要的正是这一对。"""
+
+        assert self._verify([("业绩", "")], "各门店的业绩") == ()
+
+    def test_duplicates_collapse(self) -> None:
+        pairs = [("业绩", "销售金额"), ("业绩", "销售金额")]
+
+        assert self._verify(pairs, "各门店的业绩") == (("业绩", "销售金额"),)
+
+    def test_reporting_nothing_is_a_valid_answer(self) -> None:
+        """问句里没有待补说法时返回空——实验里 7 条"不该报"模型对了 6 条。"""
+
+        assert self._verify([], "各门店的销售金额") == ()

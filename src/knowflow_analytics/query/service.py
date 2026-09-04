@@ -1323,6 +1323,7 @@ class AnalyticsQueryService:
                     message=f"没有匹配到说法，模型自己选了「{name}」",
                     resolution=name,
                     evidence=global_evidence,
+                    inferred_terms=corrected.inferred_terms,
                 )
             for dimension_name, value, suggestion in unpublished_values:
                 # 用户说了一个系统不认识的取值。近似建议可能有、也可能确实没有。
@@ -3091,6 +3092,7 @@ class AnalyticsQueryService:
         message: str,
         resolution: str = "",
         evidence: MappingEvidence | None = None,
+        inferred_terms: tuple[tuple[str, str], ...] = (),
     ) -> None:
         """记下一次「系统没接住用户的说法」。旁路，出错不影响这次回答。
 
@@ -3116,6 +3118,7 @@ class AnalyticsQueryService:
                     dataset_ids=tuple(request.dataset_ids),
                     # 补词典要补的是"用户说了什么"，而那个词恰恰没被任何证据命中，
                     # 只能从问句里按 span 补集反推。用改写后的问句：模型看到的是它。
+                    inferred_terms=inferred_terms[:10],
                     unmatched_phrases=_unmatched_phrases(
                         effective_question or request.question, evidence
                     )[:20],

@@ -240,6 +240,9 @@ class ParsedSemanticCandidate(FrozenModel):
     parser: Literal["rule", "llm", "structured"]
     rationale: str = ""
     applied_defaults: tuple[str, ...] = ()
+    # 模型报的"这个说法我理解成了那个成员"，已过字面子串校验。给反馈页做预填。
+    # Rule 路径为空——它不理解问句，只做模式匹配。
+    inferred_terms: tuple[tuple[str, str], ...] = Field(default=(), max_length=10)
 
 
 class CorrectedStructuredQuery(FrozenModel):
@@ -396,8 +399,14 @@ class QueryFailureRecord(FrozenModel):
     spec_hash: str
     index_snapshot_id: str
     dataset_ids: tuple[str, ...] = ()
-    # 问句里没被任何精确证据覆盖的片段——"用户说了、系统没听懂"的那些词。
-    # 补词典要补的就是它；也是按说法聚合的键（同一个「业绩」被猜 20 次该并成一条）。
+    # 模型报的"这个说法我理解成了那个成员"，已过字面子串校验。**首选**：它带配对，
+    # 预填术语表单要的正是这一对；而且该沉默时会沉默（对照实验 10/12 vs 7/12）。
+    inferred_terms: tuple[tuple[str, str], ...] = Field(default=(), max_length=10)
+    # 问句里没被任何精确证据覆盖的片段。**补漏用**：模型会漏报（实测「各门店的业绩」
+    # 返回空，而同类的「营业额」「毛利」都报了），而这条永远算得出来。
+    #
+    # 两个来源都留，因为两种失误的代价不对称：漏报意味着这个说法**永远补不进词典**
+    # （用户根本不知道有这回事），误报只是列表里多一条一眼就不像术语的东西。
     unmatched_phrases: tuple[str, ...] = Field(default=(), max_length=20)
     # 错误自带的结构化上下文；映射失败时是各次映射尝试，含命中了哪些语义对象。
     details: dict[str, Any] = Field(default_factory=dict)

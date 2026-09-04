@@ -119,12 +119,58 @@ _MONTH_RE = re.compile(r"(20\d{2})年(\d{1,2})月")
 _RECENT_RE = re.compile(rf"(?:近|过去)\s*(?P<count>\d+|{_ZH_NUMBER})\s*个?(?P<unit>[天周月年])")
 
 
+class InferredTerm(BaseModel):
+    """模型报的一条"用户这么说、我理解成了那个成员"。
+
+    **模型说的不算数，要过一道确定性校验**：``phrase`` 必须是问句的字面子串。实验里
+    12 题没出现过编造，但那是"这次没有"，不是"不会有"——校验的成本是一次 ``in``。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    phrase: str = Field(default="", max_length=256)
+    member: str = Field(default="", max_length=256)
+
+
 class _LlmS2SqlOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # Parity source: OnePassSCSqlGenStrategy.SemanticSql.
     thought: str = Field(default="", max_length=2_000)
     sql: str = Field(min_length=1, max_length=100_000)
+    # 模型自己报"问句里哪个说法我理解成了哪个成员，而它不在词典里"。
+    #
+    # 对照实验（demo_cafe 12 题）：模型 10/12，问句 span 补集 7/12。差距主要在
+    # **该沉默的时候沉默**——7 条没有术语缺口的问句里模型对了 6 条（返回空），而
+    # span 补集永远会切出点什么（「有多少门店」切出「多少」）。切得也更干净：
+    # 「毛利如何」→「毛利」，虚词表裁不掉「如何」。
+    #
+    # 它还带**配对**（说法→成员），这是预填术语表单唯一需要的东西；span 补集给
+    # 不了，因为那个词压根没被任何证据命中过。
+    inferred_terms: tuple[InferredTerm, ...] = Field(default=(), max_length=10)
+
+
+def _verified_terms(
+    terms: tuple[InferredTerm, ...], question: str
+) -> tuple[tuple[str, str], ...]:
+    """只留模型确实从问句里摘出来的那些。
+
+    ``phrase`` 不是问句的字面子串就丢掉——那是模型编的，拿它去预填术语表单会让用户
+    补进一个自己没说过的词。member 为空的也丢：没有配对就失去了它相对 span 补集的
+    全部优势。
+    """
+
+    text = question or ""
+    verified: list[tuple[str, str]] = []
+    for item in terms:
+        phrase = item.phrase.strip()
+        member = item.member.strip()
+        if not phrase or not member or phrase not in text:
+            continue
+        pair = (phrase, member)
+        if pair not in verified:
+            verified.append(pair)
+    return tuple(verified)
 
 
 class RuleS2SqlParser:
@@ -437,6 +483,7 @@ class LlmS2SqlParser:
         )
         return ParsedSemanticCandidate(
             id=candidate_id,
+            inferred_terms=_verified_terms(output.inferred_terms, question),
             dataset_id=dataset.id,
             parsed_s2sql=output.sql,
             corrected_s2sql=output.sql,
@@ -766,6 +813,10 @@ class LlmS2SqlParser:
                     "原始数字本身，不得把万、亿、元、%、个等单位或量词写进 value，也不得自行"
                     "缩放、计算、补写或把条件静默删除。"
                     "只能引用已发布的聚合口径，不能虚构指标。只返回符合 JSON Schema 的对象。"
+                    "另外：若问句里某个说法没有出现在上面给出的指标/维度名称或别名中，而你把它"
+                    "理解成了某个已发布成员，在 inferred_terms 里报告 {phrase, member}——"
+                    "phrase 必须原样摘自问句，member 用你实际使用的成员名。问句里没有这种"
+                    "说法时返回空数组，不要为了填而填。"
                 ),
             },
             {

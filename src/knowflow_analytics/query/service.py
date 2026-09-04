@@ -867,7 +867,13 @@ class AnalyticsQueryService:
                     candidate_selection_id,
                 )
             )
-            selected_scope_dataset_id = selected.dataset_id
+            # 并集是生成期的临时目录，不是任何人能观察的作用域。让它留在这里，
+            # 澄清卡就会按一个 release 里根本不存在的作用域过滤选项——卡片照常
+            # 弹出，选项一个不剩，用户面对的是一张答不了的卡。绑定成功后下面会
+            # 改写成反推出的真实作用域。
+            selected_scope_dataset_id = (
+                None if selected.dataset_id == _UNION_DATASET_ID else selected.dataset_id
+            )
             # 同名歧义的根因是"模型没法用名字表达选择"。并集已经给跨模型重名发了
             # 限定名，在生成期那份目录里它们本来就不同名——检查必须看模型实际看到的
             # 那份，否则会为一个已经不存在的歧义弹卡。
@@ -886,6 +892,8 @@ class AnalyticsQueryService:
             trace.append(QueryTraceStep(stage=QueryStage.FINAL_PARSING, status="started"))
             translation_holder = {}
             bound_scope_holder: dict[str, str] = {}
+            bound_s2sql_holder: dict[str, str] = {}
+            scope_choice_holder: dict[str, tuple[str, ...]] = {}
 
             def validate_and_translate(candidate: ParsedSemanticCandidate) -> None:
                 if request.include_diagnostics:
@@ -893,6 +901,13 @@ class AnalyticsQueryService:
                 dialect = self._targets.for_project(release.project_id).dialect
 
                 def translate(dataset_id: str, *, retarget: bool = False):
+                    """返回 (翻译结果, 该作用域口径下的 S2SQL)。
+
+                    第二个值不是中间产物：绑定之后，查询规则、多轮历史、口径说明和
+                    过程面板全都读 ``corrected_s2sql``。留着生成期的限定名和并集表名，
+                    规则一旦命中就会拿它去真实作用域上重新翻译。
+                    """
+
                     s2sql = candidate.corrected_s2sql
                     if retarget:
                         scope = next(d for d in release.datasets if d.id == dataset_id)
@@ -901,32 +916,51 @@ class AnalyticsQueryService:
                             union_renames,
                             frozenset((*scope.metric_ids, *scope.dimension_ids)),
                         )
-                        s2sql = _retarget_tables(
-                            s2sql, next(d for d in release.datasets if d.id == dataset_id).name
-                        )
-                    return self._s2sql_translator.translate(
-                        release=release,
-                        dataset_id=dataset_id,
-                        corrected_s2sql=s2sql,
-                        visible_element_ids=allowed_element_ids,
-                        row_filters=row_filters,
-                        dialect=dialect,
+                        s2sql = _retarget_tables(s2sql, scope.name)
+                    return (
+                        self._s2sql_translator.translate(
+                            release=release,
+                            dataset_id=dataset_id,
+                            corrected_s2sql=s2sql,
+                            visible_element_ids=allowed_element_ids,
+                            row_filters=row_filters,
+                            dialect=dialect,
+                        ),
+                        s2sql,
                     )
 
                 if candidate.dataset_id != _UNION_DATASET_ID:
-                    translation_holder["value"] = translate(candidate.dataset_id)
+                    translation_holder["value"] = translate(candidate.dataset_id)[0]
                     return
                 # 并集只用于生成。真实作用域由「哪个能确定性地翻译出这条查询」反推：
                 # 翻译已经在验证成员归属、冻结路由可达性与治理规则，比另写一套集合
                 # 判断更严也更少一处漂移。恰好一个成功即绑定；零个说明这条查询跨了
                 # 事实根（实测模型确实会写出来），多个按粒度收敛取最粗的那个。
-                bound: dict[str, object] = {}
+                bound: dict[str, tuple[object, str]] = {}
                 for dataset_id in dataset_ids:
                     try:
                         bound[dataset_id] = translate(dataset_id, retarget=True)
                     except (AnalyticsError, ValueError):
                         continue
                 if not bound:
+                    # 一个作用域都翻译不出来有两种原因，对用户完全不同：查询真的
+                    # 跨了事实根，或者这条 SQL 本身就有别的毛病（实测：模型用 CTE
+                    # 里自己定义的列别名，所有成员其实都在同一个作用域里）。
+                    #
+                    # 不自己下诊断——问并集。它是模型当时看到的那份目录，翻译器对着
+                    # 它给出的错误就是诚实的答案：真跨根它自己就报
+                    # CROSS_FACT_METRICS_UNSUPPORTED，别的毛病它会说是哪个毛病。
+                    # 编一句"请拆开提问"送给一个根本不用拆的问题，是把用户支开。
+                    self._s2sql_translator.translate(
+                        release=generation_release,
+                        dataset_id=_UNION_DATASET_ID,
+                        corrected_s2sql=candidate.corrected_s2sql,
+                        visible_element_ids=allowed_element_ids,
+                        row_filters=row_filters,
+                        dialect=dialect,
+                    )
+                    # 并集居然翻译得出来，那才是"成员各自合法、放一起不行"——
+                    # 这时候「拆开提问」是对的。
                     raise MappingError(
                         "这个问题用到的业务对象不能放在同一次分析里；请拆开提问。",
                         code="CROSS_FACT_METRICS_UNSUPPORTED",
@@ -945,21 +979,25 @@ class AnalyticsQueryService:
                     # 不是「你要哪个分析范围」——作用域始终不出现在用户面前。
                     # 卡片给的是能区分这几个范围的**成员**：选中哪个成员就等于定下了
                     # 拥有它的那个范围。作用域本身不出现在选项里。
-                    distinguishing = tuple(
-                        element_id
-                        for (_kind, element_id), scopes in self._scope_choice_owners(
-                            release, tuple(bound), allowed_element_ids
-                        ).items()
-                        if len(scopes) == 1
-                    )
+                    # 卡必须和路由器那条走同一种：选项自带所属作用域，用户点下去
+                    # 才有东西可续跑。只带成员 ID 的普通语义卡在续跑时会走另一条
+                    # 校验分支，重算不出"当时展示过什么"，于是点了就是 
+                    # CANDIDATE_NOT_FOUND——一张答不了的卡比拒答更糟。
+                    scope_choice_holder["value"] = tuple(bound)
                     raise ClarificationSignal(
                         code="AMBIGUOUS_QUERY_SCOPE",
                         message="这个问题可以从几个角度分析，请确认你要看什么。",
-                        element_ids=distinguishing,
+                        element_ids=tuple(
+                            element_id
+                            for (_kind, element_id), scopes in self._scope_choice_owners(
+                                release, tuple(bound), allowed_element_ids
+                            ).items()
+                            if len(scopes) == 1
+                        ),
                         stage=QueryStage.FINAL_PARSING.value,
                     )
                 bound_scope_holder["value"] = chosen
-                translation_holder["value"] = bound[chosen]
+                translation_holder["value"], bound_s2sql_holder["value"] = bound[chosen]
 
             corrected = self._orchestrator.final_parse(
                 question=effective_question,
@@ -987,7 +1025,13 @@ class AnalyticsQueryService:
             # 后面的查询规则、历史、诊断都必须看到那个作用域，而不是生成期的并集。
             bound_scope = bound_scope_holder.get("value")
             if bound_scope is not None:
-                corrected = corrected.model_copy(update={"dataset_id": bound_scope})
+                corrected = corrected.model_copy(
+                    update={
+                        "dataset_id": bound_scope,
+                        # SQL 也要一起换成该作用域的口径，理由见 translate() 的说明。
+                        "corrected_s2sql": bound_s2sql_holder["value"],
+                    }
+                )
                 selected_scope_dataset_id = bound_scope
                 # 诊断也要说出反推的结果：生成期的并集不是任何人能观察的执行范围。
                 scope_resolution = scope_resolution.model_copy(
@@ -1366,23 +1410,38 @@ class AnalyticsQueryService:
                     },
                 )
             )
-            options = self._semantic_options(
-                published.release,
-                signal.element_ids,
-                selection_context=selection_context,
-                require_time=signal.code == "AMBIGUOUS_TIME_DIMENSION",
-                preferred_dataset_id=selected_scope_dataset_id,
-                typed_members=(
-                    semantic_clarification_group.members
-                    if semantic_clarification_group is not None
-                    else None
-                ),
-                allowed_dataset_ids=(
-                    (selected_scope_dataset_id,)
-                    if selected_scope_dataset_id is not None
-                    else option_dataset_ids
-                ),
+            # 并集反推出的作用域歧义要的是作用域选择卡，不是普通语义卡：选项必须
+            # 记住自己属于哪个作用域，续跑才能把事实根定下来。
+            scope_choice_ids = (
+                scope_choice_holder.get("value")
+                if signal.code == "AMBIGUOUS_QUERY_SCOPE"
+                else None
             )
+            if scope_choice_ids:
+                options = self._scope_choice_options(
+                    published.release,
+                    scope_choice_ids,
+                    selection_context=selection_context,
+                    allowed_element_ids=allowed_element_ids,
+                )
+            else:
+                options = self._semantic_options(
+                    published.release,
+                    signal.element_ids,
+                    selection_context=selection_context,
+                    require_time=signal.code == "AMBIGUOUS_TIME_DIMENSION",
+                    preferred_dataset_id=selected_scope_dataset_id,
+                    typed_members=(
+                        semantic_clarification_group.members
+                        if semantic_clarification_group is not None
+                        else None
+                    ),
+                    allowed_dataset_ids=(
+                        (selected_scope_dataset_id,)
+                        if selected_scope_dataset_id is not None
+                        else option_dataset_ids
+                    ),
+                )
             return ClarificationQueryResponse(
                 query_id=query_id,
                 release_id=published.release.id,

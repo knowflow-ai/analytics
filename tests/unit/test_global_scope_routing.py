@@ -9,11 +9,17 @@ from knowflow_analytics.contracts import (
     Aggregation,
     AnalysisTopicPathSpec,
     AnalysisTopicRouteSpec,
+    Cardinality,
     DatasetSpec,
     DimensionSpec,
     DimensionValueSpec,
+    FieldKind,
+    FieldSpec,
     MetricSpec,
+    ModelSpec,
     QueryResult,
+    RelationCondition,
+    RelationSpec,
     TermSpec,
 )
 from knowflow_analytics.hashing import content_hash
@@ -27,7 +33,7 @@ from knowflow_analytics.query.errors import SemanticParsingError
 from knowflow_analytics.query.mapper import SemanticMapper
 from knowflow_analytics.query.orchestrator import CandidateOrchestrator
 from knowflow_analytics.query.parser import LlmS2SqlParser
-from knowflow_analytics.query.service import AnalyticsQueryService
+from knowflow_analytics.query.service import _UNION_DATASET_ID, AnalyticsQueryService
 from knowflow_analytics.semantic import SemanticTranslator
 from knowflow_analytics.semantic.index import (
     EmbeddingBatch,
@@ -2080,3 +2086,392 @@ class TestCrossScopeNameCollisionInTheUnion:
             )
             == ()
         )
+
+
+class TestUnionRespectsColumnPermissions:
+    """并集把多个作用域的成员摆到一起给模型看——列级白名单必须照样生效。
+
+    这是权限边界：白名单在这里漏一个成员，用户就会在 Prompt 里看到他无权看的指标，
+    而且模型可能真的用它出结果。
+    """
+
+    def test_a_hidden_metric_never_reaches_the_prompt(self, sales_release) -> None:
+        release = _routed_release(sales_release)
+        _gateway = _PromptCapturingGateway('SELECT SUM("净收入") FROM "销售经营"')
+        service, _embedding, executor = _service(
+            release, llm_gateway=_gateway, query_embedding=False
+        )
+        # 只放行「净收入」和一个维度，其余指标一律不可见。
+        allowed = frozenset({"net_revenue", "region", "customer_segment"})
+
+        response = service.query(
+            QueryRequest(
+                project_id="sales",
+                question="净收入",
+                dataset_ids=("sales_dataset", "customer_scope"),
+                allowed_element_ids=tuple(allowed),
+            ),
+            actor_id="tenant-1",
+        )
+
+        assert response.state is QueryState.COMPLETED, response.model_dump_json(indent=2)
+        prompts = " ".join(str(item) for item in _gateway.prompts)
+        assert prompts, "没抓到 Prompt，这条断言就是空转"
+        hidden = {
+            item.name
+            for item in release.metrics
+            if item.id not in allowed and item.name not in {"净收入"}
+        }
+        for name in hidden:
+            assert name not in prompts, f"白名单外的「{name}」出现在了 Prompt 里"
+
+    def test_a_hidden_metric_cannot_be_used_even_if_the_model_names_it(
+        self, sales_release
+    ) -> None:
+        """模型硬写一个被隐藏的成员时必须失败，不能靠"它看不到"当唯一防线。"""
+
+        release = _routed_release(sales_release)
+        service, _gateway, executor = _service(
+            release,
+            llm_gateway=_FixedS2SqlGateway('SELECT SUM("退款金额") FROM "销售经营"'),
+            query_embedding=False,
+        )
+
+        response = service.query(
+            QueryRequest(
+                project_id="sales",
+                question="净收入",
+                dataset_ids=("sales_dataset", "customer_scope"),
+                allowed_element_ids=("net_revenue", "region"),
+            ),
+            actor_id="tenant-1",
+        )
+
+        assert response.state is not QueryState.COMPLETED
+        assert executor.calls == 0
+
+
+class _PromptCapturingGateway:
+    """记下模型实际看到的 Prompt——不抓下来，权限断言就是空转。"""
+
+    def __init__(self, sql: str) -> None:
+        self.sql = sql
+        self.calls = 0
+        self.prompts: list[object] = []
+
+    def generate_json(self, **kwargs):
+        self.calls += 1
+        self.prompts.append(kwargs.get("messages"))
+        return {"thought": "t", "sql": self.sql}
+
+
+
+def _two_facts_one_entity(sales_release):
+    """两个事实根都挂在同一个实体上，彼此不成链。
+
+    「客户分层」两边都能表达，但"按客户分层看什么"的答案完全不同（订单 / 退货）。
+    这是并集反推里唯一会走到澄清分支的形态：粒度收敛不适用，两个绑定都成立。
+    """
+
+    returns_model = ModelSpec(
+        id="returns", name="退货", schema_name="analytics_v0", table="returns"
+    )
+    returns_fields = (
+        FieldSpec(
+            id="returns.id",
+            model_id="returns",
+            name="退货ID",
+            column="id",
+            kind=FieldKind.IDENTIFIER,
+        ),
+        FieldSpec(
+            id="returns.customer_id",
+            model_id="returns",
+            name="客户ID",
+            column="customer_id",
+            kind=FieldKind.IDENTIFIER,
+        ),
+    )
+    returns_metric = MetricSpec(
+        id="return_count",
+        name="退货单量",
+        model_id="returns",
+        field_id="returns.id",
+        aggregation=Aggregation.COUNT,
+    )
+    sales = sales_release.datasets[0].model_copy(
+        update={
+            "model_ids": ("orders", "customers"),
+            "dimension_ids": ("region", "channel", "order_date", "customer_segment"),
+        }
+    )
+    returns_scope = DatasetSpec(
+        id="returns_scope",
+        name="退货分析",
+        model_ids=("returns", "customers"),
+        metric_ids=(returns_metric.id,),
+        dimension_ids=("customer_segment",),
+    )
+    return sales_release.model_copy(
+        update={
+            "models": (*sales_release.models, returns_model),
+            "fields": (*sales_release.fields, *returns_fields),
+            "metrics": (*sales_release.metrics, returns_metric),
+            "relations": (
+                *sales_release.relations,
+                RelationSpec(
+                    id="returns_customer",
+                    left_model_id="returns",
+                    right_model_id="customers",
+                    cardinality=Cardinality.MANY_TO_ONE,
+                    conditions=(
+                        RelationCondition(
+                            left_field_id="returns.customer_id",
+                            right_field_id="customers.id",
+                        ),
+                    ),
+                ),
+            ),
+            "datasets": (sales, returns_scope),
+            "analysis_topic_routes": (
+                AnalysisTopicRouteSpec(
+                    dataset_id=sales.id,
+                    root_model_id="orders",
+                    paths=(
+                        AnalysisTopicPathSpec(
+                            target_model_id="customers",
+                            relation_ids=("orders_customer",),
+                        ),
+                    ),
+                ),
+                AnalysisTopicRouteSpec(
+                    dataset_id=returns_scope.id,
+                    root_model_id="returns",
+                    paths=(
+                        AnalysisTopicPathSpec(
+                            target_model_id="customers",
+                            relation_ids=("returns_customer",),
+                        ),
+                    ),
+                ),
+            ),
+        }
+    )
+
+
+class _SequenceGateway:
+    """按调用次序给不同的 SQL——用来分开"第一遍"和"ALL 重试"这两次生成。"""
+
+    def __init__(self, *sqls: str) -> None:
+        self.sqls = list(sqls)
+        self.calls = 0
+
+    def generate_json(self, **_kwargs):
+        sql = self.sqls[min(self.calls, len(self.sqls) - 1)]
+        self.calls += 1
+        return {"thought": "t", "sql": sql}
+
+
+class TestUnionSurvivesTheRetryPath:
+    """并集只在生成阶段存在，而生成会发生两次（第一遍 + ALL 重试）。
+
+    第二次要是拿不到并集，第一次写得出来的查询第二次就写不出来了——重试反而
+    比第一次弱，且没有任何报错说明原因。
+    """
+
+    def test_the_all_retry_still_sees_the_union(self, sales_release) -> None:
+        release = _routed_release(sales_release)
+        gateway = _SequenceGateway(
+            # 第一遍：引用一个谁都没有的成员，翻译在每个作用域上都失败。
+            'SELECT SUM("查无此指标") FROM "销售经营"',
+            # ALL 重试：写对了。它必须仍然能从并集里叫出「净收入」。
+            'SELECT SUM("净收入") FROM "销售经营"',
+        )
+        service, _embedding, executor = _service(
+            release, llm_gateway=gateway, query_embedding=False
+        )
+
+        response = service.query(
+            QueryRequest(
+                project_id="sales",
+                question="净收入",
+                dataset_ids=("sales_dataset", "customer_scope"),
+            ),
+            actor_id="tenant-1",
+        )
+
+        assert gateway.calls == 2, "第一遍没失败，这条测试就没测到重试"
+        assert response.state is QueryState.COMPLETED, response.model_dump_json(indent=2)
+        assert executor.calls == 1
+
+    def test_a_scope_clarification_is_not_swallowed_by_the_retry(
+        self, sales_release
+    ) -> None:
+        """澄清不是"这遍没写好"，重试写一百遍也还是同一个问题。
+
+        它必须直接抵达用户，而不是被当成解析失败塞进 ALL 重试——那样用户看到的
+        会是"没答上来"，而不是本该出现的选择。
+        """
+
+        release = _two_facts_one_entity(sales_release)
+        gateway = _SequenceGateway('SELECT "客户分层" FROM "销售经营" GROUP BY "客户分层"')
+        service, _embedding, executor = _service(
+            release, llm_gateway=gateway, query_embedding=False
+        )
+
+        response = service.query(
+            QueryRequest(
+                project_id="sales",
+                question="客户分层",
+                dataset_ids=("sales_dataset", "returns_scope"),
+            ),
+            actor_id="tenant-1",
+        )
+
+        assert response.state is QueryState.CLARIFICATION_REQUIRED, (
+            response.model_dump_json(indent=2)
+        )
+        # 卡片必须是能答的：两个范围各自都要有代表，否则选哪个都到不了另一边。
+        labels = {item.label for item in response.options}
+        assert "净收入" in labels, labels
+        assert "退货单量" in labels, labels
+        # 共有成员不构成区分，出现在选项里等于给了一个选了也没用的答案。
+        assert "客户分层" not in labels, labels
+        # 作用域名本身永远不出现在用户面前。
+        assert not {"销售经营", "退货分析"} & labels, labels
+        assert gateway.calls == 1, "澄清被当成解析失败重试了"
+        assert executor.calls == 0
+
+    def test_choosing_a_member_from_that_card_actually_runs(self, sales_release) -> None:
+        """卡片有选项不等于卡片能用。
+
+        选中的成员必须真的把事实根定下来并跑出结果；否则用户点了一圈又回到同一
+        张卡，比直接拒答更糟。
+        """
+
+        release = _two_facts_one_entity(sales_release)
+        gateway = _SequenceGateway(
+            'SELECT "客户分层" FROM "销售经营" GROUP BY "客户分层"',
+            'SELECT "退货单量", "客户分层" FROM "退货分析" GROUP BY "客户分层"',
+        )
+        service, _embedding, executor = _service(
+            release, llm_gateway=gateway, query_embedding=False
+        )
+        request = QueryRequest(
+            project_id="sales",
+            question="客户分层",
+            dataset_ids=("sales_dataset", "returns_scope"),
+        )
+
+        clarification = service.query(request, actor_id="tenant-1")
+        chosen = next(
+            item for item in clarification.options if item.label == "退货单量"
+        )
+
+        completed = service.query(
+            request.model_copy(
+                update={
+                    "selected_candidate_id": chosen.candidate_id,
+                    "expected_release_id": clarification.release_id,
+                    "expected_spec_hash": clarification.spec_hash,
+                    "expected_index_snapshot_id": clarification.index_snapshot_id,
+                }
+            ),
+            actor_id="tenant-1",
+        )
+
+        assert completed.state is QueryState.COMPLETED, completed.model_dump_json(indent=2)
+        assert executor.calls == 1
+
+    def test_the_bound_sql_leaves_no_trace_of_the_union(self, sales_release) -> None:
+        """执行之后，任何人能看到的 S2SQL 都必须是真实作用域的口径。
+
+        它不只是给人看的：查询规则命中时会拿它去真实作用域上重新翻译，多轮改写把
+        它交给下一轮的模型，回答卡的口径说明也读它。留着并集的限定名和表名，这三处
+        全部指向一个不存在的作用域。
+        """
+
+        release = _two_facts_one_entity(sales_release)
+        # 模型只看得见并集，所以它写的是并集那个名字（这里是「销售经营」）。
+        gateway = _SequenceGateway(
+            'SELECT "退货单量", "客户分层" FROM "销售经营" GROUP BY "客户分层"'
+        )
+        service, _embedding, _executor = _service(
+            release, llm_gateway=gateway, query_embedding=False
+        )
+
+        response = service.query(
+            QueryRequest(
+                project_id="sales",
+                question="各客户分层的退货单量",
+                dataset_ids=("sales_dataset", "returns_scope"),
+            ),
+            actor_id="tenant-1",
+        )
+
+        assert response.state is QueryState.COMPLETED, response.model_dump_json(indent=2)
+        # 普通 wire 里连并集这个词都不该出现。（诊断投影是另一回事：它对 owner
+        # 如实说明生成确实跑在并集上，那是解释而不是泄漏。）
+        assert _UNION_DATASET_ID not in response.model_dump_json()
+        # 并集借用的是另一个作用域的名字，绑定后必须换成真正执行的那个。
+        assert "销售经营" not in response.corrected_s2sql, response.corrected_s2sql
+        assert "退货分析" in response.corrected_s2sql
+
+    def test_a_broken_query_is_not_reported_as_a_cross_root_question(
+        self, sales_release
+    ) -> None:
+        """一个作用域都绑不上，不等于问题跨了事实根。
+
+        实测（demo_cafe「每个门店卖得最好的商品是什么」）：模型写了 CTE，引用自己
+        定义的列别名，用到的成员其实全在同一个作用域里。翻译器说的是"不认识
+        _总销售金额_"，用户收到的却是"请拆开提问"——一个不用拆的问题被支开了。
+        """
+
+        release = _two_facts_one_entity(sales_release)
+        gateway = _SequenceGateway(
+            'WITH agg AS ('
+            ' SELECT "客户分层", "退货单量" AS x FROM "销售经营" GROUP BY "客户分层"'
+            ') SELECT "客户分层", x FROM agg'
+        )
+        service, _embedding, executor = _service(
+            release, llm_gateway=gateway, query_embedding=False
+        )
+
+        response = service.query(
+            QueryRequest(
+                project_id="sales",
+                question="各客户分层的退货单量",
+                dataset_ids=("sales_dataset", "returns_scope"),
+            ),
+            actor_id="tenant-1",
+        )
+
+        assert response.state is QueryState.FAILED
+        assert response.error.code != "CROSS_FACT_METRICS_UNSUPPORTED", (
+            "SQL 本身的毛病被说成了跨事实根"
+        )
+        assert executor.calls == 0
+
+    def test_a_genuinely_cross_root_query_still_says_so(self, sales_release) -> None:
+        """反过来也要成立：真跨根时那句「请拆开提问」是对的，不能一起改没了。"""
+
+        release = _two_facts_one_entity(sales_release)
+        gateway = _SequenceGateway('SELECT "净收入", "退货单量" FROM "销售经营"')
+        service, _embedding, executor = _service(
+            release, llm_gateway=gateway, query_embedding=False
+        )
+
+        response = service.query(
+            QueryRequest(
+                project_id="sales",
+                question="净收入和退货单量",
+                dataset_ids=("sales_dataset", "returns_scope"),
+            ),
+            actor_id="tenant-1",
+        )
+
+        assert response.state is QueryState.FAILED
+        assert response.error.code == "CROSS_FACT_METRICS_UNSUPPORTED", (
+            response.error.model_dump_json()
+        )
+        assert executor.calls == 0

@@ -36,6 +36,9 @@ _MATCH_METHOD_PRIORITY = {
     MatchMethod.KEYWORD: 2,
     MatchMethod.TERM: 3,
     MatchMethod.EXACT: 4,
+    # 用户在卡上点的那一下压过任何召回：它是答案本身，不是对问句的猜测。
+    # 漏了这一项不是排序偏差，是 KeyError——确认的成员一旦和别的证据撞上就崩。
+    MatchMethod.CONFIRMED: 5,
 }
 _COVERING_MATCH_METHODS = frozenset(
     {

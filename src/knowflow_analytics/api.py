@@ -835,6 +835,10 @@ def create_api(
     request_body_limit_bytes: int = 1_048_576,
     requests_per_minute: int = 120,
     expensive_requests_per_minute: int = 60,
+    # 助手配置面板要显示"留空意味着什么"。不告诉用户当前全局是开是关，他面对一个空
+    # 输入框根本不知道系统正在用什么值——那比不给这个功能更糟，因为界面会让人以为
+    # 自己知道。
+    query_defaults: dict[str, object] | None = None,
 ) -> FastAPI:
     if len(service_secret) < 32:
         raise ValueError("analytics service secret must contain at least 32 characters")
@@ -1038,6 +1042,13 @@ def create_api(
         return application.commit_upload(
             data=await _upload_bytes(request), plan=_upload_plan(plan)
         )
+
+    @app.get("/v1/analytics/query-defaults")
+    def read_query_defaults(request_context: Context):
+        """这个部署的全局默认。只读，给助手配置面板显示"留空 = 什么"。"""
+
+        del request_context
+        return dict(query_defaults or {})
 
     @app.get("/v1/analytics/uploads")
     def list_uploads(request_context: Context):

@@ -108,6 +108,13 @@ def create_app() -> FastAPI:
         allow_debug_sql=settings.allow_debug_sql,
         request_body_limit_bytes=settings.request_body_limit_bytes,
         requests_per_minute=settings.requests_per_minute,
+        query_defaults={
+            "self_consistency_number": settings.self_consistency_number,
+            "s2sql_corrector_enabled": settings.s2sql_corrector_enabled,
+            "physical_sql_corrector_enabled": settings.physical_sql_corrector_enabled,
+            "multi_turn_enabled": settings.multi_turn_enabled,
+            "dry_run_before_execute": settings.dry_run_before_execute,
+        },
         expensive_requests_per_minute=settings.expensive_requests_per_minute,
     )
 

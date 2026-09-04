@@ -33,8 +33,11 @@ class AnalyticsSettings(BaseSettings):
     # 多次取多数,压 LLM 形态漂移,代价是每次问数的模型调用数 xN。
     self_consistency_number: int = 1
     physical_sql_corrector_enabled: bool = False
-    # Multi-turn rewrite is opt-in by default.
-    multi_turn_enabled: bool = False
+    # 默认开。它是这几个旋钮里唯一明显改善体感的一项：追问「那环比呢」不用重说一遍
+    # 条件。风险已经被兜住——带进来的条件会显示在回答卡的过滤 chip 上（实测：上一轮的
+    # 「上海」带进「哪些门店售卖卡布奇诺」，5 行变 2 行，而 `所在城市 = 上海` 在卡上
+    # 看得见），所以它不会悄悄改变答案。
+    multi_turn_enabled: bool = True
     auto_create_schema: bool = False
     allow_debug_sql: bool = False
     dry_run_before_execute: bool = False

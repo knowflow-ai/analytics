@@ -44,6 +44,8 @@ export const BUSINESS_DICTIONARY_SECTIONS: ReadonlyArray<{
 export interface TermBindingPreset {
   metricId?: string;
   dimensionId?: string;
+  /** 用户真实说过的那个词，来自问数反馈。空串表示这条记录里没有说法可填。 */
+  name?: string;
 }
 
 export interface TermDraft {
@@ -67,7 +69,8 @@ export function createTermDraft(
   preset: TermBindingPreset = {},
 ): TermDraft {
   return {
-    name: term?.name ?? "",
+    // 新建时用反馈带来的说法打底；编辑已有术语时它自己的名字优先。
+    name: term?.name ?? preset.name ?? "",
     description: term?.description ?? "",
     aliasesText: term?.aliases.join("，") ?? "",
     metricIds: unique([
@@ -164,7 +167,9 @@ export function TermEditorDialog({
     >
       {open && (
         <TermEditorForm
-          key={`${term?.id ?? "new"}:${preset?.metricId ?? ""}:${preset?.dimensionId ?? ""}`}
+          // 说法进 key：同一个指标被两条不同说法命中时，不重建表单就会沿用
+          // 上一次的草稿，第二次点进来看到的还是第一个说法。
+          key={`${term?.id ?? "new"}:${preset?.metricId ?? ""}:${preset?.dimensionId ?? ""}:${preset?.name ?? ""}`}
           context={context}
           term={term}
           preset={preset}
@@ -519,10 +524,12 @@ export function BusinessDictionaryPanel({
     [revision.semantic_spec.dimensions],
   );
   /**
-   * 「问数反馈」把落点带过来时直接开对应的编辑器。
+   * 「问数反馈」把落点带过来时直接开对应的编辑器,并把说法填进术语名。
    *
-   * 只预填绑定,不预填术语名:失败记录里没有「用户那个说法」这一项,拿整句问题
-   * 当术语名是造假(见 `feedbackFixTarget` 的注释)。说法由人来写。
+   * 这里一度只预填绑定:当时失败记录里确实没有「用户那个说法」这一项,拿整句
+   * 问题当术语名是造假。后来记录补上了 phrase(模型自报的配对,或精确证据的
+   * span 补集),`FeedbackFixTarget.phrase` 一路带到这里——但没接上,于是跳转
+   * 过来术语名还是空的。没有说法的记录 phrase 为空串,行为和从前一样。
    */
   useEffect(() => {
     if (!openTarget) return;
@@ -532,8 +539,8 @@ export function BusinessDictionaryPanel({
     } else {
       setTermPreset(
         openTarget.kind === "metric"
-          ? { metricId: openTarget.id }
-          : { dimensionId: openTarget.id },
+          ? { metricId: openTarget.id, name: openTarget.phrase }
+          : { dimensionId: openTarget.id, name: openTarget.phrase },
       );
       setEditorTerm(null);
     }

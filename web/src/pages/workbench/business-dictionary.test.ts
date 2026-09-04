@@ -42,6 +42,36 @@ describe("business dictionary contract", () => {
     });
   });
 
+  it("从问数反馈跳过来时，用户那个说法要落进术语名", () => {
+    // phrase 一度只走到 FeedbackFixTarget 就断了：跳转过来绑定填好了，术语名
+    // 还是空的，用户得自己回去看刚才那条说的是哪个词。
+    expect(
+      createTermDraft(undefined, { metricId: "metric-gmv", name: "毛利如何" }),
+    ).toMatchObject({ name: "毛利如何", metricIds: ["metric-gmv"] });
+  });
+
+  it("编辑已有术语时，它自己的名字优先于带过来的说法", () => {
+    const term = {
+      id: "term-1",
+      name: "成交额",
+      description: "",
+      aliases: ["GMV"],
+      metric_ids: ["metric-gmv"],
+      dimension_ids: [],
+      dataset_ids: [],
+    } as Parameters<typeof createTermDraft>[0];
+
+    expect(createTermDraft(term, { name: "毛利如何" })).toMatchObject({
+      name: "成交额",
+    });
+  });
+
+  it("没有说法的记录不填，行为和从前一样", () => {
+    expect(
+      createTermDraft(undefined, { metricId: "metric-gmv", name: "" }),
+    ).toMatchObject({ name: "" });
+  });
+
   it("requires a name and at least one governed metric or dimension binding", () => {
     expect(validateTermDraft(createTermDraft())).toBe("请输入术语名称");
     expect(validateTermDraft({ ...createTermDraft(), name: "成交额" })).toBe(

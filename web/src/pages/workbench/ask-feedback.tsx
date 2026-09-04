@@ -123,18 +123,24 @@ export function AskFeedbackPanel({
 
   if (rows.length === 0) {
     return (
-      <div className={`px-6 py-5 ${ANALYTICS_TASK_PANEL_CLASS}`}>
+      <div className={`flex h-full flex-col px-6 py-5 ${ANALYTICS_TASK_PANEL_CLASS}`}>
         <Header />
-        <Empty
-          title="还没有没接住的说法"
-          hint="用户问数时被反问、说了系统不认识的词，或者没答上来，都会出现在这里。"
-        />
+        {/* 空态在剩余空间里居中：不这样的话它只按宽度居中，而标题是左对齐的，
+            两者不在一条线上，看起来像一段飘在半空的文字。 */}
+        <div className="flex flex-1 items-center justify-center">
+          <Empty
+            title="还没有没接住的说法"
+            hint="用户问数时被反问、说了系统不认识的词，或者没答上来，都会出现在这里。"
+          />
+        </div>
       </div>
     );
   }
 
   return (
-    <div className={`grid min-h-[520px] grid-cols-[minmax(0,1fr)_300px] ${ANALYTICS_TASK_PANEL_CLASS}`}>
+    <div
+      className={`grid h-full min-h-[520px] grid-cols-[minmax(0,1fr)_300px] ${ANALYTICS_TASK_PANEL_CLASS}`}
+    >
       <section className="min-w-0 px-6 py-5">
         <Header />
 

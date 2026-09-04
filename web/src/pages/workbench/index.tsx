@@ -97,7 +97,6 @@ export function WorkbenchPage() {
   const step = normalizeWorkbenchStep(params.get('step'));
   // 四个 tab 共用一个高度，见下面容器处的说明。measurementKey 用 step：切 tab 时
   // 上方的提示条可能出现或消失，顶边跟着变，不重测就会差一截。
-  const panelViewport = useAvailableCanvasHeight(true, String(step));
   const goTo = useCallback(
     (next: StepKey) => setParams({ step: next }, { replace: true }),
     [setParams],
@@ -158,6 +157,13 @@ export function WorkbenchPage() {
   }
 
   const readOnly = Boolean(revision && revision.state !== 'draft' && revision.state !== 'validated');
+  // 测量键要带上**任何会改变顶边位置的东西**：首屏进来时上方的版本信息和只读
+  // 提示条还没渲染完，只按 step 测的话第一个 tab 会矮一截，切一次才对——用户
+  // 实测就是这个。ResizeObserver 看的是祖先的尺寸，兄弟节点自己变高不会触发。
+  const panelViewport = useAvailableCanvasHeight(
+    true,
+    `${step}|${revisionId ?? ''}|${readOnly}|${revisionQuery.isPending}`,
+  );
   const context: WorkbenchContext | null = revision
     ? { projectId, revision, acceptRevision, readOnly, goTo }
     : null;
@@ -231,13 +237,20 @@ export function WorkbenchPage() {
         )}
         {/*
           四个 tab 共用一个高度：不固定的话容器跟着各自内容撑开，切 tab 时整块面板
-          忽上忽下。用的是关系画布同一个公式（顶边到视口底），所以画布那一页和其它
-          三页的框对得齐。各面板内部自己滚，容器不滚——否则会出现两条滚动条。
+          忽上忽下。高度用关系画布同一个公式（顶边到视口底），所以画布那页和其它三页
+          的框对得齐。
+
+          用 min-height + grid 拉伸，**不设 overflow**：上面那条注释说得很清楚，这张
+          卡里不能再出现滚动容器。内容比这个高度长时照常把页面撑长，和以前一样。
+          grid-template-rows:1fr 让唯一的子元素铺满这个高度——面板内部的分割线要靠它
+          才画得到底，否则只画到内容末尾就断了。
         */}
         <div
           ref={panelViewport.ref}
-          className={`${ANALYTICS_FLUID_PANEL_CLASS} overflow-y-auto`}
-          style={panelViewport.height ? { height: panelViewport.height } : undefined}
+          className={`${ANALYTICS_FLUID_PANEL_CLASS} grid [grid-template-rows:1fr]`}
+          style={
+            panelViewport.height ? { minHeight: panelViewport.height } : undefined
+          }
         >
           {!context && (revisionId && revisionQuery.isPending) && <Spinner />}
           {!context && !revisionId && (

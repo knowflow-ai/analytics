@@ -4035,10 +4035,20 @@ def _retarget_tables(corrected_s2sql: str, dataset_name: str) -> str:
     并集在 Prompt 里必须有个名字，模型会把它写进 `FROM`。拿这条 S2SQL 去按各个真实
     作用域翻译时表名对不上，翻译一律失败（实测：所有 `COUNT(*)` 问题整条挂掉）。
     表名在 S2SQL 里不承载语义——成员归属由列名决定——所以按目标作用域改写是安全的。
+
+    **只改作用域表，不动 CTE / 子查询的名字。** ``FROM agg`` 里的 agg 是这条查询自己
+    定义的，把它也改成作用域名，`ranked` 就会转去读受治理表，CTE 里定义的别名随即
+    失效——「每组取前 N」这类必然带 CTE 的查询会以"不认识这个名字"整条失败（实测
+    「每个门店卖得最好的商品是什么」）。
     """
 
     tree = sqlglot.parse_one(corrected_s2sql, read="postgres")
+    local_sources = {
+        item.alias_or_name.strip().strip('"').casefold() for item in tree.find_all(exp.CTE)
+    }
     for table in tree.find_all(exp.Table):
+        if table.name.strip().strip('"').casefold() in local_sources:
+            continue
         table.set("this", exp.to_identifier(dataset_name, quoted=True))
         table.set("db", None)
         table.set("catalog", None)

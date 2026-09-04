@@ -1517,3 +1517,155 @@ class TestModelGivingUpIsNotAnEmptyResult:
 
         assert translated.audit_complete is False
         assert "华东" in translated.physical_query.parameters.values()
+
+
+class TestNamesDefinedInsideTheQuery:
+    """CTE / 子查询自己起的名字，逐层都要认得出来。
+
+    根因只有一个：一个 SELECT 的输出名不只是显式 ``AS``，还包括裸列透传和 ``*`` 带出来
+    的名字。少认一种，外层再引用时就会被当成受治理成员送去符号表，后果有两种——
+    查不到是"不认识这个名字"的假拒绝（实测「每个门店卖得最好的商品」这类**每组取前 N**
+    必然两层、中间层通常写 ``*``）；查得到更糟：它会被重写成物理列并丢掉 ``p.`` 限定符，
+    执行期才以 AmbiguousColumn 报错，那时已越过能救回这次查询的 ALL 重试。
+    """
+
+    @staticmethod
+    def _translate(release, sql: str):
+        return S2SqlSemanticTranslator().translate(
+            release=release, dataset_id="sales_dataset", corrected_s2sql=sql
+        )
+
+    def test_a_star_in_the_middle_layer_still_carries_the_alias(self, sales_release) -> None:
+        translated = self._translate(
+            sales_release,
+            'WITH agg AS (SELECT "区域", SUM("净收入") AS x FROM "销售经营" GROUP BY "区域"),'
+            ' ranked AS (SELECT * FROM agg)'
+            ' SELECT "区域", x FROM ranked',
+        )
+
+        assert translated.physical_query.sql
+
+    def test_a_bare_pass_through_still_carries_the_alias(self, sales_release) -> None:
+        translated = self._translate(
+            sales_release,
+            'WITH agg AS (SELECT "区域", SUM("净收入") AS x FROM "销售经营" GROUP BY "区域"),'
+            ' ranked AS (SELECT "区域", x FROM agg)'
+            ' SELECT "区域", x FROM ranked',
+        )
+
+        assert translated.physical_query.sql
+
+    def test_top_n_per_group_translates(self, sales_release) -> None:
+        """实机原样的形态：先聚合、再排名、取第一。"""
+
+        translated = self._translate(
+            sales_release,
+            'WITH agg AS ('
+            ' SELECT "区域", "渠道", SUM("净收入") AS _总额_ FROM "销售经营"'
+            ' GROUP BY "区域", "渠道"'
+            '), ranked AS ('
+            ' SELECT *, RANK() OVER (PARTITION BY "区域" ORDER BY _总额_ DESC) AS rn FROM agg'
+            ') SELECT "区域", "渠道", _总额_ FROM ranked WHERE rn = 1',
+        )
+
+        assert translated.physical_query.sql
+
+    def test_an_inner_select_keeps_the_name_it_exports(self, sales_release) -> None:
+        """内层裸投影一个受治理成员时，改名不能改掉它对外导出的名字。
+
+        CTE 里的 ``SELECT "区域"`` 一旦编译成 ``SELECT "__kf_field_0"``，外层写
+        ``p."区域"`` 就是 UndefinedColumn——翻译一路放行，执行期才炸。
+        """
+
+        translated = self._translate(
+            sales_release,
+            'WITH agg AS (SELECT "区域", SUM("净收入") AS x FROM "销售经营" GROUP BY "区域")'
+            ' SELECT p."区域", p.x, q.x FROM agg p JOIN agg q ON p."区域" = q."区域"',
+        )
+
+        # CTE 必须真的把「区域」这个名字导出去，外层的 p."区域" 才有东西可指。
+        physical = parse_one(translated.physical_query.sql, read="postgres")
+        agg = next(
+            item for item in physical.find_all(exp.CTE) if item.alias_or_name == "agg"
+        )
+        exported = {
+            projection.alias_or_name for projection in agg.this.expressions
+        }
+        assert "区域" in exported, translated.physical_query.sql
+
+    def test_a_pass_through_still_counts_as_the_governed_member(self, sales_release) -> None:
+        """透传出去的名字承载的仍是受治理维度的语义，审计投影不能漏掉它。
+
+        漏了的话回答卡少一个维度 chip，而查询确实是按它分的组。
+        """
+
+        translated = self._translate(
+            sales_release,
+            'WITH 明细 AS (SELECT "区域", "净收入" FROM "销售经营")'
+            ' SELECT "区域", SUM("净收入") FROM 明细 GROUP BY "区域"',
+        )
+
+        assert translated.dimension_ids == ("region",)
+
+    def test_a_local_name_does_not_borrow_a_governed_member(self, sales_release) -> None:
+        """CTE 把别的东西起名叫某个受治理成员名时，审计说的是真正算的那个。"""
+
+        translated = self._translate(
+            sales_release,
+            'WITH agg AS ('
+            ' SELECT "区域", SUM("净收入") AS "订单数" FROM "销售经营" GROUP BY "区域"'
+            ') SELECT "区域", "订单数" FROM agg',
+        )
+
+        assert translated.metric_ids == ("net_revenue",), translated.metric_ids
+
+    @pytest.mark.parametrize(
+        "sql",
+        [
+            pytest.param(
+                'WITH agg AS (SELECT "查无此列" FROM "销售经营") SELECT "查无此列" FROM agg',
+                id="最内层就写错了名字",
+            ),
+            pytest.param(
+                'WITH agg AS (SELECT "区域", SUM("净收入") AS x FROM "销售经营" GROUP BY "区域")'
+                ' SELECT "区域", xx FROM agg',
+                id="外层把别名拼错",
+            ),
+            pytest.param(
+                'WITH agg AS (SELECT "区域", SUM("净收入") AS x FROM "销售经营" GROUP BY "区域")'
+                ' SELECT "区域", "查无此列" FROM agg',
+                id="外层引用CTE没导出的名字",
+            ),
+        ],
+    )
+    def test_a_wrong_name_is_still_refused(self, sales_release, sql: str) -> None:
+        """认得出本地名，不等于放宽校验。真写错的名字必须照样拒。"""
+
+        with pytest.raises(SemanticParsingError):
+            self._translate(sales_release, sql)
+
+    def test_the_dataset_may_not_be_joined_to_itself(self, sales_release) -> None:
+        """同一个 SELECT 里引用两次受治理表。
+
+        两边都编译成同一个 __kf_dataset，而成员列改写成物理列时带不走 ``a.`` / ``b.``，
+        PostgreSQL 到执行期才以 AmbiguousColumn 报错。在翻译期拒掉，重试才有机会。
+        """
+
+        with pytest.raises(SemanticParsingError) as excinfo:
+            self._translate(
+                sales_release,
+                'SELECT a."区域" FROM "销售经营" a JOIN "销售经营" b ON a."区域" = b."区域"',
+            )
+
+        assert excinfo.value.code == "S2SQL_DATASET_SELF_JOIN_UNSUPPORTED"
+
+    def test_crossing_a_cte_boundary_twice_is_fine(self, sales_release) -> None:
+        """跨 CTE 边界各引用一次是两个独立的 SELECT，实测可执行，不该被上面那条误伤。"""
+
+        translated = self._translate(
+            sales_release,
+            'WITH agg AS (SELECT "区域" FROM "销售经营" GROUP BY "区域")'
+            ' SELECT s."渠道" FROM "销售经营" s JOIN agg ON s."区域" = agg."区域"',
+        )
+
+        assert translated.physical_query.sql

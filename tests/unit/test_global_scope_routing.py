@@ -2425,13 +2425,14 @@ class TestUnionSurvivesTheRetryPath:
         实测（demo_cafe「每个门店卖得最好的商品是什么」）：模型写了 CTE，引用自己
         定义的列别名，用到的成员其实全在同一个作用域里。翻译器说的是"不认识
         _总销售金额_"，用户收到的却是"请拆开提问"——一个不用拆的问题被支开了。
+
+        那条具体的 SQL 现在能跑了（见 `TestNamesDefinedInsideTheQuery`），所以这里改用
+        另一种同类毛病：名字本身写错。它一样与事实根无关。
         """
 
         release = _two_facts_one_entity(sales_release)
         gateway = _SequenceGateway(
-            'WITH agg AS ('
-            ' SELECT "客户分层", "退货单量" AS x FROM "销售经营" GROUP BY "客户分层"'
-            ') SELECT "客户分层", x FROM agg'
+            'SELECT "客户分层", "查无此成员" FROM "销售经营" GROUP BY "客户分层"'
         )
         service, _embedding, executor = _service(
             release, llm_gateway=gateway, query_embedding=False
@@ -2475,3 +2476,37 @@ class TestUnionSurvivesTheRetryPath:
             response.error.model_dump_json()
         )
         assert executor.calls == 0
+
+    def test_retargeting_leaves_the_querys_own_cte_names_alone(self, sales_release) -> None:
+        """改表名只改作用域表，不动这条查询自己定义的 CTE。
+
+        把 `FROM agg` 也改成作用域名，`ranked` 就转去读受治理表，CTE 里定义的别名随即
+        失效——「每组取前 N」这类必然带 CTE 的查询会整条失败（实机「每个门店卖得最好的
+        商品是什么」正是这样挂掉的）。
+        """
+
+        release = _two_facts_one_entity(sales_release)
+        gateway = _SequenceGateway(
+            'WITH agg AS ('
+            ' SELECT "客户分层", SUM("退货单量") AS x FROM "销售经营" GROUP BY "客户分层"'
+            '), ranked AS ('
+            ' SELECT "客户分层", x, RANK() OVER (ORDER BY x DESC) AS rn FROM agg'
+            ') SELECT "客户分层", x FROM ranked WHERE rn = 1'
+        )
+        service, _embedding, executor = _service(
+            release, llm_gateway=gateway, query_embedding=False
+        )
+
+        response = service.query(
+            QueryRequest(
+                project_id="sales",
+                question="退货单量最高的客户分层",
+                dataset_ids=("sales_dataset", "returns_scope"),
+            ),
+            actor_id="tenant-1",
+        )
+
+        assert response.state is QueryState.COMPLETED, response.model_dump_json(indent=2)
+        assert executor.calls == 1
+        # CTE 名字原样保留，没有被改成作用域名。
+        assert " agg" in response.corrected_s2sql, response.corrected_s2sql

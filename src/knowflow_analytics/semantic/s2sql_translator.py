@@ -219,7 +219,20 @@ class _SqlQueryParser:
                 if resolved.id not in target:
                     target.append(resolved.id)
             replacement = exp.column(token, quoted=True)
-            column.replace(replacement)
+            parent_select = column.parent
+            if (
+                isinstance(parent_select, exp.Select)
+                and column in parent_select.expressions
+                and _feeds_an_outer_scope(parent_select)
+            ):
+                # 内层 SELECT 裸投影一个受治理成员时，改名会改掉它**对外导出的名字**：
+                # CTE 里的 `SELECT "门店名称"` 变成 `SELECT "__kf_field_0"`，外层再写
+                # `p."门店名称"` 就是 UndefinedColumn——翻译一路放行，执行期才炸，那时
+                # 已经越过了能救回这次查询的 ALL 重试。补一个同名 alias 把对外名字钉住。
+                # 最外层不补：它的输出列名由 _output_columns 决定。
+                column.replace(exp.alias_(replacement, column.name, quoted=True))
+            else:
+                column.replace(replacement)
             if normalized_wrapper is not None:
                 normalized_wrapper.replace(_aggregate_expression(replacement.copy(), aggregation))
 
@@ -240,6 +253,22 @@ class _SqlQueryParser:
                 raise _invalid(f"S2SQL references an unknown logical table: {table.name}")
         if dataset_tables < 1:
             raise _invalid("S2SQL must query the selected governed DataSet")
+        # 同一个 SELECT 的 FROM 里出现两次受治理表：两边都会编译成同一个 __kf_dataset，
+        # 而成员列改写成物理列时带不走 `a.` / `b.` 这样的限定符，PostgreSQL 到执行期才以
+        # AmbiguousColumn 报错——那时已经越过了能救回这次查询的 ALL 重试。在这里拒掉。
+        # （跨 CTE 边界引用两次没问题：各自是独立的 SELECT，实测可执行。）
+        for select in statement.tree.find_all(exp.Select):
+            direct = sum(
+                1
+                for table in select.find_all(exp.Table)
+                if table.find_ancestor(exp.Select) is select
+                and statement.symbols.is_dataset(table.name)
+            )
+            if direct > 1:
+                raise _invalid(
+                    "one governed DataSet reference is allowed per SELECT",
+                    code="S2SQL_DATASET_SELF_JOIN_UNSUPPORTED",
+                )
 
 
 class _DimExpressionParser:
@@ -1958,8 +1987,6 @@ def _is_projection_alias_reference(
     """
 
     alias_name = _normalize(column.name)
-    if alias_name not in aliases:
-        return False
     select = column.find_ancestor(exp.Select)
     if select is None:
         return False
@@ -1983,8 +2010,8 @@ def _select_projection_aliases(select: exp.Select) -> set[str]:
     return {_normalize(projection.alias) for projection in select.expressions if projection.alias}
 
 
-def _visible_derived_aliases(select: exp.Select) -> set[str]:
-    """Aliases exported by the CTE/subquery inputs of exactly one SELECT."""
+def _derived_source_selects(select: exp.Select) -> list[exp.Select]:
+    """本 SELECT 直接读到的 CTE / 子查询的 SELECT。"""
 
     direct_table_names = {
         _normalize(table.name)
@@ -1995,13 +2022,13 @@ def _visible_derived_aliases(select: exp.Select) -> set[str]:
     while root.parent is not None:
         root = root.parent
 
-    visible: set[str] = set()
+    sources: list[exp.Select] = []
     for cte in root.find_all(exp.CTE):
         if _normalize(cte.alias_or_name) not in direct_table_names:
             continue
         source = cte.this if isinstance(cte.this, exp.Select) else cte.this.find(exp.Select)
         if source is not None:
-            visible.update(_select_projection_aliases(source))
+            sources.append(source)
     for subquery in select.find_all(exp.Subquery):
         if subquery.find_ancestor(exp.Select) is not select:
             continue
@@ -2011,7 +2038,68 @@ def _visible_derived_aliases(select: exp.Select) -> set[str]:
             else subquery.this.find(exp.Select)
         )
         if source is not None:
-            visible.update(_select_projection_aliases(source))
+            sources.append(source)
+    return sources
+
+
+def _exported_names(select: exp.Select, seen: frozenset[int] = frozenset()) -> set[str]:
+    """一个 SELECT 对外导出的名字。
+
+    三个来源缺一不可：
+
+    * 显式 ``AS`` 别名；
+    * **裸列透传**——``SELECT x FROM agg`` 同样把 ``x`` 导出去；
+    * ``SELECT *`` 从上游带出来的名字，逐层传递。
+
+    少任何一个，名字就断在那一层，外层再引用就会被当成受治理成员送去符号表。后果有两种，
+    都不好看：查不到就是"不认识这个名字"的假拒绝（实测「每个门店卖得最好的商品」——
+    「每组取前 N」必然两层，中间层通常写 ``*``，正好断在那儿）；查得到就更糟——它会被重写成
+    物理列并**丢掉 ``p.`` 这样的限定符**，两个来源同名时 PostgreSQL 以 AmbiguousColumn
+    在执行期才报错，那时已经越过了能救回这次查询的 ALL 重试。
+
+    ``SELECT *`` 打在受治理表上不展开：受治理表没有"全部列"这个概念，替用户把它摊成全部
+    成员是替他决定口径；保持不展开，投影为空由既有的 ``EMPTY_ONTOLOGY_PROJECTION`` 负责。
+    """
+
+    if id(select) in seen:
+        return set()
+    seen = seen | {id(select)}
+    names: set[str] = set()
+    has_star = False
+    for projection in select.expressions:
+        if isinstance(projection, exp.Star):
+            has_star = True
+            continue
+        if isinstance(projection, exp.Alias):
+            if projection.alias:
+                names.add(_normalize(projection.alias))
+            continue
+        if isinstance(projection, exp.Column):
+            names.add(_normalize(projection.name))
+    if has_star:
+        for source in _derived_source_selects(select):
+            names.update(_exported_names(source, seen))
+    return names
+
+
+
+def _feeds_an_outer_scope(select: exp.Select) -> bool:
+    """这个 SELECT 的投影名字会被外层引用吗（CTE 体 / 子查询体）。"""
+
+    node: exp.Expression | None = select.parent
+    while node is not None:
+        if isinstance(node, (exp.CTE, exp.Subquery)):
+            return True
+        node = node.parent
+    return False
+
+
+def _visible_derived_aliases(select: exp.Select) -> set[str]:
+    """本 SELECT 的 CTE/子查询输入对外导出的全部名字。"""
+
+    visible: set[str] = set()
+    for source in _derived_source_selects(select):
+        visible.update(_exported_names(source))
     return visible
 
 
@@ -2025,13 +2113,20 @@ def _alias_semantic_pairs(
         selects.insert(0, tree)
     for select in reversed(tuple(dict.fromkeys(selects))):
         for projection in select.expressions:
-            if not projection.alias:
+            if projection.alias:
+                aliases[_normalize(projection.alias)] = _semantic_pairs(
+                    projection.this if isinstance(projection, exp.Alias) else projection,
+                    symbols,
+                    aliases,
+                )
                 continue
-            aliases[_normalize(projection.alias)] = _semantic_pairs(
-                projection.this if isinstance(projection, exp.Alias) else projection,
-                symbols,
-                aliases,
-            )
+            # 裸列透传也要记：`WITH 明细 AS (SELECT "区域" …) SELECT "区域" FROM 明细`
+            # 外层那个「区域」是本地名，但它承载的仍是受治理维度的语义。不记的话审计
+            # 投影会漏掉它——回答卡少一个维度 chip，而查询确实是按它分的组。
+            if isinstance(projection, exp.Column):
+                pairs = _semantic_pairs(projection, symbols, aliases)
+                if pairs:
+                    aliases[_normalize(projection.name)] = pairs
     return aliases
 
 
@@ -2045,13 +2140,10 @@ def _semantic_pairs(
     if isinstance(expression, exp.Column):
         columns.insert(0, expression)
     for column in columns:
-        alias_items = (
-            aliases.get(_normalize(column.name))
-            if _is_projection_alias_reference(column, aliases, symbols)
-            else None
-        )
-        if alias_items is not None:
-            for item in alias_items:
+        if _is_projection_alias_reference(column, aliases, symbols):
+            # 本地名。有别名记录就把它代表的语义带上；没有（裸列透传）就跳过——
+            # 回落去符号表解析会让回答卡声称用到了这条查询根本没碰的成员。
+            for item in aliases.get(_normalize(column.name), ()):
                 if (item.kind, item.id) not in {
                     (existing.kind, existing.id) for existing in results
                 }:

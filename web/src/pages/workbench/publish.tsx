@@ -290,7 +290,7 @@ export function PublishPanel({ projectId, revision, acceptRevision, readOnly, go
 
   return (
     <div
-      className={`grid h-full min-h-[560px] grid-cols-[minmax(0,1fr)_320px] ${ANALYTICS_TASK_PANEL_CLASS}`}
+      className={`grid h-full grid-cols-[minmax(0,1fr)_320px] ${ANALYTICS_TASK_PANEL_CLASS}`}
     >
       <section className="min-w-0 px-6 py-5">
         {/* 一、检查总条：自动跑，不需要点 */}

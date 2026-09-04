@@ -139,7 +139,7 @@ export function AskFeedbackPanel({
 
   return (
     <div
-      className={`grid h-full min-h-[520px] grid-cols-[minmax(0,1fr)_300px] ${ANALYTICS_TASK_PANEL_CLASS}`}
+      className={`grid h-full grid-cols-[minmax(0,1fr)_300px] ${ANALYTICS_TASK_PANEL_CLASS}`}
     >
       <section className="min-w-0 px-6 py-5">
         <Header />

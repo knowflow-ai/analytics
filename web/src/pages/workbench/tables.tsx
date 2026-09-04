@@ -104,9 +104,11 @@ export function TablesPanel({ projectId, revision, acceptRevision, readOnly }: P
   });
 
   return (
-    // h-full：容器现在是固定高度（四个 tab 一致），面板不撑满的话左侧那条分割线
-    // 只画到内容末尾就断了，下面空一截。
-    <div className="grid h-full min-h-[560px] grid-cols-[280px_1fr]">
+    // h-full 而不是 min-h-[560px]：高度由外层容器一处决定（四个 tab 共用同一个算法）。
+    // 自带一个像素地板的话，小屏上可用高度不到 560 时这一页会比其它三页高出一截——
+    // 用户实测：语义建模、问数反馈都对，只有数据源太高。h-full 让它就是容器那么高，
+    // 顺便让左侧那条分割线画得到底。
+    <div className="grid h-full grid-cols-[280px_1fr]">
       <aside className="border-r border-slate-100 p-4">
         <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
           <Database className="h-3.5 w-3.5" /> 数据源

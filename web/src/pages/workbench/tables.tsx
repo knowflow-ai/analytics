@@ -104,7 +104,9 @@ export function TablesPanel({ projectId, revision, acceptRevision, readOnly }: P
   });
 
   return (
-    <div className="grid min-h-[560px] grid-cols-[280px_1fr]">
+    // h-full：容器现在是固定高度（四个 tab 一致），面板不撑满的话左侧那条分割线
+    // 只画到内容末尾就断了，下面空一截。
+    <div className="grid h-full min-h-[560px] grid-cols-[280px_1fr]">
       <aside className="border-r border-slate-100 p-4">
         <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
           <Database className="h-3.5 w-3.5" /> 数据源

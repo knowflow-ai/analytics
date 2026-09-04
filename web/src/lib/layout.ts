@@ -30,12 +30,16 @@ export function projectGridTemplateColumns(
 /**
  * 任务型面板（问数验证、问数反馈、AI 建议核对）的可读宽度上限。
  *
+ * **左对齐，不居中。** 宽度上限本身是对的（理由见下），但居中会让这两个 tab 的内容
+ * 从屏幕中间开始，而数据源、语义建模两页是贴左的——切 tab 时左边缘跳来跳去（用户
+ * 实测反馈）。上限保住可读性，左对齐保住一致性，两者不冲突。
+ *
  * 宽屏下不加约束的后果，用户实测反馈：一条「待核对 · 销售金额 285126」左边贴着左墙、
  * 「数值正确 / 不对」贴着右墙，中间两千像素空白——眼睛得横扫一整行才认得出这两端是
  * 同一条记录。目录浏览与关系画布是密集型面板，继续吃满宽度（见
  * ANALYTICS_MAX_CONTENT_WIDTH_PX），这个约束只加在「一行一条、要逐条读」的面板上。
  */
-export const ANALYTICS_TASK_PANEL_CLASS = 'mx-auto w-full max-w-[1460px]';
+export const ANALYTICS_TASK_PANEL_CLASS = 'w-full max-w-[1460px]';
 
 /**
  * 找到真正能滚的那个祖先。

@@ -151,19 +151,29 @@ export function WorkbenchPage() {
     return set;
   }, [revision]);
 
+  // **必须在早返回之前**：hook 不能有条件地调用，放到 summary.isPending 那两个
+  // return 后面会在数据到位的那一帧多调一个 hook，React 直接报
+  // "Rendered more hooks than during the previous render"。
+  //
+  // 测量键要带上**任何会改变顶边位置的东西**：首屏进来时上方的版本信息和只读提示条
+  // 还没渲染完，只按 step 测的话第一个 tab 会矮一截、切一次才对（用户实测）。
+  // ResizeObserver 看的是祖先的尺寸，兄弟节点自己变高不会触发它。
+  const panelViewport = useAvailableCanvasHeight(
+    true,
+    [
+      step,
+      revisionId ?? '',
+      String(summary.isPending),
+      String(revisionQuery.isPending),
+      String(revisionQuery.data?.state ?? ''),
+    ].join('|'),
+  );
   if (summary.isPending) return <Spinner />;
   if (summary.isError) {
     return <div className="text-sm text-red-600">{describeError(summary.error)}</div>;
   }
 
   const readOnly = Boolean(revision && revision.state !== 'draft' && revision.state !== 'validated');
-  // 测量键要带上**任何会改变顶边位置的东西**：首屏进来时上方的版本信息和只读
-  // 提示条还没渲染完，只按 step 测的话第一个 tab 会矮一截，切一次才对——用户
-  // 实测就是这个。ResizeObserver 看的是祖先的尺寸，兄弟节点自己变高不会触发。
-  const panelViewport = useAvailableCanvasHeight(
-    true,
-    `${step}|${revisionId ?? ''}|${readOnly}|${revisionQuery.isPending}`,
-  );
   const context: WorkbenchContext | null = revision
     ? { projectId, revision, acceptRevision, readOnly, goTo }
     : null;

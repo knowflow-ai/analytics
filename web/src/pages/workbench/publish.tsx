@@ -789,7 +789,8 @@ function QueryFailuresCard({
 }) {
   const failures = useQuery({
     queryKey: ['query-failures', projectId],
-    queryFn: () => listQueryFailures(projectId, 50),
+    // 发布页只看待处理的：已经处理掉的不该再提醒一遍。
+    queryFn: () => listQueryFailures(projectId, { limit: 50, status: 'open' }),
   });
   const rows = feedbackRows(failures.data?.items ?? []);
   if (failures.isPending || rows.length === 0) return null;

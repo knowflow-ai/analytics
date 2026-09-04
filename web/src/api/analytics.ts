@@ -6,6 +6,7 @@ import type {
   AnalyticsDimensionValue,
   AnalyticsEvaluationReport,
   AnalyticsGoldenSuiteRecord,
+  AnalyticsFeedbackStatus,
   AnalyticsQueryFailure,
   AnalyticsQueryDiagnosticExport,
   AnalyticsDictionaryPreview,
@@ -409,10 +410,36 @@ export const suggestAliases = (
     body: { expected_etag: expectedEtag, ...input },
   });
 
-export const listQueryFailures = (projectId: string, limit = 100) =>
-  request<{ items: AnalyticsQueryFailure[] }>(`${base(projectId)}/query-failures`, {
+export interface QueryFailurePage {
+  items: AnalyticsQueryFailure[];
+  /** 符合当前筛选的总条数。没有它就说不出「还剩多少条待处理」。 */
+  total: number;
+  offset: number;
+  limit: number;
+}
+
+export const listQueryFailures = (
+  projectId: string,
+  options: { limit?: number; offset?: number; status?: AnalyticsFeedbackStatus | 'all' } = {},
+) =>
+  request<QueryFailurePage>(`${base(projectId)}/query-failures`, {
     projectId,
-    query: { limit },
+    query: {
+      limit: options.limit ?? 50,
+      offset: options.offset ?? 0,
+      status: options.status ?? 'open',
+    },
+  });
+
+/** 标成已处理/忽略。没有删除——处理过的收起来，不是抹掉。 */
+export const updateQueryFailureStatus = (
+  projectId: string,
+  input: { failure_ids: number[]; status: AnalyticsFeedbackStatus },
+) =>
+  request<{ changed: number }>(`${base(projectId)}/query-failures:status`, {
+    projectId,
+    method: 'POST',
+    body: input,
   });
 
 /** 回滚线上 Release 到上一版。 */

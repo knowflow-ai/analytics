@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+
+import type { AnalyticsQueryFailure } from '@analytics/api/types';
 import {
   FEEDBACK_FILTERS,
   failureReason,
@@ -158,19 +160,19 @@ describe('这条证据能落到词典的哪个成员上', () => {
     // clarified 的 resolution 是用户在澄清卡上亲手选的，最可靠的一类。
     expect(
       feedbackFixTarget({ kind: 'clarified', resolution: '销售金额' }, catalog),
-    ).toEqual({ kind: 'metric', id: 'metric:sales', name: '销售金额' });
+    ).toEqual({ kind: 'metric', id: 'metric:sales', name: '销售金额', phrase: '' });
   });
 
   it('模型猜的成员一样给落点——猜对了也要补，下次可能猜错', () => {
     expect(
       feedbackFixTarget({ kind: 'inferred', resolution: '所在城市' }, catalog),
-    ).toEqual({ kind: 'dimension', id: 'dim:city', name: '所在城市' });
+    ).toEqual({ kind: 'dimension', id: 'dim:city', name: '所在城市', phrase: '' });
   });
 
   it('未发布取值的近似建议落到那个维度值上', () => {
     expect(
       feedbackFixTarget({ kind: 'unknown_value', resolution: '卡布奇诺' }, catalog),
-    ).toEqual({ kind: 'dimensionValue', id: 'dv:1', name: '卡布奇诺' });
+    ).toEqual({ kind: 'dimensionValue', id: 'dv:1', name: '卡布奇诺', phrase: '' });
   });
 
   it('正解在当前目录里找不到时不猜', () => {
@@ -232,7 +234,7 @@ describe('页头的三个数', () => {
 
 describe('按接下来做什么分组', () => {
   it('有落点的进「能直接补进词典」', () => {
-    const fix = { kind: 'metric' as const, id: 'metric:sales', name: '销售金额' };
+    const fix = { kind: 'metric' as const, id: 'metric:sales', name: '销售金额', phrase: '业绩' };
 
     expect(matchesFeedbackFilter('dictionary', fix)).toBe(true);
     expect(matchesFeedbackFilter('diagnose', fix)).toBe(false);
@@ -250,5 +252,94 @@ describe('按接下来做什么分组', () => {
      * 按钮——标签和按钮说的不是一件事。
      */
     expect(FEEDBACK_FILTERS.map((item) => item.key)).toEqual(['all', 'dictionary', 'diagnose']);
+  });
+});
+
+describe('按说法聚合', () => {
+  const record = (over: Partial<AnalyticsQueryFailure>): AnalyticsQueryFailure => ({
+    question: '各门店的业绩',
+    effective_question: '',
+    stage: 'CANDIDATE_DISCOVERY',
+    code: 'SEMANTIC_INFERRED',
+    message: '',
+    release_id: 'rel',
+    dataset_ids: [],
+    kind: 'inferred',
+    resolution: '销售金额',
+    ...over,
+  });
+
+  it('同一个说法的不同问句并成一条', () => {
+    // 摊成 20 行会让真正要补的东西淹在里面——这正是"一堆问题"的由来。
+    const rows = feedbackRows([
+      record({ id: 1, question: '各门店的业绩', inferred_terms: [['业绩', '销售金额']] }),
+      record({ id: 2, question: '门店业绩排名', inferred_terms: [['业绩', '销售金额']] }),
+      record({ id: 3, question: '上海门店的业绩如何', unmatched_phrases: ['业绩'] }),
+    ]);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].phrase).toBe('业绩');
+    expect(rows[0].count).toBe(3);
+    // 一次把这一组全标成已处理，不用逐条点。
+    expect(rows[0].ids).toEqual([1, 2, 3]);
+  });
+
+  it('不同说法不能并到一起', () => {
+    const rows = feedbackRows([
+      record({ id: 1, inferred_terms: [['业绩', '销售金额']] }),
+      record({ id: 2, question: '各门店的坪效', inferred_terms: [['坪效', '销售金额']] }),
+    ]);
+
+    expect(rows.map((item) => item.phrase).sort()).toEqual(['业绩', '坪效']);
+  });
+
+  it('例句最多留 3 条', () => {
+    const rows = feedbackRows(
+      [1, 2, 3, 4, 5].map((n) =>
+        record({ id: n, question: `问法${n}`, inferred_terms: [['业绩', '销售金额']] }),
+      ),
+    );
+
+    expect(rows[0].count).toBe(5);
+    expect(rows[0].questions).toHaveLength(3);
+  });
+
+  it('没有说法时退回按问句聚合', () => {
+    // 拒答那类往往两个来源都空，那时问句本身就是唯一能区分的东西。
+    const rows = feedbackRows([
+      record({ id: 1, kind: 'refused', resolution: '', question: 'A' }),
+      record({ id: 2, kind: 'refused', resolution: '', question: 'B' }),
+    ]);
+
+    expect(rows).toHaveLength(2);
+  });
+});
+
+describe('预填说法', () => {
+  const catalog = {
+    metrics: [{ id: 'metric:sales', name: '销售金额' }],
+    dimensions: [],
+    dimensionValues: [],
+  };
+
+  it('模型报的配对能同时填上说法和成员', () => {
+    const target = feedbackFixTarget(
+      { kind: 'inferred', resolution: '销售金额', phrase: '业绩' },
+      catalog,
+    );
+
+    expect(target).toEqual({
+      kind: 'metric',
+      id: 'metric:sales',
+      name: '销售金额',
+      phrase: '业绩',
+    });
+  });
+
+  it('没有说法就留空，不拿整句问题顶上', () => {
+    // 拿整句问题当术语名是造假。
+    const target = feedbackFixTarget({ kind: 'inferred', resolution: '销售金额' }, catalog);
+
+    expect(target?.phrase).toBe('');
   });
 });

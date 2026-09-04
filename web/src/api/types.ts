@@ -1284,10 +1284,22 @@ export interface AnalyticsDictionaryDecision {
  * 三种收场记在同一处（`kind`）：拒答只知道失败了；用户澄清后答出来的**自带正解**；
  * 用了系统不认识的取值则可能有近似建议。
  */
+export type AnalyticsFeedbackStatus = 'open' | 'resolved' | 'ignored';
+
 export interface AnalyticsQueryFailure {
+  /** 行级 id。标记已处理要用它；老记录可能没有。 */
+  id?: number;
+  status?: AnalyticsFeedbackStatus;
   kind?: 'refused' | 'clarified' | 'inferred' | 'unknown_value';
   /** 这次的正解：用户选中的成员名，或近似取值建议。没有就是空串。 */
   resolution?: string;
+  /**
+   * 模型报的「这个说法我理解成了那个成员」，已过字面子串校验。**首选**：它带配对，
+   * 预填术语表单要的正是这一对。
+   */
+  inferred_terms?: [string, string][];
+  /** 问句里没被任何精确证据覆盖的片段。**补漏用**：模型会漏报，这条永远算得出来。 */
+  unmatched_phrases?: string[];
   question: string;
   effective_question: string;
   stage: string;

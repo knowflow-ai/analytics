@@ -1,7 +1,11 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BookOpenText, MessageSquareText } from "lucide-react";
 import { useMemo, useState } from "react";
-import { listQueryFailures } from "@analytics/api/analytics";
+import {
+  listQueryFailures,
+  updateQueryFailureStatus,
+} from "@analytics/api/analytics";
+import type { AnalyticsFeedbackStatus } from "@analytics/api/types";
 import { Badge, Button, Empty, Spinner } from "@analytics/components/ui";
 import {
   FEEDBACK_FILTERS,
@@ -53,17 +57,34 @@ const TARGET_LABEL: Record<FeedbackFixTarget["kind"], string> = {
  * ——一次线上提问不是长期业务口径。落点也绝不猜：只有 `resolution` 在当前草稿目录里
  * 恰好命中一个成员时才给按钮（见 `feedbackFixTarget`）。
  */
+const PAGE_SIZE = 50;
+
 export function AskFeedbackPanel({
   projectId,
   revision,
   readOnly,
   onFixInDictionary,
 }: Context & { onFixInDictionary: (target: FeedbackFixTarget) => void }) {
+  const queryClient = useQueryClient();
+  const [status, setStatus] = useState<AnalyticsFeedbackStatus>("open");
+  const [offset, setOffset] = useState(0);
   const failures = useQuery({
-    queryKey: ["analytics-query-failures", projectId],
-    queryFn: () => listQueryFailures(projectId, 200),
+    queryKey: ["analytics-query-failures", projectId, status, offset],
+    queryFn: () => listQueryFailures(projectId, { limit: PAGE_SIZE, offset, status }),
   });
   const [filter, setFilter] = useState<FeedbackFilter>("all");
+  const total = failures.data?.total ?? 0;
+
+  const mark = useMutation({
+    mutationFn: (input: { ids: number[]; next: AnalyticsFeedbackStatus }) =>
+      updateQueryFailureStatus(projectId, {
+        failure_ids: input.ids,
+        status: input.next,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["analytics-query-failures", projectId] });
+    },
+  });
 
   const catalog: FeedbackCatalogIndex = useMemo(
     () => ({
@@ -134,6 +155,29 @@ export function AskFeedbackPanel({
         </div>
 
         <div className="mt-5 flex flex-wrap items-center gap-2">
+          {(
+            [
+              ["open", "待处理"],
+              ["resolved", "已处理"],
+              ["ignored", "已忽略"],
+            ] as const
+          ).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              className={
+                status === key
+                  ? "rounded-full bg-slate-900 px-3 py-1 text-xs text-white"
+                  : "rounded-full px-3 py-1 text-xs text-slate-500 hover:bg-slate-100"
+              }
+              onClick={() => {
+                setStatus(key);
+                setOffset(0);
+              }}
+            >
+              {label}
+            </button>
+          ))}
           {FEEDBACK_FILTERS.map((item) => {
             const active = item.key === filter;
             return (
@@ -207,6 +251,25 @@ export function AskFeedbackPanel({
                 ) : (
                   <span className="text-[11px] text-slate-400">要先诊断</span>
                 )}
+                {status === "open" && row.ids.length > 0 && (
+                  <div className="mt-1.5 flex justify-end gap-2 text-[11px]">
+                    {/* 处理过的收起来，不是删掉——这份数据还是补词典的依据。 */}
+                    <button
+                      type="button"
+                      className="text-slate-500 hover:text-slate-700"
+                      onClick={() => mark.mutate({ ids: row.ids, next: "resolved" })}
+                    >
+                      标为已处理
+                    </button>
+                    <button
+                      type="button"
+                      className="text-slate-400 hover:text-slate-600"
+                      onClick={() => mark.mutate({ ids: row.ids, next: "ignored" })}
+                    >
+                      忽略
+                    </button>
+                  </div>
+                )}
               </div>
             </li>
           ))}
@@ -216,6 +279,33 @@ export function AskFeedbackPanel({
             </li>
           )}
         </ul>
+
+        {total > 0 && (
+          <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
+            {/* 说清"还剩多少条待处理"——那正是这个页面存在的意义。 */}
+            <span>
+              共 {total} 条，当前第 {offset + 1}–{Math.min(offset + PAGE_SIZE, total)} 条
+            </span>
+            <span className="flex gap-2">
+              <button
+                type="button"
+                className="disabled:text-slate-300"
+                disabled={offset === 0}
+                onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
+              >
+                上一页
+              </button>
+              <button
+                type="button"
+                className="disabled:text-slate-300"
+                disabled={offset + PAGE_SIZE >= total}
+                onClick={() => setOffset(offset + PAGE_SIZE)}
+              >
+                下一页
+              </button>
+            </span>
+          </div>
+        )}
       </section>
 
       <aside className="border-l border-slate-100 px-4 py-5">

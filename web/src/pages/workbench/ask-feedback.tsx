@@ -18,6 +18,7 @@ import {
   type FeedbackFilter,
   type FeedbackFixTarget,
   type FeedbackKind,
+  type FeedbackSummary,
 } from "./ask-feedback-state";
 import { ANALYTICS_TASK_PANEL_CLASS } from "@analytics/lib/layout";
 import type { WorkbenchContext } from "./index";
@@ -127,48 +128,43 @@ export function AskFeedbackPanel({
       className={`grid h-full grid-cols-[minmax(0,1fr)_300px] ${ANALYTICS_TASK_PANEL_CLASS}`}
     >
       <section className="min-w-0 px-6 py-5">
-        <Header />
-
-        <div className="mt-4 grid grid-cols-3 gap-3">
-          <Stat label="没接住的说法" value={summary.sayings} unit="种" />
-          <Stat
-            label="累计被问"
-            value={summary.occurrences}
-            unit="次"
-            hint="次数就是优先级"
-          />
-          <Stat
-            label="能直接补进词典"
-            value={summary.fixable}
-            unit="种"
-            tone={summary.fixable > 0 ? "amber" : "slate"}
-          />
+        {/*
+          两组控件长得太像，是这块"乱"的主因：状态页签（看哪一批）和筛选胶囊
+          （这批里看哪一类）原先并排在同一行、同为圆角小块，读起来像六个并列
+          选项，而它们其实是两层。分开——页签跟着标题走，做成分段控件（灰槽+
+          白块），胶囊留在列表上方保持描边样式，一眼能看出不是一类东西。
+        */}
+        <div className="flex items-start justify-between gap-4">
+          <Header summary={summary} />
+          <div className="flex shrink-0 gap-0.5 rounded-lg bg-slate-100 p-0.5">
+            {(
+              [
+                ["open", "待处理"],
+                ["resolved", "已处理"],
+                ["ignored", "已忽略"],
+              ] as const
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                aria-pressed={status === key}
+                className={`rounded-md px-3 py-1 text-xs transition-colors ${
+                  status === key
+                    ? "bg-white font-medium text-slate-900 shadow-sm"
+                    : "text-slate-500 hover:text-slate-700"
+                }`}
+                onClick={() => {
+                  setStatus(key);
+                  setOffset(0);
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
 
-        <div className="mt-5 flex flex-wrap items-center gap-2">
-          {(
-            [
-              ["open", "待处理"],
-              ["resolved", "已处理"],
-              ["ignored", "已忽略"],
-            ] as const
-          ).map(([key, label]) => (
-            <button
-              key={key}
-              type="button"
-              className={
-                status === key
-                  ? "rounded-full bg-slate-900 px-3 py-1 text-xs text-white"
-                  : "rounded-full px-3 py-1 text-xs text-slate-500 hover:bg-slate-100"
-              }
-              onClick={() => {
-                setStatus(key);
-                setOffset(0);
-              }}
-            >
-              {label}
-            </button>
-          ))}
+        <div className="mt-4 flex flex-wrap items-center gap-2">
           {FEEDBACK_FILTERS.map((item) => {
             const active = item.key === filter;
             return (
@@ -188,9 +184,6 @@ export function AskFeedbackPanel({
               </button>
             );
           })}
-          <span className="ml-auto text-[11px] text-slate-400">
-            带正解的排在前面；同一句话只占一行
-          </span>
         </div>
 
         <ul className="mt-3 overflow-hidden rounded-lg border border-slate-200">
@@ -225,20 +218,30 @@ export function AskFeedbackPanel({
               </div>
               <div className="shrink-0 pt-0.5">
                 {fix ? (
-                  <Button
-                    size="sm"
-                    variant={readOnly ? "default" : "primary"}
-                    disabled={readOnly}
-                    icon={<BookOpenText className="h-3.5 w-3.5" />}
+                  /*
+                    title 挂在外面这层 span 上，不是按钮上：原生 disabled 的
+                    <button> 不派发鼠标事件，浏览器不会为它弹 tooltip——只读时
+                    用户看到一排灰按钮却读不到任何解释。span 没有 disabled，
+                    hover 照常触发。
+                  */
+                  <span
+                    className="inline-block"
                     title={
                       readOnly
-                        ? "当前版本只读，先在右上角基于此版本继续编辑"
+                        ? "当前版本已发布、内容只读。点右上角「基于此版本继续编辑」派生草稿后即可补进词典。"
                         : undefined
                     }
-                    onClick={() => onFixInDictionary(fix)}
                   >
-                    补进词典
-                  </Button>
+                    <Button
+                      size="sm"
+                      variant={readOnly ? "default" : "primary"}
+                      disabled={readOnly}
+                      icon={<BookOpenText className="h-3.5 w-3.5" />}
+                      onClick={() => onFixInDictionary(fix)}
+                    >
+                      补进词典
+                    </Button>
+                  </span>
                 ) : (
                   <span className="text-[11px] text-slate-400">要先诊断</span>
                 )}
@@ -353,7 +356,15 @@ export function AskFeedbackPanel({
   );
 }
 
-function Header() {
+/**
+ * 标题区顺带说清"这一批有多少"。
+ *
+ * 这几个数原先是三张统计卡，占掉一整行；但其中两个（说法种数、能补词典的种数）
+ * 和下面的筛选胶囊一字不差地重复，读者要在同一屏里把 25 和 25、23 和 23 对上，
+ * 才能确认它们说的是一回事。数字留在胶囊上（那里它还兼作筛选入口），这里只留
+ * 一句话。
+ */
+function Header({ summary }: { summary: FeedbackSummary }) {
   return (
     <header>
       <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
@@ -362,50 +373,14 @@ function Header() {
       </h2>
       <p className="mt-1 max-w-2xl text-xs leading-relaxed text-slate-500">
         线上真实提问回流到建模。这一页只回答一个问题：下一版该补哪些说法。
+        {summary.sayings > 0 && (
+          <>
+            {" "}
+            共 {summary.sayings} 种说法、被问过 {summary.occurrences} 次；带正解的排在前面。
+          </>
+        )}
       </p>
     </header>
   );
 }
 
-function Stat({
-  label,
-  value,
-  unit,
-  hint,
-  tone = "slate",
-}: {
-  label: string;
-  value: number;
-  unit: string;
-  hint?: string;
-  tone?: "slate" | "amber";
-}) {
-  return (
-    <div
-      className={`rounded-lg border px-3.5 py-3 ${
-        tone === "amber" ? "border-amber-200 bg-amber-50/50" : "border-slate-200"
-      }`}
-    >
-      <div
-        className={`text-[11px] ${tone === "amber" ? "text-amber-700" : "text-slate-400"}`}
-      >
-        {label}
-      </div>
-      <div className="mt-1 flex items-baseline gap-1.5">
-        <span
-          className={`text-xl font-semibold tabular-nums ${
-            tone === "amber" ? "text-amber-800" : "text-slate-900"
-          }`}
-        >
-          {value}
-        </span>
-        <span
-          className={`text-[11px] ${tone === "amber" ? "text-amber-700" : "text-slate-400"}`}
-        >
-          {unit}
-        </span>
-        {hint && <span className="ml-1 text-[11px] text-slate-400">{hint}</span>}
-      </div>
-    </div>
-  );
-}

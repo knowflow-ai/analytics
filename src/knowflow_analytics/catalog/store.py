@@ -18,6 +18,7 @@ from sqlalchemy import (
     MetaData,
     String,
     Table,
+    and_,
     delete,
     func,
     insert,
@@ -281,6 +282,23 @@ golden_suites = Table(
     Column("updated_at", DateTime(timezone=True), nullable=False),
 )
 
+
+def _record_phrases(payload: object) -> set[str]:
+    """一条记录里"用户说了、系统没听懂"的全部说法。
+
+    两个来源都要看：模型报的配对（首选，带成员）和 span 补集（补漏）。只看一个的话，
+    另一个来源记下的那条补了词典也消不掉。
+    """
+
+    if not isinstance(payload, dict):
+        return set()
+    phrases = {str(item).strip() for item in payload.get("unmatched_phrases") or ()}
+    for pair in payload.get("inferred_terms") or ():
+        if isinstance(pair, (list, tuple)) and pair:
+            phrases.add(str(pair[0]).strip())
+    return {item for item in phrases if item}
+
+
 query_failures = Table(
     "analytics_query_failures",
     metadata,
@@ -294,6 +312,15 @@ query_failures = Table(
     Column("code", String(128), nullable=False, index=True),
     Column("payload", JSON, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
+    # open / resolved / ignored。这张表原本只是追加日志（"系统听不懂什么"的一手
+    # 数据），但用户是当工作队列在用：一条条看、处理、消掉。没有状态就消不掉，
+    # 补了词典那条记录也原地不动。
+    #
+    # 不做删除：这份数据同时是补词典的依据和"这一版比上一版好"的素材，删掉就没了。
+    # 处理过的收起来，不是抹掉。
+    Column("status", String(16), nullable=False, server_default="open", index=True),
+    Column("resolved_at", DateTime(timezone=True), nullable=True),
+    Column("resolved_by", String(128), nullable=True),
 )
 
 query_history = Table(
@@ -2189,19 +2216,120 @@ class CatalogStore:
                 )
             )
 
-    def list_failures(self, *, project_id: str, limit: int = 500) -> tuple:
-        """Newest first. Read side for the mining job; not used online."""
+    def list_failures(
+        self,
+        *,
+        project_id: str,
+        limit: int = 500,
+        offset: int = 0,
+        status: str | None = "open",
+    ) -> tuple[tuple, int]:
+        """Newest first，返回 (这一页, 总数)。
+
+        要总数是因为没有它就没法分页——只给一页数据，界面既不知道有没有下一页，也说
+        不出"还剩多少条待处理"。而"还剩多少"正是这个页面存在的意义。
+
+        ``status=None`` 表示不过滤（看全部，含已处理）。默认只看 ``open``：处理过的
+        收起来，否则页面永远是一堆。
+        """
 
         from knowflow_analytics.query.contracts import QueryFailureRecord
 
+        condition = query_failures.c.project_id == project_id
+        if status is not None:
+            condition = and_(condition, query_failures.c.status == status)
         with self._engine.connect() as connection:
+            total = connection.execute(
+                select(func.count()).select_from(query_failures).where(condition)
+            ).scalar_one()
             rows = connection.execute(
-                select(query_failures.c.payload)
-                .where(query_failures.c.project_id == project_id)
+                select(query_failures.c.id, query_failures.c.payload, query_failures.c.status)
+                .where(condition)
                 .order_by(query_failures.c.id.desc())
                 .limit(limit)
+                .offset(offset)
             ).all()
-        return tuple(QueryFailureRecord.model_validate(row.payload) for row in rows)
+        items = []
+        for row in rows:
+            record = QueryFailureRecord.model_validate(row.payload)
+            # id 与 status 是行级状态，不在 payload 里——payload 是问数当时写下的
+            # 快照，事后改状态不该回头改它。
+            items.append(record.model_copy(update={"id": row.id, "status": row.status}))
+        return tuple(items), int(total)
+
+    def update_failure_status(
+        self,
+        *,
+        project_id: str,
+        failure_ids: tuple[int, ...],
+        status: str,
+        actor_id: str,
+        now: datetime,
+    ) -> int:
+        """把几条标成已处理/忽略，返回改了几行。
+
+        带上 ``project_id``：id 是全局自增的，只按 id 更新会让一个项目的人改到另一个
+        项目的记录。
+        """
+
+        if not failure_ids:
+            return 0
+        with self._engine.begin() as connection:
+            result = connection.execute(
+                query_failures.update()
+                .where(
+                    and_(
+                        query_failures.c.project_id == project_id,
+                        query_failures.c.id.in_(failure_ids),
+                    )
+                )
+                .values(
+                    status=status,
+                    resolved_at=now if status != "open" else None,
+                    resolved_by=actor_id if status != "open" else None,
+                )
+            )
+        return int(result.rowcount or 0)
+
+    def resolve_failures_by_phrase(
+        self, *, project_id: str, phrases: tuple[str, ...], actor_id: str, now: datetime
+    ) -> int:
+        """补了词典之后，把说的是同一个词的那些记录标成已处理。
+
+        这是"闭环"的那一步：用户在业务词典里补了「业绩」，反馈页里那 20 条「业绩」
+        就该消失，而不是原地不动等他一条条点。
+
+        判据是**字面相等**：记录里存的 phrase 与新增的说法完全一致才算。不做模糊匹配
+        ——把「业绩」和「营业额」当成一回事，用户会以为自己补过了。
+        """
+
+        if not phrases:
+            return 0
+        wanted = {item.strip() for item in phrases if item.strip()}
+        if not wanted:
+            return 0
+        with self._engine.begin() as connection:
+            rows = connection.execute(
+                select(query_failures.c.id, query_failures.c.payload).where(
+                    and_(
+                        query_failures.c.project_id == project_id,
+                        query_failures.c.status == "open",
+                    )
+                )
+            ).all()
+            matched = [
+                row.id
+                for row in rows
+                if wanted & _record_phrases(row.payload)
+            ]
+            if not matched:
+                return 0
+            result = connection.execute(
+                query_failures.update()
+                .where(query_failures.c.id.in_(matched))
+                .values(status="resolved", resolved_at=now, resolved_by=actor_id)
+            )
+        return int(result.rowcount or 0)
 
     def save_query_diagnostic(self, artifact) -> None:
         """Append one bounded diagnostic without retaining recoverable secrets."""

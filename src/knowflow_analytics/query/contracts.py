@@ -399,6 +399,10 @@ class QueryFailureRecord(FrozenModel):
     spec_hash: str
     index_snapshot_id: str
     dataset_ids: tuple[str, ...] = ()
+    # 行级状态，不写进 payload——payload 是问数当时的快照，事后改状态不该回头改它。
+    # 读出来时由 store 填上。
+    id: int | None = None
+    status: str = "open"
     # 模型报的"这个说法我理解成了那个成员"，已过字面子串校验。**首选**：它带配对，
     # 预填术语表单要的正是这一对；而且该沉默时会沉默（对照实验 10/12 vs 7/12）。
     inferred_terms: tuple[tuple[str, str], ...] = Field(default=(), max_length=10)

@@ -827,6 +827,14 @@ def _upload_plan(raw: str) -> tuple[tuple[str, str], ...]:
     return tuple(plan)
 
 
+
+class FeedbackStatusRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    failure_ids: list[int] = Field(min_length=1, max_length=500)
+    status: Literal["open", "resolved", "ignored"]
+
+
 def create_api(
     *,
     application: AnalyticsApplication,
@@ -2357,17 +2365,40 @@ def create_api(
     def list_query_failures(
         project_id: str,
         request_context: Context,
-        limit: Annotated[int, Query(ge=1, le=500)] = 100,
+        limit: Annotated[int, Query(ge=1, le=200)] = 50,
+        offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
+        status: Annotated[Literal["open", "resolved", "ignored", "all"], Query()] = "open",
     ):
-        """被拒答的问题是"系统听不懂什么"的唯一一手数据；此前只写不读。"""
+        """问数反馈：系统听不懂什么。
+
+        默认只给待处理的那一页。此前是"最近 100 条、不分页、无状态"——处理过的消不掉，
+        第 101 条以后也看不到，页面很快变成一堆没人敢动的东西。
+        """
 
         require_project(project_id, request_context)
-        return {
-            "items": [
-                item.model_dump(mode="json")
-                for item in application.list_query_failures(project_id, limit=limit)
-            ]
-        }
+        return application.list_query_failures(
+            project_id,
+            limit=limit,
+            offset=offset,
+            status=None if status == "all" else status,
+        )
+
+    @app.post("/v1/analytics/projects/{project_id}/query-failures:status")
+    def update_query_failure_status(
+        project_id: str,
+        payload: FeedbackStatusRequest,
+        request_context: Context,
+    ):
+        """把几条反馈标成已处理/忽略。没有删除——处理过的收起来，不是抹掉。"""
+
+        require_project(project_id, request_context)
+        expensive(request_context)
+        return application.update_query_failure_status(
+            project_id,
+            failure_ids=tuple(payload.failure_ids),
+            status=payload.status,
+            actor_id=request_context.actor_id,
+        )
 
     @app.get("/v1/analytics/projects/{project_id}/query-card")
     def query_card_definition(

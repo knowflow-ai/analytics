@@ -2998,12 +2998,29 @@ class AnalyticsApplication:
             collection="terms",
             item=term,
         )
-        return self._save_catalog_update(
+        saved = self._save_catalog_update(
             revision,
             expected_etag=expected_etag,
             schema_snapshot_hash=schema_snapshot_hash,
             semantic_catalog=catalog,
         )
+        # 闭环的那一步：用户补了「业绩」，反馈页里说的是「业绩」的那些记录就该消失，
+        # 而不是等他一条条去点"已处理"。字面相等才算——不做模糊匹配，把「业绩」和
+        # 「营业额」当成一回事会让用户以为自己补过了。
+        self._resolve_feedback_for_term(revision.project_id, term)
+        return saved
+
+    def _resolve_feedback_for_term(self, project_id: str, term: TermSpec) -> None:
+        """旁路：消不掉不影响这次保存。"""
+
+        try:
+            self.resolve_query_failures_for_phrases(
+                project_id,
+                phrases=(term.name, *term.aliases),
+                actor_id="",
+            )
+        except Exception:  # noqa: BLE001
+            LOGGER.warning("failed to resolve feedback for term", exc_info=True)
 
     def upsert_dimension_value(
         self,
@@ -3479,10 +3496,63 @@ class AnalyticsApplication:
     def publish_gate(self) -> dict[str, int | float]:
         return self._publisher.gate_thresholds
 
-    def list_query_failures(self, project_id: str, *, limit: int = 100):
-        """最近被拒答的问题。只读，给建模者看"系统听不懂什么"。"""
+    def list_query_failures(
+        self,
+        project_id: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        status: str | None = "open",
+    ):
+        """问数反馈。默认只看待处理——处理过的收起来，否则页面永远是一堆。"""
 
-        return self.catalog.list_failures(project_id=project_id, limit=limit)
+        items, total = self.catalog.list_failures(
+            project_id=project_id, limit=limit, offset=offset, status=status
+        )
+        return {
+            "items": [item.model_dump(mode="json") for item in items],
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+        }
+
+    def update_query_failure_status(
+        self, project_id: str, *, failure_ids: tuple[int, ...], status: str, actor_id: str
+    ) -> dict[str, object]:
+        """把几条标成已处理/忽略。
+
+        不提供删除：这份数据同时是补词典的依据和"这一版比上一版好"的素材。处理过的
+        收起来，不是抹掉。
+        """
+
+        if status not in {"open", "resolved", "ignored"}:
+            raise SemanticValidationError(
+                "unsupported feedback status", code="FEEDBACK_STATUS_INVALID"
+            )
+        changed = self.catalog.update_failure_status(
+            project_id=project_id,
+            failure_ids=failure_ids,
+            status=status,
+            actor_id=actor_id,
+            now=datetime.now(UTC),
+        )
+        return {"changed": changed}
+
+    def resolve_query_failures_for_phrases(
+        self, project_id: str, *, phrases: tuple[str, ...], actor_id: str
+    ) -> int:
+        """补了词典之后，把说的是同一个词的待处理记录消掉。
+
+        这是闭环的那一步：用户补了「业绩」，反馈页里那些「业绩」就该消失，而不是等他
+        一条条去点"已处理"。
+        """
+
+        return self.catalog.resolve_failures_by_phrase(
+            project_id=project_id,
+            phrases=phrases,
+            actor_id=actor_id,
+            now=datetime.now(UTC),
+        )
 
     def list_golden_suites(self, revision_id: str) -> tuple[GoldenSuiteRecord, ...]:
         revision = self.catalog.get_revision(revision_id)

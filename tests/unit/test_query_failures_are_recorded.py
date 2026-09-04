@@ -120,6 +120,11 @@ def test_catalog_store_round_trips_a_failure_newest_first():
     store.save_failure(_record("第二条"), actor_id="a", project_id="sales")
     store.save_failure(_record("别的项目"), actor_id="a", project_id="other")
 
-    listed = store.list_failures(project_id="sales")
+    # 返回 (这一页, 总数)：没有总数就没法分页，界面也说不出"还剩多少条待处理"。
+    listed, total = store.list_failures(project_id="sales")
     assert [item.question for item in listed] == ["第二条", "第一条"]
+    assert total == 2, "总数只算这个项目的，别的项目那条不能算进来"
     assert listed[0].details == {"mapping_attempts": []}
+    # 新记录默认待处理；行级状态由 store 填上，不写进 payload。
+    assert {item.status for item in listed} == {"open"}
+    assert all(item.id is not None for item in listed)

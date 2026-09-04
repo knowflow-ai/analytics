@@ -1,4 +1,5 @@
 import type { AnalyticsRevision, AnalyticsSemanticSpec } from '@analytics/api/types';
+import type { WorkbenchStep } from './catalog-view';
 
 /**
  * 建模完成度:把「上下文缺失 = 静默错答」变成常驻可见。
@@ -88,4 +89,17 @@ export function computeCompleteness(revision: AnalyticsRevision): CompletenessGa
       consequence: '模型有多条时间列,未声明的指标会按数据集默认时间列统计',
     },
   ];
+}
+
+
+/**
+ * 完成度条只挂在「语义建模」这一步。
+ *
+ * 它衡量的是语义目录的缺口，而能补的地方也只有语义建模。挂在每一步上会出两种
+ * 噪音：问数验证里它和发布前检查在提醒同一件事（用户看到两条颜色不同的警告，
+ * 得自己判断是不是同一回事）；问数反馈页更离谱——那一页只有一张表，头上却压着
+ * 一条与本页无关的黄条和一条只读提示（实测截图里，两条警告比正文还高）。
+ */
+export function showsCompleteness(step: WorkbenchStep): boolean {
+  return step === 'catalog';
 }

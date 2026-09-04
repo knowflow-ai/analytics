@@ -26,3 +26,35 @@ export function projectGridTemplateColumns(
   const reservedGap = gap * (maxColumns - 1);
   return `repeat(auto-fill,minmax(min(100%,max(${minCardWidth}px,calc((100% - ${reservedGap}px)/${maxColumns}))),1fr))`;
 }
+
+/**
+ * 任务型面板（问数验证、问数反馈、AI 建议核对）的可读宽度上限。
+ *
+ * 宽屏下不加约束的后果，用户实测反馈：一条「待核对 · 销售金额 285126」左边贴着左墙、
+ * 「数值正确 / 不对」贴着右墙，中间两千像素空白——眼睛得横扫一整行才认得出这两端是
+ * 同一条记录。目录浏览与关系画布是密集型面板，继续吃满宽度（见
+ * ANALYTICS_MAX_CONTENT_WIDTH_PX），这个约束只加在「一行一条、要逐条读」的面板上。
+ */
+export const ANALYTICS_TASK_PANEL_CLASS = 'mx-auto w-full max-w-[1460px]';
+
+/**
+ * 找到真正能滚的那个祖先。
+ *
+ * 不能直接用 `scrollIntoView`：它会连 `overflow:hidden` 的祖先一起滚（hidden 在程序上
+ * 依然是滚动容器），把一张本该固定的卡片内部顶上去，而用户没有任何办法滚回来。
+ * 这里只认 `auto` / `scroll`，并且要求它真的有可滚内容。
+ */
+export function scrollableAncestor(node: HTMLElement): HTMLElement | null {
+  let current: HTMLElement | null = node.parentElement;
+  while (current) {
+    const overflowY = window.getComputedStyle(current).overflowY;
+    if (
+      (overflowY === 'auto' || overflowY === 'scroll') &&
+      current.scrollHeight > current.clientHeight
+    ) {
+      return current;
+    }
+    current = current.parentElement;
+  }
+  return null;
+}

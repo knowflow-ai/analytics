@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AnalyticsRevision } from '@analytics/api/types';
-import { computeCompleteness } from './completeness';
+import { computeCompleteness, showsCompleteness } from './completeness';
 
 function revision(spec: Partial<AnalyticsRevision['semantic_spec']>): AnalyticsRevision {
   return {
@@ -91,5 +91,23 @@ describe('建模完成度', () => {
       }),
     );
     expect(gauges.find((g) => g.key === 'timeAxis')!.total).toBe(0);
+  });
+});
+
+describe('完成度条挂在哪一步', () => {
+  it('只在语义建模显示', () => {
+    // 缺口只能在语义建模里补,提示挂在别处等于让用户自己找路。
+    expect(showsCompleteness('catalog')).toBe(true);
+  });
+
+  it('不在问数验证重复提醒', () => {
+    // 那一步已经有发布前检查在说同一件事,两条颜色不同的警告只会让人分不清。
+    expect(showsCompleteness('publish')).toBe(false);
+  });
+
+  it('不压在问数反馈和数据源页头上', () => {
+    // 实测截图:问数反馈页只有一张表,头上却顶着两条与本页无关的警告。
+    expect(showsCompleteness('feedback')).toBe(false);
+    expect(showsCompleteness('tables')).toBe(false);
   });
 });

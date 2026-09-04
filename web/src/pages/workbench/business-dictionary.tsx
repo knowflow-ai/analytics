@@ -1,6 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
 import { BookOpenText, Pencil, Plus, Trash2 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   deleteCatalogResource,
   newResourceId,
@@ -23,6 +23,7 @@ import {
   useToast,
 } from "@analytics/components/ui";
 import { describeError } from "@analytics/lib/labels";
+import type { FeedbackFixTarget } from "./ask-feedback-state";
 import type { WorkbenchContext } from "./index";
 
 type TermEditorContext = Pick<
@@ -485,11 +486,16 @@ export function BusinessDictionaryPanel({
   section,
   onSectionChange,
   onOpenGraph,
+  openTarget = null,
+  onOpenTargetHandled,
 }: {
   context: TermEditorContext;
   section: BusinessDictionarySection;
   onSectionChange: (section: BusinessDictionarySection) => void;
   onOpenGraph: () => void;
+  /** 从「问数反馈」跳过来时要直接打开的成员。 */
+  openTarget?: FeedbackFixTarget | null;
+  onOpenTargetHandled?: () => void;
 }) {
   const { revision, readOnly, projectId, acceptRevision } = context;
   const toast = useToast();
@@ -497,6 +503,7 @@ export function BusinessDictionaryPanel({
   const values = revision.semantic_catalog.dimensionValues;
   const [editorTerm, setEditorTerm] = useState<AnalyticsTerm | null>();
   const [editorValue, setEditorValue] = useState<AnalyticsDimensionValue>();
+  const [termPreset, setTermPreset] = useState<TermBindingPreset>();
   const metricNames = useMemo(
     () =>
       new Map(
@@ -511,6 +518,28 @@ export function BusinessDictionaryPanel({
       ),
     [revision.semantic_spec.dimensions],
   );
+  /**
+   * 「问数反馈」把落点带过来时直接开对应的编辑器。
+   *
+   * 只预填绑定,不预填术语名:失败记录里没有「用户那个说法」这一项,拿整句问题
+   * 当术语名是造假(见 `feedbackFixTarget` 的注释)。说法由人来写。
+   */
+  useEffect(() => {
+    if (!openTarget) return;
+    if (openTarget.kind === "dimensionValue") {
+      const value = values.find((item) => item.id === openTarget.id);
+      if (value) setEditorValue(value);
+    } else {
+      setTermPreset(
+        openTarget.kind === "metric"
+          ? { metricId: openTarget.id }
+          : { dimensionId: openTarget.id },
+      );
+      setEditorTerm(null);
+    }
+    onOpenTargetHandled?.();
+  }, [openTarget, onOpenTargetHandled, values]);
+
   const remove = useMutation({
     mutationFn: (term: AnalyticsTerm) =>
       deleteCatalogResource(
@@ -661,8 +690,12 @@ export function BusinessDictionaryPanel({
       <TermEditorDialog
         context={context}
         term={editorTerm ?? undefined}
+        preset={termPreset}
         open={editorTerm !== undefined}
-        onClose={() => setEditorTerm(undefined)}
+        onClose={() => {
+          setEditorTerm(undefined);
+          setTermPreset(undefined);
+        }}
       />
       <DimensionValueEditorDialog
         context={context}

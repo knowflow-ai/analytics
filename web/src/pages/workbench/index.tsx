@@ -7,8 +7,10 @@ import type { AnalyticsRevision } from '@analytics/api/types';
 import { Badge, Button, Spinner, useToast } from '@analytics/components/ui';
 import { describeError, REVISION_STATE_LABELS } from '@analytics/lib/labels';
 import { AskFeedbackPanel } from './ask-feedback';
+import type { FeedbackFixTarget } from './ask-feedback-state';
 import { PublishPanel } from './publish';
 import { CompletenessStrip } from './completeness-strip';
+import { showsCompleteness } from './completeness';
 import { TablesPanel } from './tables';
 import { appPath } from '@analytics/api/edition';
 import { normalizeWorkbenchStep, type WorkbenchStep } from './catalog-view';
@@ -108,6 +110,10 @@ export function WorkbenchPage() {
     enabled: Boolean(revisionId),
   });
   const [revision, setRevision] = useState<AnalyticsRevision | null>(null);
+  // 「问数反馈」里点「补进词典」时带过来的落点：跨步骤只传这一个值,由业务词典
+  // 打开对应编辑器后立刻清空。存在这里而不是 URL 里,是因为它只在这一次跳转里
+  // 有意义——刷新后重新打开一个空的术语弹窗只会让人困惑。
+  const [dictionaryTarget, setDictionaryTarget] = useState<FeedbackFixTarget | null>(null);
   useEffect(() => {
     if (revisionQuery.data) setRevision(revisionQuery.data);
   }, [revisionQuery.data]);
@@ -200,9 +206,19 @@ export function WorkbenchPage() {
         </div>
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+      {/*
+        overflow-clip 而不是 overflow-hidden：两者都裁剪，但 overflow-hidden 在程序上
+        **仍然是滚动容器**——任何 scrollIntoView（我们自己的、浏览器聚焦时的自动滚动、
+        输入法的）都会去滚它，把整张卡的内容顶上去，而它没有滚动条，用户滚不回来，
+        表现就是「页面拉不下去、下半截没了」。画布还会跟着错：它按
+        getBoundingClientRect().top 算可用高度，卡被内部滚动后这个值变成负数。
+        overflow-clip 只裁剪，不建立滚动端口，从根上没有这个状态。
+      */}
+      <div className="overflow-clip rounded-xl border border-slate-200 bg-white">
         <Steps active={step} done={done} onChange={goTo} />
-      {revision && <CompletenessStrip revision={revision} goTo={goTo} />}
+        {revision && showsCompleteness(step) && (
+          <CompletenessStrip revision={revision} goTo={goTo} />
+        )}
         {readOnly && (
           <div className="border-b border-amber-100 bg-amber-50 px-4 py-2 text-xs text-amber-700">
             当前版本已{REVISION_STATE_LABELS[revision!.state]}，内容只读。
@@ -222,9 +238,24 @@ export function WorkbenchPage() {
               readOnly={readOnly}
             />
           )}
-          {context && step === 'catalog' && <SemanticCatalogPanel key={context.revision.id} {...context} />}
+          {context && step === 'catalog' && (
+            <SemanticCatalogPanel
+              key={context.revision.id}
+              {...context}
+              dictionaryTarget={dictionaryTarget}
+              onDictionaryTargetHandled={() => setDictionaryTarget(null)}
+            />
+          )}
           {context && step === 'publish' && <PublishPanel {...context} />}
-          {context && step === 'feedback' && <AskFeedbackPanel {...context} />}
+          {context && step === 'feedback' && (
+            <AskFeedbackPanel
+              {...context}
+              onFixInDictionary={(target) => {
+                setDictionaryTarget(target);
+                goTo('catalog');
+              }}
+            />
+          )}
         </div>
       </div>
     </div>

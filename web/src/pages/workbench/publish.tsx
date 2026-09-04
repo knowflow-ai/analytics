@@ -1,8 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, CheckCircle2, Circle, Info, Rocket, Send, ShieldCheck } from 'lucide-react';
-import { useMemo, useState, type FormEvent } from 'react';
+import {
+  AlertTriangle,
+  ChevronRight,
+  Info,
+  Loader2,
+  RefreshCw,
+  Rocket,
+  Send,
+  ShieldCheck,
+} from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Link } from '@analytics/lib/router';
 import {
+  createQualityReport,
   getCurrentEvaluation,
   getCurrentQualityReport,
   getDiagnostics,
@@ -14,6 +24,7 @@ import {
   newResourceId,
   previewQuery,
   publishRevision,
+  reviewQualityReport,
   validateRevision,
   versionOf,
   type QueryInput,
@@ -29,12 +40,64 @@ import { feedbackRows } from './ask-feedback-state';
 import { describeError, formatDateTime } from '@analytics/lib/labels';
 import type { WorkbenchContext } from './index';
 import { GoldenSuiteCard } from './golden-suite-card';
-import { evaluationGateTask } from './publish-gate';
+import {
+  autoPassedCount,
+  publishChecks,
+  publishHeadline,
+  publishReady,
+  qualityReportIsFresh,
+  reviewQueue,
+  shouldAutoRunQuality,
+  shouldAutoValidate,
+  type CheckState,
+  type PublishCheck,
+  type ReviewItem,
+} from './publish-checks';
 import { QualityReportCard } from './quality-report-card';
 import { StructuredTrial } from './structured-trial';
 import { appPath } from '@analytics/api/edition';
+import { ANALYTICS_TASK_PANEL_CLASS, scrollableAncestor } from '@analytics/lib/layout';
 
-export function PublishPanel({ projectId, revision, acceptRevision, readOnly }: WorkbenchContext) {
+const CHECK_BOX: Record<CheckState, string> = {
+  queued: 'border-slate-200 bg-white',
+  running: 'border-blue-200 bg-blue-50/60',
+  passed: 'border-slate-200 bg-white',
+  attention: 'border-amber-200 bg-amber-50/50',
+  blocked: 'border-red-200 bg-red-50/50',
+};
+const CHECK_TEXT: Record<CheckState, string> = {
+  queued: 'text-slate-400',
+  running: 'text-blue-700',
+  passed: 'text-emerald-700',
+  attention: 'text-amber-700',
+  blocked: 'text-red-700',
+};
+const CHECK_DOT: Record<CheckState, string> = {
+  queued: 'border-[1.5px] border-slate-300',
+  running: 'border-2 border-blue-200 border-t-blue-600 animate-spin',
+  passed: 'bg-emerald-500',
+  attention: 'bg-amber-500',
+  blocked: 'bg-red-600',
+};
+const HEAD_ICON = {
+  running: 'bg-blue-50 text-blue-600',
+  blocked: 'bg-red-50 text-red-600',
+  attention: 'bg-amber-50 text-amber-600',
+  ok: 'bg-emerald-50 text-emerald-600',
+};
+
+/**
+ * 问数验证：能自己跑的自己跑。
+ *
+ * 原来结构校验和数据质量都要手点，不点就没有结论——而发布门禁读的正是这两份结论，
+ * 于是「发布」按钮亮着、点下去后端 409，用户看到的是「点了没反应」。这两件事机器
+ * 完全判得了（一个只读当前草稿，一个对数据库做只读检查），让人点只是把机器的活儿
+ * 摊给了人。判定住在 `publish-checks.ts`，这里只负责触发和显示。
+ *
+ * 评测集不自动跑：重放会把每条用例跑一遍完整问数链路（含模型调用），进一次页面就
+ * 花掉一次预算，不该是默认行为。
+ */
+export function PublishPanel({ projectId, revision, acceptRevision, readOnly, goTo }: WorkbenchContext) {
   const toast = useToast();
   const queryClient = useQueryClient();
   const diagnostics = useQuery({
@@ -58,16 +121,50 @@ export function PublishPanel({ projectId, revision, acceptRevision, readOnly }: 
     return new Map(entries);
   }, [revision.semantic_spec]);
 
+  const qualityKey = ['quality-report', projectId, revision.id, revision.etag];
+  const quality = useQuery({
+    queryKey: qualityKey,
+    queryFn: () => getCurrentQualityReport(projectId, revision.id),
+  });
+  const evaluation = useQuery({
+    queryKey: ['evaluation-latest', projectId, revision.id, revision.etag],
+    queryFn: () => getCurrentEvaluation(projectId, revision.id),
+  });
+
+  const [structureError, setStructureError] = useState<string | null>(null);
+  const [showPassed, setShowPassed] = useState(false);
+  // 评测集是三道检查里唯一要人主动跑的（重放会花掉一次模型预算）。格子里没有入口
+  // 的话，用户得自己滚到页面最底下才找得到那张卡。
+  const evaluationRef = useRef<HTMLDivElement>(null);
+  // 自动跑过一次就不再跑，按「哪一版」记账：草稿一改 etag 就变，自然会重跑。
+  const autoRan = useRef<{ validate: string | null; quality: string | null }>({
+    validate: null,
+    quality: null,
+  });
+  const versionKey = `${revision.id}:${revision.etag}`;
+
   const validate = useMutation({
     mutationFn: () => validateRevision(projectId, revision.id),
     onSuccess: (next) => {
+      setStructureError(null);
       acceptRevision(next);
-      toast.success('校验通过，可以发布。');
     },
     onError: (error) => {
-      toast.error(describeError(error));
+      // 自动跑失败不弹 toast：进页面就甩一个红条，等于用报错代替了本来该好好显示的
+      // 诊断列表。原因写进结构校验那一格。
+      setStructureError(describeError(error));
       diagnostics.refetch();
     },
+  });
+  const runQuality = useMutation({
+    mutationFn: () => createQualityReport(projectId, revision.id, versionOf(revision)),
+    onSuccess: (next) => queryClient.setQueryData(qualityKey, { report: next }),
+  });
+  const review = useMutation({
+    mutationFn: (decisions: Array<{ preview_id: string; confirm: boolean }>) =>
+      reviewQualityReport(projectId, revision.id, quality.data!.report!, decisions),
+    onSuccess: (next) => queryClient.setQueryData(qualityKey, { report: next }),
+    onError: (error) => toast.error(describeError(error)),
   });
   const rollback = useMutation({
     mutationFn: () => rollbackRelease(projectId),
@@ -89,159 +186,275 @@ export function PublishPanel({ projectId, revision, acceptRevision, readOnly }: 
     onError: (error) => toast.error(describeError(error)),
   });
 
-  // 发布门禁要求质量报告存在且 ready(无阻断 且 无待核对)。此前按钮只看
-  // revision.state,显示「可发布」但后端 409 拒绝——用户看到的是「点了没反应」。
-  const quality = useQuery({
-    queryKey: ['quality-report', projectId, revision.id, revision.etag],
-    queryFn: () => getCurrentQualityReport(projectId, revision.id),
-  });
   const report = quality.data?.report ?? null;
-  const pendingReviewCount = (report?.metric_previews ?? []).filter(
-    (item) => item.status === 'pending_review',
-  ).length;
-  const qualityReady = Boolean(report?.ready);
-  const evaluation = useQuery({
-    queryKey: ['evaluation-latest', projectId, revision.id, revision.etag],
-    queryFn: () => getCurrentEvaluation(projectId, revision.id),
-  });
-  const evalReport = evaluation.data?.report ?? null;
-  // 发布门禁有三道:结构校验、数据质量、黄金评测。此前界面一道都没体现,
-  // 用户只能靠点发布撞 409 才知道差什么。
-  const publishTasks = [
-    {
-      key: 'quality',
-      label: '数据质量校验',
-      done: qualityReady,
-      hint: qualityReady
-        ? '已核对'
-        : report === null
-          ? '尚未核对'
-          : report.blocking_count > 0
-            ? `${report.blocking_count} 个阻断问题`
-            : `${pendingReviewCount} 项指标样本待确认`,
-    },
-    { label: '评测集', ...evaluationGateTask(evalReport) },
-  ];
-  const publishReady = publishTasks.every((task) => task.done);
+  const freshReport = qualityReportIsFresh(report, revision.etag) ? report : null;
+
+  useEffect(() => {
+    const ok = shouldAutoValidate({
+      revisionState: revision.state,
+      readOnly,
+      diagnosticsLoaded: Boolean(diagnostics.data),
+      diagnosticsReady: Boolean(diagnostics.data?.ready),
+      alreadyTried: autoRan.current.validate === versionKey,
+    });
+    if (!ok) return;
+    autoRan.current.validate = versionKey;
+    validate.mutate();
+    // validate 是稳定的 mutation 对象，放进依赖只会让 effect 白跑。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [diagnostics.data, readOnly, revision.state, versionKey]);
+
+  useEffect(() => {
+    const ok = shouldAutoRunQuality({
+      revisionState: revision.state,
+      readOnly,
+      report: quality.isPending ? undefined : report,
+      revisionEtag: revision.etag,
+      alreadyTried: autoRan.current.quality === versionKey,
+    });
+    if (!ok) return;
+    autoRan.current.quality = versionKey;
+    runQuality.mutate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quality.isPending, readOnly, report, revision.etag, revision.state, versionKey]);
 
   const blocking = diagnostics.data?.diagnostics.filter((d) => d.blocking) ?? [];
   const warnings = diagnostics.data?.diagnostics.filter((d) => !d.blocking) ?? [];
-  const validated = revision.state === 'validated';
+
+  const checks = publishChecks({
+    revisionState: revision.state,
+    diagnosticsLoaded: Boolean(diagnostics.data),
+    blockingCount: blocking.length,
+    structureRunning: validate.isPending,
+    structureError,
+    qualityRunning: runQuality.isPending,
+    report: freshReport,
+    revisionEtag: revision.etag,
+    evaluation: evaluation.data?.report ?? null,
+  });
+  const queue = reviewQueue({
+    diagnostics: diagnostics.data?.diagnostics ?? [],
+    report: freshReport,
+    names: semanticNames,
+  });
+  const ready = publishReady(checks, queue) && !readOnly;
+  const autoPassed = autoPassedCount(freshReport, queue);
+  const headline = publishHeadline({
+    checks,
+    queue,
+    revisionState: revision.state,
+    autoPassed,
+  });
+  const busy = checks.some((check) => check.state === 'running');
+  const pendingPreviews = queue.filter((item) => item.previewId && !item.rejected);
+
+  /**
+   * 手动重跑。一般用不上——改了建模 etag 就变，自动跑会重新来一遍。
+   *
+   * 把手动跑的那一项记成「这一版已经跑过」：否则 `diagnostics.refetch()` 回来后
+   * 自动跑的判定又成立，同一次点击会发两遍请求。
+   */
+  /**
+   * 滚到评测集那张卡。
+   *
+   * 不用 `scrollIntoView`：工作台外面那张卡是裁剪容器，scrollIntoView 会连它一起滚，
+   * 把整页内容顶上去且滚不回来（用户实测「拉不下去」）。这里只滚真正带滚动条的祖先。
+   */
+  const scrollToEvaluation = () => {
+    const node = evaluationRef.current;
+    if (!node) return;
+    const scroller = scrollableAncestor(node);
+    if (!scroller) return;
+    const top =
+      node.getBoundingClientRect().top -
+      scroller.getBoundingClientRect().top +
+      scroller.scrollTop -
+      24;
+    scroller.scrollTo({ top, behavior: 'smooth' });
+  };
+
+  const rerun = () => {
+    setStructureError(null);
+    autoRan.current = { validate: null, quality: null };
+    diagnostics.refetch();
+    if (readOnly) return;
+    const withToast = { onError: (error: unknown) => toast.error(describeError(error)) };
+    if (revision.state === 'draft') {
+      autoRan.current.validate = versionKey;
+      validate.mutate(undefined, withToast);
+    } else {
+      autoRan.current.quality = versionKey;
+      runQuality.mutate(undefined, withToast);
+    }
+  };
 
   return (
-    <div className="grid min-h-[560px] grid-cols-[1fr_320px]">
-      <section className="px-6 py-5">
-        <h2 className="text-sm font-semibold text-slate-900">校验与发布</h2>
-        <p className="mt-0.5 text-xs text-slate-400">
-          校验检查关系基数、指标覆盖、查询作用域的唯一安全路径与默认计数绑定；发布会冻结完整目录并建立语义索引。
-        </p>
-
-        <div className="mt-5 flex items-center gap-3 rounded-lg border border-slate-200 p-4">
-          <span
-            className={`grid h-9 w-9 place-items-center rounded-lg ${
-              validated || revision.state === 'published'
-                ? 'bg-emerald-50 text-emerald-600'
-                : blocking.length
-                  ? 'bg-red-50 text-red-600'
-                  : 'bg-slate-100 text-slate-500'
-            }`}
-          >
-            <ShieldCheck className="h-5 w-5" />
-          </span>
-          <div className="flex-1 text-xs">
-            <div className="font-medium text-slate-800">
-              {revision.state === 'published'
-                ? '本版本已发布'
-                : validated
-                  ? publishReady
-                    ? '已校验，可发布'
-                    : '已校验，还有发布前检查未完成'
-                  : diagnostics.data?.ready
-                    ? '无阻断问题，可以校验'
-                    : `${blocking.length} 个阻断问题`}
+    <div className={`grid min-h-[560px] grid-cols-[minmax(0,1fr)_320px] ${ANALYTICS_TASK_PANEL_CLASS}`}>
+      <section className="min-w-0 px-6 py-5">
+        {/* 一、检查总条：自动跑，不需要点 */}
+        <div className="rounded-lg border border-slate-200 p-4">
+          <div className="flex items-start gap-3">
+            <span
+              className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg ${HEAD_ICON[headline.tone]}`}
+            >
+              {headline.tone === 'running' ? (
+                <Loader2 className="h-5 w-5 animate-spin" />
+              ) : headline.tone === 'ok' ? (
+                <ShieldCheck className="h-5 w-5" />
+              ) : (
+                <AlertTriangle className="h-5 w-5" />
+              )}
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="text-[13px] font-semibold text-slate-900">{headline.title}</div>
+              <div className="mt-0.5 text-[11px] leading-relaxed text-slate-400">
+                {headline.sub}
+              </div>
+              <div className="mt-0.5 text-[11px] text-slate-400">
+                v{revision.etag} · 快照 {revision.schema_snapshot_hash.slice(0, 10)}
+              </div>
             </div>
-            <div className="text-slate-400">v{revision.etag} · 快照 {revision.schema_snapshot_hash.slice(0, 10)}</div>
+            <div className="flex shrink-0 items-center gap-2">
+              {!readOnly && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  icon={<RefreshCw className="h-3.5 w-3.5" />}
+                  loading={busy}
+                  onClick={rerun}
+                  title="改了建模会自动重跑，一般不需要点"
+                >
+                  重跑
+                </Button>
+              )}
+              {revision.state === 'published' ? (
+                <Link to={appPath(`/projects/${projectId}/ask`)}>
+                  <Button size="sm" variant="primary">
+                    开始问数
+                  </Button>
+                </Link>
+              ) : (
+                <Button
+                  size="sm"
+                  variant={ready ? 'primary' : 'default'}
+                  icon={<Rocket className="h-3.5 w-3.5" />}
+                  loading={publish.isPending}
+                  disabled={!ready}
+                  onClick={() => publish.mutate()}
+                >
+                  发布
+                </Button>
+              )}
+            </div>
           </div>
-          {!readOnly && !validated && (
-            <Button loading={validate.isPending} onClick={() => validate.mutate()}>
-              校验
-            </Button>
-          )}
-          {validated && (
-            <Button variant="primary" icon={<Rocket className="h-4 w-4" />} loading={publish.isPending}
-              disabled={!publishReady} onClick={() => publish.mutate()}>
-              发布
-            </Button>
-          )}
-          {revision.state === 'published' && (
-            <Link to={appPath(`/projects/${projectId}/ask`)}>
-              <Button variant="primary">开始问数</Button>
-            </Link>
+
+          <div className="mt-3.5 flex items-stretch gap-2">
+            {checks.map((check) => (
+              <CheckCell
+                key={check.key}
+                check={check}
+                onGo={
+                  check.key === 'evaluation' && check.state !== 'passed'
+                    ? scrollToEvaluation
+                    : undefined
+                }
+              />
+            ))}
+          </div>
+
+          {/* 自动校验失败时原因不能只剩一个「未通过」——那等于把错误咽掉了。 */}
+          {structureError && (
+            <div className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+              结构校验没通过：{structureError}
+            </div>
           )}
         </div>
 
-        {validated && revision.state !== 'published' && (
-          <ul className="mt-3 flex flex-col gap-2 rounded-lg border border-slate-200 p-4">
-            <li className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-              发布前检查
-            </li>
-            {publishTasks.map((task) => (
-              <li key={task.key} className="flex items-center gap-2 text-xs">
-                {task.done ? (
-                  <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
-                ) : (
-                  <Circle className="h-4 w-4 shrink-0 text-slate-300" />
-                )}
-                <span className={task.done ? 'text-slate-500' : 'font-medium text-slate-800'}>
-                  {task.label}
-                </span>
-                <span className="ml-auto text-slate-400">{task.hint}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-
-        {diagnostics.isPending && <Spinner />}
-        {diagnostics.isError && <div className="mt-4 text-xs text-red-600">{describeError(diagnostics.error)}</div>}
-        {diagnostics.data && (
-          <div className="mt-5 flex flex-col gap-4">
-            {diagnostics.data.diagnostics.length === 0 && (
-              <div className="flex items-center gap-2 text-xs text-emerald-600">
-                <CheckCircle2 className="h-4 w-4" /> 没有发现问题。
-              </div>
-            )}
-            {[...blocking, ...warnings].map((item, index) => (
-              <div
-                key={`${item.diagnostic_code}-${index}`}
-                className={`rounded-lg border p-3 text-xs ${
-                  item.blocking ? 'border-red-200 bg-red-50/50' : 'border-slate-200'
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  {item.blocking ? (
-                    <AlertTriangle className="h-4 w-4 text-red-600" />
-                  ) : (
-                    <Info className="h-4 w-4 text-slate-400" />
-                  )}
-                  <span className="font-medium text-slate-800">{item.title}</span>
-                  <Badge tone={item.blocking ? 'red' : 'slate'}>{item.blocking ? '阻断' : '提醒'}</Badge>
-                </div>
-                <div className="mt-1 text-slate-600">{item.message}</div>
-                {item.recommended_action && (
-                  <div className="mt-1 text-[11px] text-slate-400">建议：{item.recommended_action}</div>
-                )}
-              </div>
-            ))}
+        {/* 二、只有人能拍板的 */}
+        {queue.length > 0 && !busy && (
+          <div className="mt-5">
+            <div className="mb-2 flex items-center gap-2">
+              <h3 className="text-[13px] font-semibold text-slate-900">需要你确认</h3>
+              <Badge tone="amber">{queue.length}</Badge>
+              <span className="text-[11px] text-slate-400">
+                机器判得了的都判完了，剩下的是只有人能拍板的
+              </span>
+              {pendingPreviews.length > 1 && !readOnly && (
+                <Button
+                  size="sm"
+                  className="ml-auto"
+                  loading={review.isPending}
+                  onClick={() =>
+                    review.mutate(
+                      pendingPreviews.map((item) => ({ preview_id: item.previewId!, confirm: true })),
+                    )
+                  }
+                >
+                  全部数值正确
+                </Button>
+              )}
+            </div>
+            <ul className="overflow-hidden rounded-lg border border-slate-200">
+              {queue.map((item) => (
+                <QueueRow
+                  key={item.id}
+                  item={item}
+                  readOnly={readOnly}
+                  busy={review.isPending}
+                  onDecide={(confirm) =>
+                    review.mutate([{ preview_id: item.previewId!, confirm }])
+                  }
+                />
+              ))}
+            </ul>
           </div>
         )}
-        <QualityReportCard
-          projectId={projectId}
-          revision={revision}
-          names={semanticNames}
-          readOnly={readOnly}
-        />
+
+        {/* 三、自动通过的检查：默认折叠 */}
+        <div className="mt-3 rounded-lg border border-slate-200">
+          <button
+            type="button"
+            aria-expanded={showPassed}
+            onClick={() => setShowPassed(!showPassed)}
+            className="flex w-full items-center gap-2 px-3 py-2.5 text-left"
+          >
+            <ChevronRight
+              className={`h-3.5 w-3.5 text-slate-400 transition-transform ${showPassed ? 'rotate-90' : ''}`}
+            />
+            <span className="text-xs text-slate-600">自动通过的检查</span>
+            <span className="text-xs text-slate-400">{autoPassed} 项</span>
+            <span className="ml-auto text-[11px] text-slate-400">
+              {showPassed ? '收起' : '一般不用看'}
+            </span>
+          </button>
+          {showPassed && (
+            <div className="border-t border-slate-100 px-4 py-3">
+              {warnings.length > 0 && (
+                <div className="mb-3 flex flex-col gap-2">
+                  {warnings.map((item, index) => (
+                    <div
+                      key={`${item.diagnostic_code}-${index}`}
+                      className="rounded-md border border-slate-200 p-2.5 text-xs"
+                    >
+                      <div className="flex items-center gap-2">
+                        <Info className="h-3.5 w-3.5 text-slate-400" />
+                        <span className="font-medium text-slate-700">{item.title}</span>
+                        <Badge tone="slate">提醒</Badge>
+                      </div>
+                      <div className="mt-1 text-slate-500">{item.message}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <QualityReportCard report={freshReport} names={semanticNames} />
+            </div>
+          )}
+        </div>
+
         <TrialQuestions projectId={projectId} revision={revision} />
-        <GoldenSuiteCard projectId={projectId} revision={revision} readOnly={readOnly} />
+        <div ref={evaluationRef}>
+          <GoldenSuiteCard projectId={projectId} revision={revision} readOnly={readOnly} />
+        </div>
       </section>
 
       <aside className="border-l border-slate-100 px-4 py-5">
@@ -275,12 +488,88 @@ export function PublishPanel({ projectId, revision, acceptRevision, readOnly }: 
             </li>
           ))}
         </ul>
-        <QueryFailuresCard projectId={projectId} />
+        <QueryFailuresCard projectId={projectId} onGo={() => goTo('feedback')} />
       </aside>
     </div>
   );
 }
 
+function CheckCell({ check, onGo }: { check: PublishCheck; onGo?: () => void }) {
+  const body = (
+    <>
+      <div className="flex items-center gap-2">
+        <span className={`h-3 w-3 shrink-0 rounded-full ${CHECK_DOT[check.state]}`} />
+        <span className="text-xs font-medium text-slate-700">{check.label}</span>
+        <span className={`ml-auto text-[11px] font-medium ${CHECK_TEXT[check.state]}`}>
+          {check.status}
+        </span>
+      </div>
+      <div className="mt-1 truncate text-[11px] text-slate-400">
+        {onGo ? '点这里去运行' : check.hint}
+      </div>
+    </>
+  );
+  const className = `min-w-0 flex-1 rounded-md border p-2.5 text-left ${CHECK_BOX[check.state]}`;
+  if (!onGo) return <div className={className}>{body}</div>;
+  return (
+    <button type="button" onClick={onGo} className={`${className} hover:border-amber-300`}>
+      {body}
+    </button>
+  );
+}
+
+function QueueRow({
+  item,
+  readOnly,
+  busy,
+  onDecide,
+}: {
+  item: ReviewItem;
+  readOnly: boolean;
+  busy: boolean;
+  onDecide: (confirm: boolean) => void;
+}) {
+  return (
+    <li
+      className={`flex items-start gap-2.5 border-b border-slate-100 px-3 py-2.5 last:border-b-0 ${
+        item.tone === 'blocking' ? 'bg-red-50/40' : ''
+      }`}
+    >
+      <span className="mt-0.5 shrink-0">
+        <Badge tone={item.tone === 'blocking' ? 'red' : 'amber'}>{item.badge}</Badge>
+      </span>
+      <div className="min-w-0 flex-1 text-xs">
+        <div className="text-slate-800">
+          <b className="font-semibold">{item.title}</b>
+          {item.detail && <span className="ml-2 text-slate-600">{item.detail}</span>}
+        </div>
+        {item.hint && <div className="mt-1 leading-relaxed text-slate-400">{item.hint}</div>}
+      </div>
+      {item.previewId && !readOnly && (
+        <div className="flex shrink-0 items-center gap-3 pt-0.5">
+          <button
+            type="button"
+            disabled={busy}
+            className="text-[11px] font-medium text-blue-600 hover:text-blue-500 disabled:opacity-50"
+            onClick={() => onDecide(true)}
+          >
+            {item.rejected ? '其实是对的' : '数值正确'}
+          </button>
+          {!item.rejected && (
+            <button
+              type="button"
+              disabled={busy}
+              className="text-[11px] font-medium text-red-600 hover:text-red-500 disabled:opacity-50"
+              onClick={() => onDecide(false)}
+            >
+              不对
+            </button>
+          )}
+        </div>
+      )}
+    </li>
+  );
+}
 
 /**
  * Ask the unpublished candidate directly. Same core path as the live query
@@ -485,12 +774,19 @@ function TrialQuestions({ projectId, revision }: Pick<WorkbenchContext, 'project
 
 
 /**
- * 系统没接住的说法:一手数据,发布后回来看一眼就知道该补哪些说法。
+ * 右栏只留一句摘要，不再把「问数反馈」整页搬过来。
  *
- * 三种收场混在一起会误导——用户澄清后其实答出来了的,标成"没答上"是假话。
- * 与「问数反馈」页共用同一套归并与措辞。
+ * 早先这里逐条列了 50 条没接住的说法，一屏塞满、把发布历史挤没了，而第 4 步
+ * 「问数反馈」正是同一份数据的正经去处（那里还能一键补进词典）。同一份证据在两个
+ * 地方各展示一遍，用户不知道该在哪儿处理。
  */
-function QueryFailuresCard({ projectId }: { projectId: string }) {
+function QueryFailuresCard({
+  projectId,
+  onGo,
+}: {
+  projectId: string;
+  onGo: () => void;
+}) {
   const failures = useQuery({
     queryKey: ['query-failures', projectId],
     queryFn: () => listQueryFailures(projectId, 50),
@@ -498,21 +794,20 @@ function QueryFailuresCard({ projectId }: { projectId: string }) {
   const rows = feedbackRows(failures.data?.items ?? []);
   if (failures.isPending || rows.length === 0) return null;
   return (
-    <div className="mt-5">
-      <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-        系统没接住的说法 {rows.length}
+    <div className="mt-5 rounded-lg border border-slate-200 p-3">
+      <div className="text-xs text-slate-700">
+        线上有 <b className="font-semibold">{rows.length}</b> 种说法系统没接住
       </div>
-      <ul className="flex flex-col gap-1.5">
-        {rows.slice(0, 20).map((row, index) => (
-          <li key={index} className="rounded-md border border-slate-200 px-2.5 py-1.5 text-[11px]">
-            <div className="text-slate-700">「{row.question}」</div>
-            <div className="mt-0.5 text-slate-400">{row.what}</div>
-          </li>
-        ))}
-      </ul>
-      <div className="mt-1.5 text-[10px] leading-relaxed text-slate-400">
-        多数是说法没被别名覆盖。到对应实体的指标 / 维度里把这些说法补成别名,下次就能答上。
+      <div className="mt-1.5 text-[11px] leading-relaxed text-slate-400">
+        最高频的是「{rows[0].question}」。多数补个别名就能答上。
       </div>
+      <button
+        type="button"
+        onClick={onGo}
+        className="mt-2 text-[11px] font-medium text-blue-600 hover:text-blue-500"
+      >
+        去问数反馈处理 →
+      </button>
     </div>
   );
 }

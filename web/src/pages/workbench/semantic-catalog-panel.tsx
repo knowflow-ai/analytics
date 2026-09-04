@@ -1,7 +1,8 @@
 import { BookOpenText, GitBranch, ListTree, Sparkles } from 'lucide-react';
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Badge, Button, Empty } from '@analytics/components/ui';
 import type { AnalyticsSemanticContextEntry } from '@analytics/api/types';
+import type { FeedbackFixTarget } from './ask-feedback-state';
 import type { WorkbenchContext } from './index';
 import {
   AiModelingPanel,
@@ -69,11 +70,19 @@ export function catalogAiActionState({
   };
 }
 
+/**
+ * 进入「语义建模」时的落点。
+ *
+ * 目录非空时落在实体与关系画布,不是目录概览:概览是一份读不动的资源清单
+ * （Model / Field / Metric 的计数与 DTO），用户第一眼看到它并不知道该动哪里；
+ * 这一步真正要人确认的是关系基数与字段角色，那些都在画布上。目录还是空的时候
+ * 仍落到 AI 一键建模——那时画布上没有东西可看。
+ */
 export function initialCatalogView(spec: {
   metrics: ReadonlyArray<unknown>;
   dimensions: ReadonlyArray<unknown>;
 }): CatalogView {
-  return spec.metrics.length || spec.dimensions.length ? 'overview' : 'ai';
+  return spec.metrics.length || spec.dimensions.length ? 'graph' : 'ai';
 }
 
 export function catalogResourceDestination(kind: CatalogResourceKind):
@@ -132,7 +141,14 @@ const RESOURCE_ORDER = Object.keys(RESOURCE_LABELS) as CatalogResourceKind[];
  * The public modeling surface. QueryScope remains in the wire contract for
  * query compatibility, but is exposed only as a deterministic diagnostic.
  */
-export function SemanticCatalogPanel(context: WorkbenchContext) {
+export function SemanticCatalogPanel(
+  props: WorkbenchContext & {
+    /** 从「问数反馈」跳过来时要打开的词典成员;打开后由父级清空。 */
+    dictionaryTarget?: FeedbackFixTarget | null;
+    onDictionaryTargetHandled?: () => void;
+  },
+) {
+  const { dictionaryTarget = null, onDictionaryTargetHandled, ...context } = props;
   const spec = context.revision.semantic_spec;
   const modelingSession = useModelingJobSession(
     context.projectId,
@@ -141,6 +157,15 @@ export function SemanticCatalogPanel(context: WorkbenchContext) {
   const [view, setView] = useState<CatalogView>(() => initialCatalogView(spec));
   const [dictionarySection, setDictionarySection] =
     useState<BusinessDictionarySection>('terms');
+  // 从问数反馈带着落点跳过来:先把视图切到业务词典的对应分区,再由词典面板打开
+  // 编辑器。少了这一步,用户会落在实体与关系画布上,还得自己找到业务词典。
+  useEffect(() => {
+    if (!dictionaryTarget) return;
+    setDictionarySection(
+      dictionaryTarget.kind === 'dimensionValue' ? 'dimensionValues' : 'terms',
+    );
+    setView('dictionary');
+  }, [dictionaryTarget]);
   const navIcons: Record<(typeof CATALOG_NAV_ITEMS)[number]['key'], ReactNode> = {
     overview: <BookOpenText className="h-3.5 w-3.5" />,
     graph: <GitBranch className="h-3.5 w-3.5" />,
@@ -171,7 +196,8 @@ export function SemanticCatalogPanel(context: WorkbenchContext) {
   const nestedContext: WorkbenchContext = {
     ...context,
     goTo: (step) => {
-      if (step === 'catalog') setView('overview');
+      // 采用 AI 建议后回到语义建模,落点与首次进入一致:能动手的画布,不是概览。
+      if (step === 'catalog') setView('graph');
       context.goTo(step);
     },
   };
@@ -246,6 +272,8 @@ export function SemanticCatalogPanel(context: WorkbenchContext) {
           section={dictionarySection}
           onSectionChange={setDictionarySection}
           onOpenGraph={() => setView('graph')}
+          openTarget={dictionaryTarget}
+          onOpenTargetHandled={onDictionaryTargetHandled}
         />
       )}
       {view === 'ai' && (

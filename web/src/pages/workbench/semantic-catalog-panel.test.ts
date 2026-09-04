@@ -37,9 +37,15 @@ describe('semantic modeling navigation', () => {
     });
   });
 
-  it('opens first-time empty modeling in AI while returning established catalogs to overview', () => {
+  it('opens first-time empty modeling in AI and lands established catalogs on the graph', () => {
+    /**
+     * 「目录概览」是一份读不动的资源清单：落在那里，用户第一眼看到的是
+     * Model / Field / Metric 的计数，而不是能动手的地方。这一步真正要人确认的
+     * 是实体与关系（关系基数、字段角色），落点就该是画布。空目录仍落到 AI 建模。
+     */
     expect(initialCatalogView({ metrics: [], dimensions: [] })).toBe('ai');
-    expect(initialCatalogView({ metrics: [{ id: 'm' }], dimensions: [] })).toBe('overview');
+    expect(initialCatalogView({ metrics: [{ id: 'm' }], dimensions: [] })).toBe('graph');
+    expect(initialCatalogView({ metrics: [], dimensions: [{ id: 'd' }] })).toBe('graph');
   });
 
   it('deep-links language resources from the catalog inventory into the business dictionary', () => {

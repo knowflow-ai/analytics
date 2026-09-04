@@ -139,3 +139,107 @@ export function feedbackRows(items: AnalyticsQueryFailure[]): FeedbackRow[] {
       a.question.localeCompare(b.question, 'zh-CN'),
   );
 }
+
+/** 词典里能承接这条证据的那个成员。 */
+export interface FeedbackFixTarget {
+  kind: 'metric' | 'dimension' | 'dimensionValue';
+  id: string;
+  name: string;
+}
+
+/** 判定只读当前草稿目录里的这三类成员，不读问题文本。 */
+export interface FeedbackCatalogIndex {
+  metrics: ReadonlyArray<{ id: string; name: string }>;
+  dimensions: ReadonlyArray<{ id: string; name: string }>;
+  dimensionValues: ReadonlyArray<{ id: string; display_name: string }>;
+}
+
+const sameName = (a: string, b: string) => a.trim() === b.trim();
+
+/**
+ * 这条证据能不能直接落到某个受治理成员上。
+ *
+ * 只认 `resolution`——它是**这一轮真的定下来的正解**（用户在澄清卡上选中的成员名，
+ * 或未发布取值的近似建议），不是从问句里猜出来的。名字必须在当前草稿目录里
+ * **恰好命中一个**成员；0 个或多个一律返回 null，让这条留在「要先诊断」里。
+ *
+ * 为什么不顺便把用户那句没被认出来的说法也预填进去：记录里根本没有它。
+ * `QueryFailureRecord` 只存整句问题、正解和错误码，没存「哪个片段没匹配上」。
+ * 拿整句问题当术语名是造假；猜一个片段比不猜更糟（同一条原则见维度值近似建议的
+ * 0.6 阈值）。所以只预填绑定，说法由人来写。
+ */
+export function feedbackFixTarget(
+  row: Pick<FeedbackRow, 'kind' | 'resolution'>,
+  catalog: FeedbackCatalogIndex,
+): FeedbackFixTarget | null {
+  const resolution = (row.resolution || '').trim();
+  if (!resolution) return null;
+
+  if (row.kind === 'clarified' || row.kind === 'inferred') {
+    const metrics = catalog.metrics.filter((item) => sameName(item.name, resolution));
+    const dimensions = catalog.dimensions.filter((item) => sameName(item.name, resolution));
+    if (metrics.length + dimensions.length !== 1) return null;
+    const hit = metrics[0] ?? dimensions[0];
+    return {
+      kind: metrics.length === 1 ? 'metric' : 'dimension',
+      id: hit.id,
+      name: hit.name,
+    };
+  }
+
+  if (row.kind === 'unknown_value') {
+    const values = catalog.dimensionValues.filter((item) =>
+      sameName(item.display_name, resolution),
+    );
+    if (values.length !== 1) return null;
+    return { kind: 'dimensionValue', id: values[0].id, name: values[0].display_name };
+  }
+
+  return null;
+}
+
+/** 页头三个数：全部由本页数据算出来，不编造「线上提问总数」这类拿不到的量。 */
+export interface FeedbackSummary {
+  /** 归并后的说法条数。 */
+  sayings: number;
+  /** 这些说法累计被问了多少次。 */
+  occurrences: number;
+  /** 其中能直接补进词典的条数。 */
+  fixable: number;
+}
+
+export function feedbackSummary(
+  rows: ReadonlyArray<FeedbackRow>,
+  catalog: FeedbackCatalogIndex,
+): FeedbackSummary {
+  return {
+    sayings: rows.length,
+    occurrences: rows.reduce((total, row) => total + row.count, 0),
+    fixable: rows.filter((row) => feedbackFixTarget(row, catalog) !== null).length,
+  };
+}
+
+/**
+ * 按「接下来做什么」分组，不按内部收场类型分。
+ *
+ * 早先的分组是 clarified / inferred / unknown_value / refused 四类内部状态，会出
+ * 一种自相矛盾：「说了不认识的取值」被排在「补别名就能解决」之外，可它每一条都挂着
+ * 「补进词典」按钮。分组标签必须和按钮说同一件事——有落点的进「能直接补进词典」，
+ * 没落点的进「要先诊断」。
+ */
+export type FeedbackFilter = 'all' | 'dictionary' | 'diagnose';
+
+export const FEEDBACK_FILTERS: ReadonlyArray<{ key: FeedbackFilter; label: string }> = [
+  { key: 'all', label: '全部' },
+  { key: 'dictionary', label: '能直接补进词典' },
+  { key: 'diagnose', label: '要先诊断' },
+];
+
+export function matchesFeedbackFilter(
+  filter: FeedbackFilter,
+  fix: FeedbackFixTarget | null,
+): boolean {
+  if (filter === 'all') return true;
+  if (filter === 'dictionary') return fix !== null;
+  return fix === null;
+}

@@ -59,6 +59,7 @@ from knowflow_analytics.query.contracts import (
     QueryError,
     QueryFailureRecord,
     QueryInterpretation,
+    QueryOptions,
     QueryRequest,
     QueryResponse,
     QueryRowFilter,
@@ -694,6 +695,7 @@ class AnalyticsQueryService:
                         selected_element_id=effective_selected_element_id,
                         selected_element_type=effective_selected_element_type,
                         selected_time_dimension_id=selected_time_dimension_id,
+                        options=request.options,
                     )
                 else:
                     candidate_set = self._orchestrator.discover_selected_scope(
@@ -705,6 +707,7 @@ class AnalyticsQueryService:
                         selected_element_id=effective_selected_element_id,
                         selected_element_type=effective_selected_element_type,
                         selected_time_dimension_id=selected_time_dimension_id,
+                        options=request.options,
                     )
             else:
                 candidate_set = self._orchestrator.discover(
@@ -718,6 +721,7 @@ class AnalyticsQueryService:
                     selected_time_dimension_id=selected_time_dimension_id,
                     tenant_id=tenant_id,
                     allowed_element_ids=allowed_element_ids,
+                    options=request.options,
                 )
             trace[-1] = QueryTraceStep(
                 stage=QueryStage.CANDIDATE_DISCOVERY,
@@ -1020,6 +1024,7 @@ class AnalyticsQueryService:
                 tenant_id=tenant_id,
                 mapping_evidence=generation_evidence or global_evidence,
                 allowed_element_ids=allowed_element_ids,
+                options=request.options,
             )
             # 并集只用于生成。绑定完成后，候选立刻改挂到反推出的真实作用域上——
             # 后面的查询规则、历史、诊断都必须看到那个作用域，而不是生成期的并集。
@@ -1259,7 +1264,7 @@ class AnalyticsQueryService:
                     detail={"guard": "executor_preflight"},
                 )
             )
-            self._dry_run(physical=physical, release=release, trace=trace)
+            self._dry_run(physical=physical, release=release, trace=trace, options=request.options)
             trace.append(QueryTraceStep(stage=QueryStage.EXECUTING, status="started"))
             result = self._targets.for_project(release.project_id).executor.execute(
                 query=physical, release=release
@@ -1631,7 +1636,9 @@ class AnalyticsQueryService:
                     detail={"guard": "executor_preflight"},
                 )
             )
-            self._dry_run(physical=physical, release=release, trace=trace)
+            self._dry_run(
+                physical=physical, release=release, trace=trace, options=QueryOptions()
+            )
             trace.append(QueryTraceStep(stage=QueryStage.EXECUTING, status="started"))
             result = self._targets.for_project(release.project_id).executor.execute(
                 query=physical, release=release
@@ -1987,6 +1994,12 @@ class AnalyticsQueryService:
         """
 
         if request.conversation_id is None:
+            return request.question
+        if not request.options.merged(
+            "multi_turn_enabled", self._multi_turn_rewriter.enabled
+            if self._multi_turn_rewriter is not None
+            else False
+        ):
             return request.question
         if self._query_history is None or self._multi_turn_rewriter is None:
             return request.question
@@ -3489,6 +3502,7 @@ class AnalyticsQueryService:
         physical: object,
         release: SemanticRelease,
         trace: list[QueryTraceStep],
+        options: QueryOptions,
     ) -> None:
         """Plan the physical query before running it.
 
@@ -3498,7 +3512,8 @@ class AnalyticsQueryService:
         behaviour instead of failing closed on a missing feature.
         """
 
-        if not self._dry_run_before_execute:
+        # 助手填了就用助手的，没填就用装配期的全局默认。
+        if not options.merged("dry_run_before_execute", self._dry_run_before_execute):
             return
         executor = self._targets.for_project(release.project_id).executor
         explain = getattr(executor, "explain", None)

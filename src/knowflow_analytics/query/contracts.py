@@ -532,6 +532,38 @@ class QueryRowFilter(FrozenModel):
         return tuple(dict.fromkeys(normalized))
 
 
+class QueryOptions(FrozenModel):
+    """一次问数的可覆盖配置。
+
+    **每一项都可以为空，空 = 跟随部署的全局默认。** 这与 ``llm_id`` 空值跟随租户默认
+    是同一个模式：助手不填就用部署配的那套，填了才在这次请求上生效。所以打开这个功能
+    不改变任何现有部署的行为。
+
+    这些值按请求逐层传下去，而不是在装配期固化——``tenant_id``、``visible_element_ids``
+    走的也是这条路。让"每请求变化的东西"只有一种传法，比再造一套克隆机制少一处会漂移
+    的地方。
+    """
+
+    # 同一问题独立生成多次取多数，压模型的形态漂移。代价是模型调用数按倍数增加。
+    self_consistency_number: int | None = Field(default=None, ge=1, le=9)
+    s2sql_corrector_enabled: bool | None = None
+    physical_sql_corrector_enabled: bool | None = None
+    multi_turn_enabled: bool | None = None
+    dry_run_before_execute: bool | None = None
+    # 空 = 跟随租户默认模型。指定则这次问数走指定的那个。
+    llm_id: str | None = Field(default=None, max_length=256)
+    # 首次生成的温度。重试的逐级升温是内置机制，不在这里暴露——把它压成单个值
+    # 会让"失败后跳出重复无效输出"的递进失效。
+    temperature: float | None = Field(default=None, ge=0.0, le=1.0)
+    max_tokens: int | None = Field(default=None, ge=1, le=8_192)
+
+    def merged(self, field: str, fallback):
+        """助手填了就用助手的，没填就用全局的。"""
+
+        value = getattr(self, field)
+        return fallback if value is None else value
+
+
 class QueryRequest(FrozenModel):
     project_id: str
     question: str = Field(min_length=1, max_length=4_000)
@@ -552,6 +584,8 @@ class QueryRequest(FrozenModel):
     # 行级与列级不同，没有"一行都看不到"这种由空集合表达的状态；要挡住整个项目
     # 应该不授权，而不是发一份空的行过滤。
     row_filters: tuple[QueryRowFilter, ...] | None = Field(default=None, max_length=100)
+    # 助手级配置。空对象 = 全部跟随全局默认。
+    options: QueryOptions = Field(default_factory=QueryOptions)
 
     @field_validator("allowed_element_ids")
     @classmethod

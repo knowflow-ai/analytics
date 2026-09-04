@@ -12,6 +12,7 @@ from knowflow_analytics.query.contracts import (
     MappingEvidence,
     MappingResult,
     ParsedSemanticCandidate,
+    QueryOptions,
 )
 from knowflow_analytics.query.errors import (
     ClarificationSignal,
@@ -76,6 +77,7 @@ class CandidateOrchestrator:
         selected_time_dimension_id: str | None = None,
         tenant_id: str = "",
         allowed_element_ids: frozenset[str] | None = None,
+        options: QueryOptions | None = None,
     ) -> CandidateSet:
         attempts: list[MappingResult] = []
         candidates: list[ParsedSemanticCandidate] = []
@@ -100,6 +102,7 @@ class CandidateOrchestrator:
                     mapping=mapping,
                     now=now,
                     selected_time_dimension_id=selected_time_dimension_id,
+                    options=options,
                 )
                 attempts[-1] = effective_mapping
                 if clarification is not None:
@@ -127,6 +130,7 @@ class CandidateOrchestrator:
                     mapping=mapping,
                     now=now,
                     selected_time_dimension_id=selected_time_dimension_id,
+                    options=options,
                 )
                 attempts[-1] = effective_mapping
                 if clarification is not None:
@@ -282,6 +286,7 @@ class CandidateOrchestrator:
         selected_element_id: str | None = None,
         selected_element_type: SemanticElementType | None = None,
         selected_time_dimension_id: str | None = None,
+        options: QueryOptions | None = None,
     ) -> CandidateSet:
         """Preserve Rule discovery modes after deterministic Scope selection.
 
@@ -367,6 +372,7 @@ class CandidateOrchestrator:
         mapping: MappingResult,
         now: datetime | None,
         selected_time_dimension_id: str | None,
+        options: QueryOptions | None = None,
     ) -> tuple[
         ParsedSemanticCandidate | None,
         MappingResult,
@@ -408,6 +414,7 @@ class CandidateOrchestrator:
         tenant_id: str = "",
         mapping_evidence: MappingEvidence | None = None,
         allowed_element_ids: frozenset[str] | None = None,
+        options: QueryOptions | None = None,
     ) -> ParsedSemanticCandidate:
         def emit(event: str, detail: dict[str, object]) -> None:
             if diagnostic_sink is not None:
@@ -448,6 +455,7 @@ class CandidateOrchestrator:
                     now=now,
                     tenant_id=tenant_id,
                     visible_element_ids=allowed_element_ids,
+                    options=options,
                 )
             except AnalyticsError as exc:
                 emit(
@@ -472,6 +480,7 @@ class CandidateOrchestrator:
                         release=release,
                         now=now,
                         selected_time_dimension_id=selected_time_dimension_id,
+                        options=options,
                     )
                     candidate_under_review = corrected
                     if candidate_validator is not None:
@@ -507,6 +516,7 @@ class CandidateOrchestrator:
                     release=release,
                     now=now,
                     selected_time_dimension_id=selected_time_dimension_id,
+                    options=options,
                 )
                 if candidate_validator is not None:
                     candidate_validator(corrected)
@@ -553,6 +563,7 @@ class CandidateOrchestrator:
                     now=now,
                     tenant_id=tenant_id,
                     visible_element_ids=allowed_element_ids,
+                    options=options,
                 )
             except AnalyticsError as exc:
                 emit(
@@ -577,6 +588,7 @@ class CandidateOrchestrator:
                         release=release,
                         now=now,
                         selected_time_dimension_id=selected_time_dimension_id,
+                        options=options,
                     )
                     if candidate_validator is not None:
                         candidate_validator(corrected)

@@ -42,6 +42,7 @@ from knowflow_analytics.query.contracts import (
     MappingResult,
     MatchMethod,
     ParsedSemanticCandidate,
+    QueryOptions,
 )
 from knowflow_analytics.query.corrector import LlmSqlCorrector
 from knowflow_analytics.query.errors import (
@@ -292,6 +293,7 @@ class LlmS2SqlParser:
         now: datetime | None = None,
         tenant_id: str = "",
         visible_element_ids: frozenset[str] | None = None,
+        options: QueryOptions | None = None,
     ) -> ParsedSemanticCandidate:
         dataset = _dataset(release, mapping.dataset_id)
         output: _LlmS2SqlOutput | None = None
@@ -352,7 +354,13 @@ class LlmS2SqlParser:
             )
             return candidate
 
-        if self._self_consistency_number > 1:
+        # 助手填了就用助手的，没填就用装配期的全局默认。
+        votes = (
+            self._self_consistency_number
+            if options is None
+            else options.merged("self_consistency_number", self._self_consistency_number)
+        )
+        if votes > 1:
             # 每次推理换一组 few-shot 样例(select_few_shot_exemplars 自带洗牌),
             # 测的是「换一组示例还答不答得一样」,比只抖 temperature 更能区分
             # 「照抄示例」与「真从 schema 推出来」。
@@ -370,7 +378,7 @@ class LlmS2SqlParser:
                     now=now,
                     visible_element_ids=visible_element_ids,
                 )
-                for _ in range(self._self_consistency_number)
+                for _ in range(votes)
             ]
             results: dict[int, _LlmS2SqlOutput] = {}
             errors: dict[int, Exception] = {}
@@ -1417,6 +1425,7 @@ class TextualS2SqlCorrector:
         now: datetime | None = None,
         selected_time_dimension_id: str | None = None,
         tenant_id: str = "",
+        options: QueryOptions | None = None,
     ) -> ParsedSemanticCandidate:
         del now, selected_time_dimension_id
         validate_textual_s2sql(candidate.corrected_s2sql)
@@ -1431,6 +1440,7 @@ class TextualS2SqlCorrector:
             release=release,
             query_id=query_id,
             tenant_id=tenant_id,
+            options=options,
         )
         validate_textual_s2sql(candidate.corrected_s2sql)
         return candidate.model_copy(

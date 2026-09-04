@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from knowflow_analytics.contracts import PhysicalQuery, SemanticRelease
 from knowflow_analytics.gateways.model import StructuredModelGateway
-from knowflow_analytics.query.contracts import ParsedSemanticCandidate
+from knowflow_analytics.query.contracts import ParsedSemanticCandidate, QueryOptions
 from knowflow_analytics.semantic.index import SemanticElementType
 
 LOGGER = logging.getLogger(__name__)
@@ -93,8 +93,15 @@ class LlmSqlCorrector:
         release: SemanticRelease,
         query_id: str,
         tenant_id: str = "",
+        options: QueryOptions | None = None,
     ) -> ParsedSemanticCandidate:
-        if not self.enabled or self._gateway is None or candidate.parser != "llm":
+        # 助手填了就用助手的，没填就用装配期的全局默认。
+        enabled = (
+            self.enabled
+            if options is None
+            else options.merged("s2sql_corrector_enabled", self.enabled)
+        )
+        if not enabled or self._gateway is None or candidate.parser != "llm":
             return candidate
         prompt = _S2SQL_INSTRUCTION.format(
             question=question,

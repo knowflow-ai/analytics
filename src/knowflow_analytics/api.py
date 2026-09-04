@@ -799,6 +799,34 @@ async def _upload_bytes(request: Request) -> bytes:
     return data
 
 
+
+def _upload_plan(raw: str) -> tuple[tuple[str, str], ...]:
+    """解析导入计划。
+
+    计划走 query 而不是请求体：请求体已经被文件占了。宿主转发把 query 限在 4096 字符，
+    这里再收紧一档并给出人话——超了是"选太多张"，不是"请求非法"。
+    """
+
+    try:
+        items = json.loads(raw)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "UPLOAD_PLAN_INVALID", "message": "导入计划格式不对。"},
+        ) from exc
+    if not isinstance(items, list) or not all(isinstance(item, dict) for item in items):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "UPLOAD_PLAN_INVALID", "message": "导入计划格式不对。"},
+        )
+    plan: list[tuple[str, str]] = []
+    for item in items:
+        sheet = str(item.get("sheet", ""))[:256]
+        table = str(item.get("table", ""))[:63]
+        plan.append((sheet, table))
+    return tuple(plan)
+
+
 def create_api(
     *,
     application: AnalyticsApplication,
@@ -982,34 +1010,33 @@ def create_api(
         return record.model_dump(mode="json")
 
     @app.post("/v1/analytics/uploads:inspect")
-    async def inspect_upload(
-        request: Request,
-        request_context: Context,
-        sheet: Annotated[str | None, Query(max_length=256)] = None,
-    ):
-        """看一眼上传的表格：有哪些 sheet，选中那张会建成什么样、自动改了什么。
+    async def inspect_upload(request: Request, request_context: Context):
+        """看一眼上传的表格：每张 sheet 会建成什么样、自动改了什么。
 
         不落库。用户要先看到改动再决定，否则他会在建模页对着自己没写过的列名。
 
-        文件走请求体，sheet/表名走 query——multipart 要多一颗 ``python-multipart``
-        依赖，而这个依赖表是刻意精简的，为两个短字符串加它不划算。
+        文件走请求体、参数走 query——multipart 要多一颗 ``python-multipart`` 依赖，
+        而这个依赖表是刻意精简的，为几个短字符串加它不划算。
         """
 
         expensive(request_context)
-        return application.inspect_upload(data=await _upload_bytes(request), sheet=sheet)
+        return application.inspect_upload(data=await _upload_bytes(request))
 
     @app.post("/v1/analytics/uploads:commit")
     async def commit_upload(
         request: Request,
         request_context: Context,
-        sheet: Annotated[str, Query(min_length=1, max_length=256)],
-        table: Annotated[str, Query(min_length=1, max_length=63)],
+        plan: Annotated[str, Query(min_length=2, max_length=3_500)],
     ):
-        """确认之后建表灌数。同名表不覆盖。"""
+        """按计划建表灌数。``plan`` 是 ``[{"sheet": ..., "table": ...}]`` 的 JSON。
+
+        一次可以导多张。某一张失败不回滚已经成功的那几张——用户要的是"哪些进来了、
+        哪些没有、为什么"，把前面的撤掉毫无道理。每张各自带回结果或原因。
+        """
 
         expensive(request_context)
         return application.commit_upload(
-            data=await _upload_bytes(request), sheet=sheet, table=table
+            data=await _upload_bytes(request), plan=_upload_plan(plan)
         )
 
     @app.get("/v1/analytics/uploads")

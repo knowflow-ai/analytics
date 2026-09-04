@@ -26,12 +26,14 @@ import {
 import { describeError } from '@analytics/lib/labels';
 import {
   ACCEPTED_SUFFIX,
-  canCreate,
+  canImportPlan,
   canLoad,
-  defaultTableName,
+  defaultTableNames,
   isAcceptedFile,
   modeLabel,
-  tableNameProblem,
+  planProblems,
+  summarizeOutcomes,
+  type SheetPlanRow,
   type UploadMode,
 } from './upload-form';
 
@@ -149,7 +151,7 @@ export function UploadsDialog({ open, onClose }: { open: boolean; onClose: () =>
   );
 }
 
-/** 选文件 → 选 sheet → 看确认表 → 落库。 */
+/** 选文件 → 勾要导的 sheet → 看确认表 → 一次落库。 */
 function UploadDialog({
   open,
   existing,
@@ -163,57 +165,45 @@ function UploadDialog({
 }) {
   const toast = useToast();
   const [file, setFile] = useState<File | null>(null);
-  const [sheets, setSheets] = useState<string[]>([]);
-  const [sheet, setSheet] = useState('');
-  const [preview, setPreview] = useState<UploadPreview | null>(null);
+  const [previews, setPreviews] = useState<UploadPreview[]>([]);
+  const [rows, setRows] = useState<SheetPlanRow[]>([]);
   const [mode, setMode] = useState<UploadMode>('create');
-  const [table, setTable] = useState('');
+  const [target, setTarget] = useState('');
+  const [loadSheet, setLoadSheet] = useState('');
   const [error, setError] = useState('');
 
   const reset = () => {
     setFile(null);
-    setSheets([]);
-    setSheet('');
-    setPreview(null);
+    setPreviews([]);
+    setRows([]);
     setMode('create');
-    setTable('');
+    setTarget('');
+    setLoadSheet('');
     setError('');
   };
 
   const pick = useMutation({
-    mutationFn: async (picked: File) => {
-      const first = await inspectUpload(picked);
-      // 只有一张表时直接看它——多一次点击换不来任何信息。
-      const only = first.sheets.length === 1 ? first.sheets[0] : '';
-      const detail = only ? await inspectUpload(picked, only) : null;
-      return { picked, sheets: first.sheets, sheet: only, preview: detail?.preview ?? null };
-    },
-    onSuccess: (result) => {
-      setFile(result.picked);
-      setSheets(result.sheets);
-      setSheet(result.sheet);
-      setPreview(result.preview);
-      setTable(defaultTableName(result.picked.name));
+    mutationFn: async (picked: File) => ({ picked, result: await inspectUpload(picked) }),
+    onSuccess: ({ picked, result }) => {
+      const names = defaultTableNames(picked.name, result.sheets);
+      setFile(picked);
+      setPreviews(result.previews);
+      setRows(
+        result.previews.map((item) => ({
+          sheet: item.sheet,
+          table: names[item.sheet] ?? item.sheet,
+          // 读不出来的默认不勾，也勾不上——但它要留在列表里，否则用户不知道
+          // 自己文件里那张表去哪了。
+          selected: item.error === undefined,
+          blocked: item.error?.message,
+        })),
+      );
+      setLoadSheet(result.previews.find((item) => !item.error)?.sheet ?? '');
+      setTarget(existing[0]?.table ?? '');
       setError('');
     },
     onError: (issue) => {
       reset();
-      setError(describeError(issue));
-    },
-  });
-
-  const chooseSheet = useMutation({
-    mutationFn: async (name: string) => {
-      if (!file) throw new Error('还没有选文件');
-      return inspectUpload(file, name);
-    },
-    onSuccess: (result) => {
-      setSheet(result.preview?.sheet ?? '');
-      setPreview(result.preview);
-      setError('');
-    },
-    onError: (issue) => {
-      setPreview(null);
       setError(describeError(issue));
     },
   });
@@ -221,27 +211,55 @@ function UploadDialog({
   const submit = useMutation({
     mutationFn: async () => {
       if (!file) throw new Error('还没有选文件');
-      if (mode === 'create') return commitUpload(file, { sheet, table: table.trim() });
-      return loadUpload(file, { sheet, table, mode });
+      if (mode === 'create') {
+        return commitUpload(
+          file,
+          rows
+            .filter((row) => row.selected && !row.blocked)
+            .map((row) => ({ sheet: row.sheet, table: row.table.trim() })),
+        );
+      }
+      return loadUpload(file, { sheet: loadSheet, table: target, mode });
     },
     onSuccess: (result) => {
-      toast.success(
-        mode === 'create'
-          ? `已建表「${result.table}」，写入 ${result.row_count} 行`
-          : `已写入 ${result.row_count} 行`,
-      );
+      if ('results' in result) {
+        const failed = result.results.filter((item) => item.error);
+        // 部分成功要说清楚：哪些进来了、哪些没有、为什么。只报一句"导入完成"
+        // 会让用户以为全成了。
+        if (failed.length) {
+          toast.error(
+            `${summarizeOutcomes(result.results)}。${failed
+              .map((item) => `「${item.table}」${item.error?.message ?? ''}`)
+              .join('　')}`,
+          );
+        } else {
+          toast.success(summarizeOutcomes(result.results));
+        }
+      } else {
+        toast.success(`已写入 ${result.row_count} 行`);
+      }
       reset();
       onDone();
     },
     onError: (issue) => toast.error(describeError(issue)),
   });
 
-  const nameProblem =
-    mode === 'create' ? tableNameProblem(table, existing.map((item) => item.table)) : '';
+  const existingNames = existing.map((item) => item.table);
+  const problems = planProblems(rows, existingNames);
   const ready =
     mode === 'create'
-      ? canCreate({ file, sheet, table, existing: existing.map((item) => item.table) })
-      : canLoad({ file, sheet, table });
+      ? canImportPlan(rows, existingNames)
+      : canLoad({ file, sheet: loadSheet, table: target });
+  const readable = previews.filter((item) => item.error === undefined);
+
+  const rename = (sheet: string, value: string) =>
+    setRows((current) =>
+      current.map((row) => (row.sheet === sheet ? { ...row, table: value } : row)),
+    );
+  const toggle = (sheet: string) =>
+    setRows((current) =>
+      current.map((row) => (row.sheet === sheet ? { ...row, selected: !row.selected } : row)),
+    );
 
   return (
     <Dialog
@@ -293,97 +311,113 @@ function UploadDialog({
         {pick.isPending && <Spinner />}
         {error && <ErrorBanner message={error} />}
 
-        {sheets.length > 1 && (
-          <Field label="工作表" hint="一次导入一张。">
+        {previews.length > 0 && (
+          <Field label="导入方式">
             <Select
-              value={sheet}
-              onChange={(event) => chooseSheet.mutate(event.target.value)}
+              value={mode}
+              onChange={(event) => setMode(event.target.value as UploadMode)}
             >
-              <option value="" disabled>
-                请选择
-              </option>
-              {sheets.map((name) => (
-                <option key={name} value={name}>
-                  {name}
+              {(['create', 'append', 'replace'] as const).map((item) => (
+                <option key={item} value={item} disabled={item !== 'create' && !existing.length}>
+                  {modeLabel(item)}
                 </option>
               ))}
             </Select>
           </Field>
         )}
 
-        {preview && (
+        {previews.length > 0 && mode === 'create' && (
+          <div className="space-y-2">
+            <div className="text-xs text-slate-500">
+              勾选要导入的工作表，一次可以导多张。表名是建模页和问数里找到它的依据。
+            </div>
+            {previews.map((preview) => {
+              const row = rows.find((item) => item.sheet === preview.sheet);
+              if (!row) return null;
+              return (
+                <div
+                  key={preview.sheet}
+                  className="rounded-md border border-slate-200 p-3"
+                >
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={row.selected}
+                      disabled={row.blocked !== undefined}
+                      onChange={() => toggle(preview.sheet)}
+                    />
+                    <span className="truncate text-sm text-slate-900">{preview.sheet}</span>
+                    <span className="ml-auto shrink-0 text-xs text-slate-400">
+                      {row.blocked
+                        ? row.blocked
+                        : `${preview.row_count} 行 · ${preview.columns?.length} 列`}
+                    </span>
+                  </div>
+
+                  {row.selected && !row.blocked && (
+                    <div className="mt-2 space-y-2 pl-6">
+                      <Input
+                        value={row.table}
+                        onChange={(event) => rename(preview.sheet, event.target.value)}
+                      />
+                      {problems[preview.sheet] && (
+                        <p className="text-xs text-rose-600">{problems[preview.sheet]}</p>
+                      )}
+                      <ul className="max-h-24 space-y-0.5 overflow-y-auto text-xs">
+                        {(preview.columns ?? []).map((column) => (
+                          <li key={column.name} className="flex justify-between gap-3">
+                            <span className="truncate text-slate-600">{column.name}</span>
+                            <span className="shrink-0 text-slate-400">{column.type}</span>
+                          </li>
+                        ))}
+                      </ul>
+                      {(preview.changes ?? []).length > 0 && (
+                        <div className="rounded-md bg-amber-50 px-2 py-1.5 text-xs text-amber-700">
+                          <div className="mb-0.5 font-medium">自动改过，导入前请确认：</div>
+                          <ul>
+                            {(preview.changes ?? []).map((change) => (
+                              <li key={change}>· {change}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {previews.length > 0 && mode !== 'create' && (
           <>
-            <Field label="导入方式">
-              <Select
-                value={mode}
-                onChange={(event) => {
-                  const next = event.target.value as UploadMode;
-                  setMode(next);
-                  setTable(
-                    next === 'create'
-                      ? defaultTableName(file?.name ?? '')
-                      : (existing[0]?.table ?? ''),
-                  );
-                }}
-              >
-                {(['create', 'append', 'replace'] as const).map((item) => (
-                  <option key={item} value={item} disabled={item !== 'create' && !existing.length}>
-                    {modeLabel(item)}
+            <Field label="用哪张工作表的数据" hint="灌数一次一张。">
+              <Select value={loadSheet} onChange={(event) => setLoadSheet(event.target.value)}>
+                <option value="" disabled>
+                  请选择
+                </option>
+                {readable.map((item) => (
+                  <option key={item.sheet} value={item.sheet}>
+                    {item.sheet}（{item.row_count} 行）
                   </option>
                 ))}
               </Select>
             </Field>
-
-            {mode === 'create' ? (
-              <Field
-                label="表名"
-                hint={nameProblem || '建模页和问数里按这个名字找到它。'}
-              >
-                <Input value={table} onChange={(event) => setTable(event.target.value)} />
-              </Field>
-            ) : (
-              <Field label="写入哪张表" hint="列名和类型必须和这张表对得上。">
-                <Select value={table} onChange={(event) => setTable(event.target.value)}>
-                  <option value="" disabled>
-                    请选择
+            <Field label="写入哪张表" hint="列名和类型必须和这张表对得上。">
+              <Select value={target} onChange={(event) => setTarget(event.target.value)}>
+                <option value="" disabled>
+                  请选择
+                </option>
+                {existing.map((item) => (
+                  <option key={item.table} value={item.table}>
+                    {item.table}（{item.row_count} 行）
                   </option>
-                  {existing.map((item) => (
-                    <option key={item.table} value={item.table}>
-                      {item.table}（{item.row_count} 行）
-                    </option>
-                  ))}
-                </Select>
-              </Field>
-            )}
-
-            <div className="rounded-md border border-slate-200 p-3">
-              <div className="mb-2 text-xs text-slate-500">
-                {preview.row_count} 行 · {preview.columns.length} 列
-              </div>
-              <ul className="max-h-40 space-y-1 overflow-y-auto text-xs">
-                {preview.columns.map((column) => (
-                  <li key={column.name} className="flex justify-between gap-3">
-                    <span className="truncate text-slate-700">{column.name}</span>
-                    <span className="shrink-0 text-slate-400">{column.type}</span>
-                  </li>
                 ))}
-              </ul>
-            </div>
-
-            {preview.changes.length > 0 && (
-              <div className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-700">
-                <div className="mb-1 font-medium">这些地方自动改过，导入前请确认：</div>
-                <ul className="space-y-0.5">
-                  {preview.changes.map((change) => (
-                    <li key={change}>· {change}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
+              </Select>
+            </Field>
             {mode === 'replace' && (
               <p className="rounded-md bg-rose-50 px-3 py-2 text-xs text-rose-700">
-                「{table}」现有的数据会被全部清空，再写入这个文件的内容。
+                「{target}」现有的数据会被全部清空，再写入这张工作表的内容。
               </p>
             )}
           </>

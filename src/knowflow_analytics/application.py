@@ -35,7 +35,7 @@ from knowflow_analytics.contracts import (
     SemanticQuery,
     TermSpec,
 )
-from knowflow_analytics.errors import SemanticValidationError
+from knowflow_analytics.errors import AnalyticsError, SemanticValidationError
 from knowflow_analytics.evaluation.contracts import (
     EvaluationReport,
     GoldenSuite,
@@ -58,6 +58,7 @@ from knowflow_analytics.ingest.uploads import (
     list_tables,
     truncate_table,
 )
+from knowflow_analytics.ingest.workbook import WorkbookError
 from knowflow_analytics.modeling.ai_artifacts import (
     OneClickModelingArtifactService,
     reconcile_query_scopes,
@@ -224,6 +225,11 @@ from knowflow_analytics.semantic.index import EmbeddingGateway, SemanticIndexBui
 from knowflow_analytics.semantic.translator import SemanticTranslator
 
 LOGGER = logging.getLogger(__name__)
+
+
+# 一次导入的工作表上限。计划要放进 query 串（宿主转发限 4096 字符），
+# 也是给「一次点一下」这个动作一个合理的边界。
+_MAX_UPLOAD_SHEETS = 20
 
 
 @dataclass(frozen=True)
@@ -791,60 +797,100 @@ class AnalyticsApplication:
     def test_data_source(self, *, engine: str, dsn: str) -> None:
         self._sources.test(engine=engine, dsn=dsn)
 
-    def inspect_upload(self, *, data: bytes, sheet: str | None = None) -> dict[str, object]:
-        """看一眼这个文件：有哪些 sheet，选中的那张会建成什么样。
+    def inspect_upload(self, *, data: bytes) -> dict[str, object]:
+        """看一眼这个文件：每张 sheet 会建成什么样、自动改了什么。
 
-        落库前必须先看到"自动改了什么"——列名被规范化过却不说，用户会在建模页对着一个
-        自己没写过的列名。
+        **一次把所有 sheet 都看完。** 按 sheet 逐次调用意味着同一个文件要重传很多遍，
+        一个 30MB 的台账有 8 张表就是 240MB。
+
+        某张 sheet 读不出来（空表、只有表头）不让整个文件失败——那张带着自己的错误
+        回去，其余照常可选。落库前必须看到"自动改了什么"：列名被规范化过却不说，
+        用户会在建模页对着一个自己没写过的列名。
         """
 
         sheets = list_sheets(data)
-        if sheet is None:
-            return {"sheets": list(sheets), "preview": None}
-        preview = preview_sheet(data, sheet)
-        return {
-            "sheets": list(sheets),
-            "preview": {
-                "sheet": preview.sheet,
-                "row_count": preview.row_count,
-                "columns": [
-                    {
-                        "name": item.name,
-                        "source_name": item.source_name,
-                        "type": item.sql_type,
-                    }
-                    for item in preview.columns
-                ],
-                "changes": list(preview.changes),
-            },
-        }
+        previews: list[dict[str, object]] = []
+        for name in sheets:
+            try:
+                preview = preview_sheet(data, name)
+            except WorkbookError as exc:
+                previews.append(
+                    {"sheet": name, "error": {"code": exc.code, "message": str(exc)}}
+                )
+                continue
+            previews.append(
+                {
+                    "sheet": preview.sheet,
+                    "row_count": preview.row_count,
+                    "columns": [
+                        {
+                            "name": item.name,
+                            "source_name": item.source_name,
+                            "type": item.sql_type,
+                        }
+                        for item in preview.columns
+                    ],
+                    "changes": list(preview.changes),
+                }
+            )
+        return {"sheets": list(sheets), "previews": previews}
 
-    def commit_upload(self, *, data: bytes, sheet: str, table: str) -> dict[str, object]:
-        """建表、灌数，并保证上传库已经是一条数据源记录。
+    def commit_upload(self, *, data: bytes, plan: tuple[tuple[str, str], ...]) -> dict[str, object]:
+        """按计划逐张建表灌数。
+
+        **失败不回滚已经成功的那几张。** 一次导入五张、第三张表名撞了，把前两张撤掉毫无
+        道理——用户要的是"哪些进来了、哪些没有、为什么"。所以逐张独立执行，每张各自带
+        回结果或原因。
 
         表名由用户定：他要在建模页按这个名字找到它。同名不覆盖——覆盖会让一张已经建好
         模型、已发布的表在他不知情时换掉结构。
         """
 
         if not self._catalog_database_url:
+            raise UploadError("当前部署没有配置上传库。", code="UPLOAD_NOT_CONFIGURED")
+        if not plan:
+            raise UploadError("请至少选择一张工作表。", code="UPLOAD_PLAN_EMPTY")
+        if len(plan) > _MAX_UPLOAD_SHEETS:
             raise UploadError(
-                "当前部署没有配置上传库。", code="UPLOAD_NOT_CONFIGURED"
+                f"一次最多导入 {_MAX_UPLOAD_SHEETS} 张工作表。", code="UPLOAD_PLAN_TOO_LARGE"
             )
-        name = table.strip()
-        if not name:
-            raise UploadError("请给这张表起个名字。", code="UPLOAD_TABLE_NAME_REQUIRED")
-        preview = preview_sheet(data, sheet)
+        names = [table.strip() for _sheet, table in plan]
+        if any(not name for name in names):
+            raise UploadError("请给每张表起个名字。", code="UPLOAD_TABLE_NAME_REQUIRED")
+        duplicated = {name for name in names if names.count(name) > 1}
+        if duplicated:
+            # 同一批里两张 sheet 用同一个表名：先建的会让后建的撞上"已存在"，报出来的
+            # 原因和真正的错因（这一批自己重复了）对不上。
+            raise UploadError(
+                f"这一批里有重复的表名：{'、'.join(sorted(duplicated))}。",
+                code="UPLOAD_PLAN_DUPLICATE_TABLE",
+            )
+
         url = ensure_upload_database(self._catalog_database_url)
         engine = create_engine(url)
+        results: list[dict[str, object]] = []
         try:
-            create_table(engine, table=name, preview=preview)
-            written = insert_rows(
-                engine, table=name, preview=preview, rows=read_rows(data, preview)
-            )
+            for (sheet, _raw), table in zip(plan, names, strict=True):
+                try:
+                    preview = preview_sheet(data, sheet)
+                    create_table(engine, table=table, preview=preview)
+                    written = insert_rows(
+                        engine, table=table, preview=preview, rows=read_rows(data, preview)
+                    )
+                except AnalyticsError as exc:
+                    results.append(
+                        {
+                            "sheet": sheet,
+                            "table": table,
+                            "error": {"code": exc.code, "message": str(exc)},
+                        }
+                    )
+                    continue
+                results.append({"sheet": sheet, "table": table, "row_count": written})
         finally:
             engine.dispose()
         record = self._ensure_upload_data_source(url)
-        return {"table": name, "row_count": written, "data_source_id": record.id}
+        return {"data_source_id": record.id, "results": results}
 
     def list_uploads(self) -> dict[str, object]:
         engine = create_engine(self._upload_url())

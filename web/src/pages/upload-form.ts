@@ -65,3 +65,72 @@ export function canLoad(input: {
 }): boolean {
   return input.file !== null && input.sheet !== '' && input.table !== '';
 }
+
+/** 一次最多导入多少张。与核心侧的上限一致；超了核心会拒，但在这里就说清楚更好。 */
+export const MAX_SHEETS_PER_IMPORT = 20;
+
+/** 一张待导入的表：勾没勾、叫什么、这张能不能导。 */
+export interface SheetPlanRow {
+  sheet: string;
+  table: string;
+  selected: boolean;
+  /** 这张 sheet 读不出来（空表、只有表头）时的原因。有值就不能勾。 */
+  blocked?: string;
+}
+
+/**
+ * 多 sheet 时表名默认取 sheet 名；只有一张时取文件名。
+ *
+ * 一张的时候用户想的是"导入这个文件"，多张的时候想的是"导入这几张表"——默认值跟着
+ * 他脑子里的那个名字走，比一律用文件名少改几次。
+ */
+export function defaultTableNames(fileName: string, sheets: string[]): Record<string, string> {
+  const single = sheets.length === 1;
+  return Object.fromEntries(
+    sheets.map((sheet) => [sheet, single ? defaultTableName(fileName) : sheet]),
+  );
+}
+
+/** 这一批里哪些表名有问题。返回 sheet → 问题描述，没问题的不出现。 */
+export function planProblems(
+  rows: readonly SheetPlanRow[],
+  existing: readonly string[],
+): Record<string, string> {
+  const chosen = rows.filter((row) => row.selected && !row.blocked);
+  const problems: Record<string, string> = {};
+  for (const row of chosen) {
+    const name = row.table.trim();
+    const clash = chosen.filter((other) => other.table.trim() === name).length > 1;
+    // 同一批里两张用同一个名字：先建的会让后建的撞上"已存在"，报出来的原因和
+    // 真正的错因（这一批自己重复了）对不上。
+    if (clash) {
+      problems[row.sheet] = '这一批里有另一张表也叫这个名字。';
+      continue;
+    }
+    const problem = tableNameProblem(name, existing);
+    if (problem) problems[row.sheet] = problem;
+  }
+  return problems;
+}
+
+/** 能不能提交这一批。 */
+export function canImportPlan(
+  rows: readonly SheetPlanRow[],
+  existing: readonly string[],
+): boolean {
+  const chosen = rows.filter((row) => row.selected && !row.blocked);
+  if (chosen.length === 0 || chosen.length > MAX_SHEETS_PER_IMPORT) return false;
+  return Object.keys(planProblems(rows, existing)).length === 0;
+}
+
+/** 把结果说成人话：几张成功、几张没有。 */
+export function summarizeOutcomes(
+  results: readonly { table: string; row_count?: number; error?: { message: string } }[],
+): string {
+  const ok = results.filter((item) => item.error === undefined);
+  const failed = results.length - ok.length;
+  const rows = ok.reduce((sum, item) => sum + (item.row_count ?? 0), 0);
+  if (failed === 0) return `已导入 ${ok.length} 张表，共 ${rows} 行`;
+  if (ok.length === 0) return `${failed} 张都没能导入`;
+  return `已导入 ${ok.length} 张（${rows} 行），${failed} 张没能导入`;
+}

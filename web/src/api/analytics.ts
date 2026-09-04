@@ -945,32 +945,42 @@ export interface UploadColumn {
 
 export interface UploadPreview {
   sheet: string;
-  row_count: number;
-  columns: UploadColumn[];
+  row_count?: number;
+  columns?: UploadColumn[];
   /** 自动做了哪些改动。落库前要让用户过目。 */
-  changes: string[];
+  changes?: string[];
+  /** 这张读不出来（空表、只有表头）。其余 sheet 照常可选。 */
+  error?: { code: string; message: string };
 }
 
 export interface UploadInspection {
   sheets: string[];
-  preview: UploadPreview | null;
+  previews: UploadPreview[];
 }
 
-export const inspectUpload = (file: Blob, sheet?: string): Promise<UploadInspection> =>
+/** 一次看完所有 sheet——按 sheet 逐次调用会把同一个文件重传很多遍。 */
+export const inspectUpload = (file: Blob): Promise<UploadInspection> =>
   request<UploadInspection>(`${DATA_SOURCE_BASE}/uploads:inspect`, {
     method: 'POST',
     file,
-    query: { sheet },
   });
 
+export interface UploadOutcome {
+  sheet: string;
+  table: string;
+  row_count?: number;
+  error?: { code: string; message: string };
+}
+
+/** 一次导入多张。某张失败不影响已经成功的那几张，逐张带回结果。 */
 export const commitUpload = (
   file: Blob,
-  input: { sheet: string; table: string },
-): Promise<{ table: string; row_count: number; data_source_id: string }> =>
+  plan: { sheet: string; table: string }[],
+): Promise<{ data_source_id: string; results: UploadOutcome[] }> =>
   request(`${DATA_SOURCE_BASE}/uploads:commit`, {
     method: 'POST',
     file,
-    query: input,
+    query: { plan: JSON.stringify(plan) },
   });
 
 export const loadUpload = (

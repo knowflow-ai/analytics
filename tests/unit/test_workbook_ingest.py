@@ -181,3 +181,45 @@ def test_every_sheet_is_listed() -> None:
     data = _xlsx({"第一张": [["A"], [1]], "第二张": [["B"], [2]]})
 
     assert list_sheets(data) == ("第一张", "第二张")
+
+
+class TestInspectingEverySheetAtOnce:
+    """一次把所有 sheet 看完。
+
+    按 sheet 逐次调用意味着同一个文件要重传很多遍——一个 30MB 的台账有 8 张表就是
+    240MB。而且读不出来的那张不该让整个文件失败。
+    """
+
+    @staticmethod
+    def _previews(data: bytes) -> dict[str, dict]:
+        from knowflow_analytics.application import AnalyticsApplication
+
+        result = AnalyticsApplication.inspect_upload(
+            AnalyticsApplication.__new__(AnalyticsApplication), data=data
+        )
+        return {item["sheet"]: item for item in result["previews"]}
+
+    def test_every_sheet_comes_back_in_one_call(self) -> None:
+        data = _xlsx({
+            "销售": [["门店", "金额"], ["A", 1]],
+            "档案": [["编号", "门店"], ["001", "A"]],
+        })
+
+        previews = self._previews(data)
+
+        assert set(previews) == {"销售", "档案"}
+        assert previews["档案"]["columns"][0]["type"] == "text"
+
+    def test_an_unreadable_sheet_does_not_sink_the_others(self) -> None:
+        """只有表头的那张带着自己的原因回去，其余照常可选。"""
+
+        data = _xlsx({
+            "好的": [["门店", "金额"], ["A", 1]],
+            "只有表头": [["门店"]],
+        })
+
+        previews = self._previews(data)
+
+        assert previews["好的"]["row_count"] == 1
+        assert previews["只有表头"]["error"]["code"] == "SHEET_HAS_NO_ROWS"
+        assert "只有表头" in previews["只有表头"]["error"]["message"]

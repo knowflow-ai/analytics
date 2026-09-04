@@ -2,11 +2,16 @@ import { describe, expect, it } from 'vitest';
 
 import {
   canCreate,
+  canImportPlan,
   canLoad,
   defaultTableName,
+  defaultTableNames,
   isAcceptedFile,
   modeLabel,
+  planProblems,
+  summarizeOutcomes,
   tableNameProblem,
+  type SheetPlanRow,
 } from './upload-form';
 
 describe('只收 .xlsx', () => {
@@ -61,5 +66,55 @@ describe('模式说人话', () => {
   it('替换要说清是整表换掉', () => {
     expect(modeLabel('replace')).toContain('全部');
     expect(modeLabel('append')).toContain('追加');
+  });
+});
+
+describe('多 sheet 一次导入', () => {
+  const row = (sheet: string, table: string, extra: Partial<SheetPlanRow> = {}): SheetPlanRow => ({
+    sheet,
+    table,
+    selected: true,
+    ...extra,
+  });
+
+  it('多张时表名默认取 sheet 名，一张时取文件名', () => {
+    expect(defaultTableNames('台账.xlsx', ['销售'])).toEqual({ 销售: '台账' });
+    expect(defaultTableNames('台账.xlsx', ['销售', '档案'])).toEqual({
+      销售: '销售',
+      档案: '档案',
+    });
+  });
+
+  it('同一批里重名要当场说出来', () => {
+    // 不拦的话先建的会让后建的撞上"已存在"，报出来的原因和真正的错因对不上。
+    const problems = planProblems([row('一', '台账'), row('二', '台账')], []);
+    expect(problems['一']).toContain('另一张表');
+    expect(problems['二']).toContain('另一张表');
+  });
+
+  it('和已有表重名同样拦下', () => {
+    expect(planProblems([row('一', '台账')], ['台账'])['一']).toContain('已经有一张');
+  });
+
+  it('没勾的和读不出来的不参与校验', () => {
+    const rows = [
+      row('一', '台账'),
+      row('二', '台账', { selected: false }),
+      row('三', '台账', { blocked: '只有表头' }),
+    ];
+    expect(planProblems(rows, [])).toEqual({});
+    expect(canImportPlan(rows, [])).toBe(true);
+  });
+
+  it('一张都没勾就不能提交', () => {
+    expect(canImportPlan([row('一', '台账', { selected: false })], [])).toBe(false);
+  });
+
+  it('结果要说清几张成、几张败', () => {
+    expect(summarizeOutcomes([{ table: 'a', row_count: 5 }, { table: 'b', row_count: 3 }]))
+      .toBe('已导入 2 张表，共 8 行');
+    expect(summarizeOutcomes([{ table: 'a', row_count: 5 }, { table: 'b', error: { message: 'x' } }]))
+      .toContain('1 张没能导入');
+    expect(summarizeOutcomes([{ table: 'a', error: { message: 'x' } }])).toContain('都没能导入');
   });
 });

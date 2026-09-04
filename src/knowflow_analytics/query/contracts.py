@@ -396,6 +396,9 @@ class QueryFailureRecord(FrozenModel):
     spec_hash: str
     index_snapshot_id: str
     dataset_ids: tuple[str, ...] = ()
+    # 问句里没被任何精确证据覆盖的片段——"用户说了、系统没听懂"的那些词。
+    # 补词典要补的就是它；也是按说法聚合的键（同一个「业绩」被猜 20 次该并成一条）。
+    unmatched_phrases: tuple[str, ...] = Field(default=(), max_length=20)
     # 错误自带的结构化上下文；映射失败时是各次映射尝试，含命中了哪些语义对象。
     details: dict[str, Any] = Field(default_factory=dict)
 

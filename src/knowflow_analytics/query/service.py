@@ -109,6 +109,13 @@ _MAX_DRILLDOWN_DIMENSIONS = 12
 _MAX_DRILLDOWN_METRICS = 8
 
 
+# 切片段用的分隔符。问句里的标点和空白不属于任何说法，留着会把两侧粘成一个
+# 长得莫名其妙的"术语"。
+_PHRASE_SEPARATORS = frozenset(" \t，。、？！；：,.?!;:()（）\"'“”‘’")
+# 只在片段**首尾**裁掉的单字虚词。中间一律不动——「客户满意度」不能被裁成「客户满意」。
+_EDGE_PARTICLES = frozenset("的了是有在和与及都也还就把被给个种")
+
+
 @dataclass(frozen=True)
 class _SelectionTokenContext:
     project_id: str
@@ -1315,6 +1322,7 @@ class AnalyticsQueryService:
                     code="SEMANTIC_INFERRED",
                     message=f"没有匹配到说法，模型自己选了「{name}」",
                     resolution=name,
+                    evidence=global_evidence,
                 )
             for dimension_name, value, suggestion in unpublished_values:
                 # 用户说了一个系统不认识的取值。近似建议可能有、也可能确实没有。
@@ -3082,6 +3090,7 @@ class AnalyticsQueryService:
         code: str,
         message: str,
         resolution: str = "",
+        evidence: MappingEvidence | None = None,
     ) -> None:
         """记下一次「系统没接住用户的说法」。旁路，出错不影响这次回答。
 
@@ -3105,6 +3114,11 @@ class AnalyticsQueryService:
                     spec_hash=published.release.spec_hash,
                     index_snapshot_id=published.index_snapshot.id,
                     dataset_ids=tuple(request.dataset_ids),
+                    # 补词典要补的是"用户说了什么"，而那个词恰恰没被任何证据命中，
+                    # 只能从问句里按 span 补集反推。用改写后的问句：模型看到的是它。
+                    unmatched_phrases=_unmatched_phrases(
+                        effective_question or request.question, evidence
+                    )[:20],
                 ),
                 actor_id=str(actor_id or "").strip(),
                 project_id=request.project_id,
@@ -4147,6 +4161,61 @@ def _union_evidence(evidence: MappingEvidence, union_id: str) -> MappingEvidence
             ),
         }
     )
+
+
+
+def _unmatched_phrases(question: str, evidence: MappingEvidence | None) -> tuple[str, ...]:
+    """问句里没有被任何精确证据覆盖的片段——也就是"用户说了、系统没听懂"的那些词。
+
+    记它是为了让反馈能收口。只知道"模型自己挑了销售金额"不够用：要补词典得知道**补
+    哪个说法**，而那个词此前谁都没匹配上，所以证据里查不到，只能从问句里反推。
+
+    判据是 span 补集，不是猜：精确命中的区间已经在证据里，剩下的连续片段就是没被覆盖
+    的部分。零模型调用、可复现，也正好给"按说法聚合"提供了聚合键——没有它，同一个
+    「业绩」被猜 20 次就是 20 条互不相干的记录。
+
+    首尾的虚词要裁掉：切出来的是「的业绩」而不是「业绩」，直接预填进术语表单用户还得
+    手动删一遍。只裁**首尾**、只裁单字虚词，不做停用词表——中间的字一律不动，宁可留下
+    「哪家店最赚钱」这种一看就不是术语的片段（用户看得见、可以不管），也不要把
+    「客户满意度」裁成「客户满意」。
+
+    只保留长度 ≥2 的片段：单字几乎都是「的」「有」这类虚词，留着只会把列表淹掉。
+    """
+
+    text = question or ""
+    if not text:
+        return ()
+    covered = [False] * len(text)
+    for item in evidence.matches if evidence is not None else ():
+        if str(getattr(item.method, "value", item.method)) != "exact":
+            continue
+        for start, end in item.detected_spans:
+            for position in range(max(0, start), min(len(text), end)):
+                covered[position] = True
+    phrases: list[str] = []
+    current: list[str] = []
+
+    def flush() -> None:
+        phrase = _trim_particles("".join(current))
+        if len(phrase) >= 2:
+            phrases.append(phrase)
+
+    for index, character in enumerate(text):
+        if covered[index] or character in _PHRASE_SEPARATORS:
+            flush()
+            current = []
+            continue
+        current.append(character)
+    flush()
+    return tuple(dict.fromkeys(phrases))
+
+
+def _trim_particles(phrase: str) -> str:
+    while phrase and phrase[0] in _EDGE_PARTICLES:
+        phrase = phrase[1:]
+    while phrase and phrase[-1] in _EDGE_PARTICLES:
+        phrase = phrase[:-1]
+    return phrase
 
 
 def _inferred_member_names(

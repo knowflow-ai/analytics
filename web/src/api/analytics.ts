@@ -420,7 +420,12 @@ export interface QueryFailurePage {
 
 export const listQueryFailures = (
   projectId: string,
-  options: { limit?: number; offset?: number; status?: AnalyticsFeedbackStatus | 'all' } = {},
+  options: {
+    limit?: number;
+    offset?: number;
+    /** `archived` = resolved + ignored，界面上不区分这两者。 */
+    status?: AnalyticsFeedbackStatus | 'archived' | 'all';
+  } = {},
 ) =>
   request<QueryFailurePage>(`${base(projectId)}/query-failures`, {
     projectId,

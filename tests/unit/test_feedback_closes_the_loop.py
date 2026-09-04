@@ -150,3 +150,39 @@ class TestPagination:
 
         assert [item.question for item in first] == ["问题4", "问题3"]
         assert [item.question for item in second] == ["问题2", "问题1"]
+
+
+class TestArchivedIsOneThingToTheUser:
+    """已处理和已忽略对建模者是同一件事：我不用再看它了。
+
+    界面上给这两者各开一个页签，等于把系统内部的记账变成用户要理解的两个概念——
+    实测它们合计只占 6% 的数据，进去之后还没有任何可执行的操作。合并成「已归档」，
+    取数就必须能一次拿到两者。
+    """
+
+    def test_archived_covers_both_resolved_and_ignored(self, store) -> None:
+        for question in ("问一", "问二", "问三"):
+            store.save_failure(_record(question), actor_id="a", project_id="p")
+        listed, _ = store.list_failures(project_id="p")
+        ids = [item.id for item in listed]
+        store.update_failure_status(
+            project_id="p",
+            failure_ids=(ids[0],),
+            status="resolved",
+            actor_id="a",
+            now=datetime.now(UTC),
+        )
+        store.update_failure_status(
+            project_id="p",
+            failure_ids=(ids[1],),
+            status="ignored",
+            actor_id="a",
+            now=datetime.now(UTC),
+        )
+
+        archived, total = store.list_failures(project_id="p", status="archived")
+
+        assert total == 2
+        assert {item.status for item in archived} == {"resolved", "ignored"}
+        # 待办里只剩没动过的那条。
+        assert store.list_failures(project_id="p")[1] == 1

@@ -2367,7 +2367,9 @@ def create_api(
         request_context: Context,
         limit: Annotated[int, Query(ge=1, le=200)] = 50,
         offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
-        status: Annotated[Literal["open", "resolved", "ignored", "all"], Query()] = "open",
+        status: Annotated[
+            Literal["open", "resolved", "ignored", "archived", "all"], Query()
+        ] = "open",
     ):
         """问数反馈：系统听不懂什么。
 

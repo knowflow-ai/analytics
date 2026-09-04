@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookOpenText, MessageSquareText } from "lucide-react";
+import { BookOpenText, MessageSquareText, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
   listQueryFailures,
@@ -8,17 +8,12 @@ import {
 import type { AnalyticsFeedbackStatus } from "@analytics/api/types";
 import { Badge, Button, Empty, Spinner } from "@analytics/components/ui";
 import {
-  FEEDBACK_FILTERS,
   feedbackEmptyCopy,
   feedbackFixTarget,
   feedbackRows,
-  feedbackSummary,
-  matchesFeedbackFilter,
   type FeedbackCatalogIndex,
-  type FeedbackFilter,
   type FeedbackFixTarget,
   type FeedbackKind,
-  type FeedbackSummary,
 } from "./ask-feedback-state";
 import { ANALYTICS_TASK_PANEL_CLASS } from "@analytics/lib/layout";
 import type { WorkbenchContext } from "./index";
@@ -68,13 +63,31 @@ export function AskFeedbackPanel({
   onFixInDictionary,
 }: Context & { onFixInDictionary: (target: FeedbackFixTarget) => void }) {
   const queryClient = useQueryClient();
-  const [status, setStatus] = useState<AnalyticsFeedbackStatus>("open");
+  /**
+   * 收件箱：列表就是待办，处理一条少一条。
+   *
+   * 早先这里有六个控件——三个状态页签（待处理/已处理/已忽略）加三个筛选胶囊
+   * （全部/能直接补进词典/要先诊断）——没有一个在做有效分流：已处理加已忽略
+   * 合计 11 条、占 6% 数据，进去之后没有任何可执行的操作，是只读墓地；而
+   * 79% 的记录都有落点，点「能直接补进词典」和点「全部」几乎是同一个列表。
+   *
+   * 现在只剩一个开关：看待办，还是看归档。已处理与已忽略合并成「已归档」，
+   * 因为对建模者来说它们是同一件事——我不用再看它了；区分这两者是系统内部
+   * 的记账。
+   */
+  const [view, setView] = useState<"open" | "archived">("open");
   const [offset, setOffset] = useState(0);
   const failures = useQuery({
-    queryKey: ["analytics-query-failures", projectId, status, offset],
-    queryFn: () => listQueryFailures(projectId, { limit: PAGE_SIZE, offset, status }),
+    queryKey: ["analytics-query-failures", projectId, view, offset],
+    queryFn: () =>
+      listQueryFailures(projectId, { limit: PAGE_SIZE, offset, status: view }),
   });
-  const [filter, setFilter] = useState<FeedbackFilter>("all");
+  // 归档条数单独问一次：入口要能显示"里面有没有东西"，但不需要它的内容。
+  const archivedCount = useQuery({
+    queryKey: ["analytics-query-failures", projectId, "archived-count"],
+    queryFn: () => listQueryFailures(projectId, { limit: 1, offset: 0, status: "archived" }),
+    select: (page) => page.total,
+  });
   const total = failures.data?.total ?? 0;
 
   const mark = useMutation({
@@ -105,22 +118,6 @@ export function AskFeedbackPanel({
       })),
     [catalog, failures.data],
   );
-  const summary = useMemo(
-    () => feedbackSummary(rows.map((item) => item.row), catalog),
-    [catalog, rows],
-  );
-  const counts = useMemo(
-    () =>
-      Object.fromEntries(
-        FEEDBACK_FILTERS.map((item) => [
-          item.key,
-          rows.filter((entry) => matchesFeedbackFilter(item.key, entry.fix)).length,
-        ]),
-      ) as Record<FeedbackFilter, number>,
-    [rows],
-  );
-  const visible = rows.filter((entry) => matchesFeedbackFilter(filter, entry.fix));
-
   if (failures.isPending) return <Spinner label="加载中" />;
 
   return (
@@ -128,66 +125,25 @@ export function AskFeedbackPanel({
       className={`grid h-full grid-cols-[minmax(0,1fr)_300px] ${ANALYTICS_TASK_PANEL_CLASS}`}
     >
       <section className="min-w-0 px-6 py-5">
-        {/*
-          两组控件长得太像，是这块"乱"的主因：状态页签（看哪一批）和筛选胶囊
-          （这批里看哪一类）原先并排在同一行、同为圆角小块，读起来像六个并列
-          选项，而它们其实是两层。分开——页签跟着标题走，做成分段控件（灰槽+
-          白块），胶囊留在列表上方保持描边样式，一眼能看出不是一类东西。
-        */}
         <div className="flex items-start justify-between gap-4">
-          <Header summary={summary} />
-          <div className="flex shrink-0 gap-0.5 rounded-lg bg-slate-100 p-0.5">
-            {(
-              [
-                ["open", "待处理"],
-                ["resolved", "已处理"],
-                ["ignored", "已忽略"],
-              ] as const
-            ).map(([key, label]) => (
-              <button
-                key={key}
-                type="button"
-                aria-pressed={status === key}
-                className={`rounded-md px-3 py-1 text-xs transition-colors ${
-                  status === key
-                    ? "bg-white font-medium text-slate-900 shadow-sm"
-                    : "text-slate-500 hover:text-slate-700"
-                }`}
-                onClick={() => {
-                  setStatus(key);
-                  setOffset(0);
-                }}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+          <Header view={view} total={total} />
+          {/* 归档不是一个页签，是一个抽屉：平时收着，需要找回误处理的记录时才打开。 */}
+          <button
+            type="button"
+            className="shrink-0 rounded-md px-2.5 py-1 text-xs text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700"
+            onClick={() => {
+              setView(view === "open" ? "archived" : "open");
+              setOffset(0);
+            }}
+          >
+            {view === "open"
+              ? `已归档${archivedCount.data ? ` ${archivedCount.data}` : ""}`
+              : "← 回到待办"}
+          </button>
         </div>
 
-        <div className="mt-4 flex flex-wrap items-center gap-2">
-          {FEEDBACK_FILTERS.map((item) => {
-            const active = item.key === filter;
-            return (
-              <button
-                key={item.key}
-                type="button"
-                aria-pressed={active}
-                onClick={() => setFilter(item.key)}
-                className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs transition-colors ${
-                  active
-                    ? "border-blue-500 bg-blue-50 font-medium text-blue-700"
-                    : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
-                }`}
-              >
-                {item.label}
-                <Badge tone={active ? "blue" : "slate"}>{counts[item.key]}</Badge>
-              </button>
-            );
-          })}
-        </div>
-
-        <ul className="mt-3 overflow-hidden rounded-lg border border-slate-200">
-          {visible.map(({ row, fix }) => (
+        <ul className="mt-4 overflow-hidden rounded-lg border border-slate-200">
+          {rows.map(({ row, fix }) => (
             <li
               key={`${row.kind}-${row.question}-${row.code}-${row.resolution}`}
               className="flex items-start gap-4 border-b border-slate-100 px-4 py-3.5 last:border-b-0"
@@ -202,21 +158,23 @@ export function AskFeedbackPanel({
                 <div className="text-sm leading-relaxed text-slate-900">
                   「{row.question}」
                 </div>
-                <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                {/* 类型、说明、落点原先分两行，其中"有没有落点"还得看右侧有没有
+                    按钮才知道。压成一行，一眼读完这条是什么、能不能补。 */}
+                <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
                   <Badge tone={KIND_TONE[row.kind]}>{KIND_LABEL[row.kind]}</Badge>
-                  <span className="text-xs text-slate-500">{row.what}</span>
-                </div>
-                {fix && (
-                  <div className="mt-2 text-xs text-slate-500">
-                    落点：
-                    <span className="font-medium text-slate-700">{fix.name}</span>
-                    <span className="ml-1 text-slate-400">
-                      （{TARGET_LABEL[fix.kind]}）
+                  <span>{row.what}</span>
+                  {fix ? (
+                    <span>
+                      · 落点：
+                      <span className="font-medium text-slate-700">{fix.name}</span>
+                      <span className="text-slate-400">（{TARGET_LABEL[fix.kind]}）</span>
                     </span>
-                  </div>
-                )}
+                  ) : (
+                    <span className="text-slate-400">· 没有落点，要先诊断</span>
+                  )}
+                </div>
               </div>
-              <div className="shrink-0 pt-0.5">
+              <div className="flex shrink-0 items-center gap-1.5 pt-0.5">
                 {fix ? (
                   /*
                     title 挂在外面这层 span 上，不是按钮上：原生 disabled 的
@@ -242,43 +200,40 @@ export function AskFeedbackPanel({
                       补进词典
                     </Button>
                   </span>
-                ) : (
-                  <span className="text-[11px] text-slate-400">要先诊断</span>
-                )}
-                {status === "open" && row.ids.length > 0 && (
-                  <div className="mt-1.5 flex justify-end gap-2 text-[11px]">
-                    {/* 处理过的收起来，不是删掉——这份数据还是补词典的依据。 */}
+                ) : null}
+                {row.ids.length > 0 &&
+                  /* 归档不是删除——这份数据还是补词典的依据，也是"这一版比上一版好"
+                     的素材。所以归档里始终能恢复。 */
+                  (view === "open" ? (
                     <button
                       type="button"
-                      className="text-slate-500 hover:text-slate-700"
-                      onClick={() => mark.mutate({ ids: row.ids, next: "resolved" })}
-                    >
-                      标为已处理
-                    </button>
-                    <button
-                      type="button"
-                      className="text-slate-400 hover:text-slate-600"
+                      title="不打算处理，收进归档"
+                      aria-label="收进归档"
+                      className="grid h-7 w-7 place-items-center rounded-md text-slate-300 transition-colors hover:bg-slate-100 hover:text-slate-600"
                       onClick={() => mark.mutate({ ids: row.ids, next: "ignored" })}
                     >
-                      忽略
+                      <X className="h-4 w-4" />
                     </button>
-                  </div>
-                )}
+                  ) : (
+                    <button
+                      type="button"
+                      className="rounded-md px-2 py-1 text-[11px] text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700"
+                      onClick={() => mark.mutate({ ids: row.ids, next: "open" })}
+                    >
+                      恢复
+                    </button>
+                  ))}
               </div>
             </li>
           ))}
-          {visible.length === 0 &&
+          {rows.length === 0 &&
             /* 空态只换列表内容。页签、筛选和统计留在原地——否则点进一个恰好为空的
                页签，连"切回去"的入口都跟着消失了。 */
-            (rows.length === 0 ? (
+            (
               <li className="px-4 py-12">
-                <Empty {...feedbackEmptyCopy(status)} />
+                <Empty {...feedbackEmptyCopy(view)} />
               </li>
-            ) : (
-              <li className="px-4 py-8 text-center text-xs text-slate-400">
-                这一类现在是空的。
-              </li>
-            ))}
+            )}
         </ul>
 
         {total > 0 && (
@@ -364,20 +319,23 @@ export function AskFeedbackPanel({
  * 才能确认它们说的是一回事。数字留在胶囊上（那里它还兼作筛选入口），这里只留
  * 一句话。
  */
-function Header({ summary }: { summary: FeedbackSummary }) {
+function Header({ view, total }: { view: "open" | "archived"; total: number }) {
   return (
     <header>
       <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
         <MessageSquareText className="h-4 w-4 text-slate-400" />
-        用户说了什么，系统没接住
+        {view === "open" ? "用户说了什么，系统没接住" : "已归档"}
       </h2>
       <p className="mt-1 max-w-2xl text-xs leading-relaxed text-slate-500">
-        线上真实提问回流到建模。这一页只回答一个问题：下一版该补哪些说法。
-        {summary.sayings > 0 && (
+        {view === "open" ? (
           <>
-            {" "}
-            共 {summary.sayings} 种说法、被问过 {summary.occurrences} 次；带正解的排在前面。
+            线上真实提问回流到建模。这一页只回答一个问题：下一版该补哪些说法。
+            {/* 报后端给的行数，不报前端聚合出来的"种数"：聚合只在当前这一页里
+                做，跨页会把同一个说法重新算成一条，说出来的数字是错的。 */}
+            {total > 0 && <> 还有 {total} 条待处理。</>}
           </>
+        ) : (
+          <>处理过和忽略掉的都在这里。想要哪条回到待办，点「恢复」。</>
         )}
       </p>
     </header>

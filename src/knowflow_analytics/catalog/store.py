@@ -2231,12 +2231,18 @@ class CatalogStore:
 
         ``status=None`` 表示不过滤（看全部，含已处理）。默认只看 ``open``：处理过的
         收起来，否则页面永远是一堆。
+
+        ``status="archived"`` 是 resolved + ignored 的合称。界面上不区分这两者——
+        对建模者来说它们是同一件事："我不用再看它了"。区分处理与忽略是系统内部的
+        记账，不该变成用户要理解的两个页签。
         """
 
         from knowflow_analytics.query.contracts import QueryFailureRecord
 
         condition = query_failures.c.project_id == project_id
-        if status is not None:
+        if status == "archived":
+            condition = and_(condition, query_failures.c.status.in_(("resolved", "ignored")))
+        elif status is not None:
             condition = and_(condition, query_failures.c.status == status)
         with self._engine.connect() as connection:
             total = connection.execute(

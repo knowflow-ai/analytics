@@ -412,7 +412,7 @@ export const suggestAliases = (
 
 export interface QueryFailurePage {
   items: AnalyticsQueryFailure[];
-  /** 符合当前筛选的总条数。没有它就说不出「还剩多少条待处理」。 */
+  /** 符合当前筛选的**总种数**（不是记录条数）。没有它就说不出「还剩多少条待处理」。 */
   total: number;
   offset: number;
   limit: number;
@@ -436,10 +436,21 @@ export const listQueryFailures = (
     },
   });
 
-/** 标成已处理/忽略。没有删除——处理过的收起来，不是抹掉。 */
+/**
+ * 把列表上的一行标成已处理/忽略。没有删除——处理过的收起来，不是抹掉。
+ *
+ * 标识的是"哪一个说法"而不是"哪几条记录"：同一个说法的记录散在多页，按 id 改
+ * 只能改掉当前页看得见的那几条，翻页回来它还在。这四个字段就是列表的聚合口径。
+ */
 export const updateQueryFailureStatus = (
   projectId: string,
-  input: { failure_ids: number[]; status: AnalyticsFeedbackStatus },
+  input: {
+    kind: string;
+    phrase: string;
+    resolution: string;
+    question: string;
+    status: AnalyticsFeedbackStatus;
+  },
 ) =>
   request<{ changed: number }>(`${base(projectId)}/query-failures:status`, {
     projectId,

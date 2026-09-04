@@ -3506,7 +3506,7 @@ class AnalyticsApplication:
     ):
         """问数反馈。默认只看待处理——处理过的收起来，否则页面永远是一堆。"""
 
-        items, total = self.catalog.list_failures(
+        items, total = self.catalog.list_failure_groups(
             project_id=project_id, limit=limit, offset=offset, status=status
         )
         return {
@@ -3517,9 +3517,20 @@ class AnalyticsApplication:
         }
 
     def update_query_failure_status(
-        self, project_id: str, *, failure_ids: tuple[int, ...], status: str, actor_id: str
+        self,
+        project_id: str,
+        *,
+        kind: str,
+        phrase: str,
+        resolution: str,
+        question: str,
+        status: str,
+        actor_id: str,
     ) -> dict[str, object]:
-        """把几条标成已处理/忽略。
+        """把列表上的一行（= 一个说法的全部记录）标成已处理/忽略。
+
+        按说法改而不按 id 列表改：同一个说法的记录散在多页，拿当前页那批 id 去改
+        只归掉看得见的那几条，翻页回来它还在。
 
         不提供删除：这份数据同时是补词典的依据和"这一版比上一版好"的素材。处理过的
         收起来，不是抹掉。
@@ -3529,9 +3540,12 @@ class AnalyticsApplication:
             raise SemanticValidationError(
                 "unsupported feedback status", code="FEEDBACK_STATUS_INVALID"
             )
-        changed = self.catalog.update_failure_status(
+        changed = self.catalog.update_failures_by_group(
             project_id=project_id,
-            failure_ids=failure_ids,
+            kind=kind,
+            phrase=phrase,
+            resolution=resolution,
+            question=question,
             status=status,
             actor_id=actor_id,
             now=datetime.now(UTC),

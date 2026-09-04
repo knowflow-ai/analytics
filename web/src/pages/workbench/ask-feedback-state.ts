@@ -60,53 +60,32 @@ export type FeedbackKind = 'clarified' | 'inferred' | 'unknown_value' | 'refused
  */
 export interface FeedbackRow {
   /**
-   * 列表渲染用的稳定标识，与聚合口径同源。
+   * 列表渲染用的稳定标识，与后端聚合口径同源。
    *
    * 组件那边曾经自己拼一个 `kind-question-code-resolution`——漏了 phrase，于是
    * 同一句问话下按不同说法聚合出的两行拿到完全相同的 React key，React 复用错
-   * DOM 节点：切到归档时上一屏待办的行留在原地，× 和「恢复」并存。key 由聚合
-   * 方生成，两者就不可能再漂移。
+   * DOM 节点：切到归档时上一屏待办的行留在原地，× 和「恢复」并存。key 用聚合
+   * 键本身，两者就不可能再漂移。
    */
   key: string;
   kind: FeedbackKind;
   question: string;
   code: string;
-  /** 建模者视角的一句话：这一轮到底发生了什么。 */
+  /** 建模者视角的一句话：这一轮到底发生了什么。收场标签能说清的就留空。 */
   what: string;
   /** 这次的正解，没有就是空串。 */
   resolution: string;
   /** 补别名有希望解决：这类才值得优先处理。 */
   fixableByAlias: boolean;
+  /** 真实总次数，跨页。 */
   count: number;
   /**
    * 用户说了、系统没听懂的那个词。有它就按它聚合——同一个「业绩」被猜 20 次是
    * **一件事**，摊成 20 行会让真正要补的东西淹在里面。
    */
   phrase: string;
-  /** 这些记录的行 id：一次把这一组全标成已处理，不用逐条点。 */
-  ids: number[];
-  /** 例句，最多 3 条。聚合之后要能看出这个说法是在什么语境下出现的。 */
-  questions: string[];
 }
 
-/**
- * 这条记录里"用户说了、系统没听懂"的那个词。
- *
- * 模型报的配对优先——它带成员，预填时两个框都能填上；没有就退回 span 补集（模型会
- * 漏报，实测同一个「业绩」一轮报了一轮没报）。两个都没有就返回空串，那条按问句聚合。
- */
-export function feedbackPhrase(item: AnalyticsQueryFailure): string {
-  const pair = (item.inferred_terms ?? [])[0];
-  if (pair && pair[0]) return pair[0].trim();
-  return ((item.unmatched_phrases ?? [])[0] ?? '').trim();
-}
-
-const KIND_ORDER: Record<FeedbackKind, number> = {
-  clarified: 0,
-  inferred: 1,
-  unknown_value: 2,
-  refused: 3,
-};
 
 function describe(item: AnalyticsQueryFailure): {
   what: string;
@@ -138,48 +117,34 @@ function describe(item: AnalyticsQueryFailure): {
  * 用户会反复试同一句话，逐条列出会让真正高频的说法淹没在重复里；次数本身就是
  * 优先级——被问 8 次的说法比只出现 1 次的更该补。
  */
+/**
+ * 把后端聚合好的行翻译成界面要的形状。
+ *
+ * 这里曾经自己做 group by 和排序——但它只看得到当前这一页，聚合因此发生在分页
+ * 之后：一个被问过 21 次的说法散在三页，每页各算各的次数，排序排的也只是"这一页
+ * 里出现了几次"。聚合下沉到 SQL 之后，这里只剩文案映射。
+ */
 export function feedbackRows(items: AnalyticsQueryFailure[]): FeedbackRow[] {
-  const groups = new Map<string, FeedbackRow>();
-  items.forEach((item) => {
-    const question = (item.question || '').trim();
-    if (!question) return;
-    const kind = item.kind ?? 'refused';
-    const resolution = item.resolution ?? '';
-    const phrase = feedbackPhrase(item);
-    // 有说法就按说法聚合，没有才退回按问句——一个说法是一件事，同一句话问两次也是。
-    const key = phrase
-      ? `${kind} phrase:${phrase} ${resolution}`
-      : `${kind} q:${question} ${item.code} ${resolution}`;
-    const existing = groups.get(key);
-    if (existing) {
-      existing.count += 1;
-      if (item.id !== undefined) existing.ids.push(item.id);
-      if (existing.questions.length < 3 && !existing.questions.includes(question)) {
-        existing.questions.push(question);
-      }
-      return;
-    }
-    const { what, fixableByAlias } = describe(item);
-    groups.set(key, {
-      key,
-      kind,
-      question,
-      code: item.code,
-      what,
-      resolution,
-      fixableByAlias,
-      count: 1,
-      phrase,
-      ids: item.id === undefined ? [] : [item.id],
-      questions: [question],
+  return items
+    .filter((item) => (item.question || '').trim())
+    .map((item) => {
+      const kind = item.kind ?? 'refused';
+      const phrase = (item.phrase || '').trim();
+      const question = item.question.trim();
+      const { what, fixableByAlias } = describe(item);
+      return {
+        // 与后端 `_failure_group_expressions()` 的分组键一一对应。
+        key: `${kind}\u0000${phrase}\u0000${item.resolution ?? ''}\u0000${phrase || question}`,
+        kind,
+        question,
+        code: item.code,
+        what,
+        resolution: item.resolution ?? '',
+        fixableByAlias,
+        count: item.count,
+        phrase,
+      };
     });
-  });
-  return [...groups.values()].sort(
-    (a, b) =>
-      KIND_ORDER[a.kind] - KIND_ORDER[b.kind] ||
-      b.count - a.count ||
-      a.question.localeCompare(b.question, 'zh-CN'),
-  );
 }
 
 /** 词典里能承接这条证据的那个成员。 */

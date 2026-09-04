@@ -19,6 +19,7 @@ from sqlalchemy import (
     String,
     Table,
     and_,
+    case,
     delete,
     func,
     insert,
@@ -378,6 +379,31 @@ class DataSourceRecord(FrozenModel):
     updated_at: datetime
 
 
+class QueryFailureGroup(FrozenModel):
+    """问数反馈列表的一行：**同一个说法**的所有记录并成一条。
+
+    这里返回的是聚合结果而不是原始记录行，因为聚合必须发生在分页之前。此前是
+    「取最新 50 行 → 前端 group by」，于是一个被问过 21 次的说法散在三页里，第一页
+    显示 2 次、第二页 10 次、再往后 9 次——三行谁都不等于 21，按次数排序排的其实是
+    "这一页里出现了几次"，页头也报不出真实种数。
+    """
+
+    kind: str
+    """这一轮怎么收场的。取值同 ``QueryFailureRecord.kind``。"""
+    phrase: str
+    """用户那个说法。空串表示这条记录没能提取出说法，此时按问句聚合。"""
+    resolution: str
+    question: str
+    """代表问句。同一个说法可能出现在多句问话里，这里取最早的一句。"""
+    stage: str
+    """卡在哪个阶段。新界面不显示它，但 `/analytics-legacy` 那个回退页在用。"""
+    code: str
+    message: str
+    count: int
+    """真实总次数，跨页。"""
+    last_seen: datetime
+
+
 class ReleaseSummary(FrozenModel):
     """发布历史里的一行。不带 SemanticRelease 正文 —— 列表只需要知道有哪些版本。"""
 
@@ -404,6 +430,32 @@ class PublishedRelease(FrozenModel):
 class CatalogError(AnalyticsError):
     def __init__(self, message: str, *, code: str = "CATALOG_ERROR") -> None:
         super().__init__(message, code=code, stage="CATALOG")
+
+
+def _failure_group_expressions():
+    """问数反馈的聚合口径。
+
+    单独抽出来，是因为**列表和归档必须用同一份表达式**：列表按这个口径把行并成
+    一条，归档再按同一个口径把那一条覆盖的所有行改掉。两处各写一份的话，用户
+    点的是"这一行"，改掉的却可能是另一批记录。
+    """
+
+    payload = query_failures.c.payload
+    # 说法有两个来源：模型自报的配对（首选，它带着「说法→成员」这一对），
+    # 以及精确证据的 span 补集（兜底，模型会漏报，这个永远算得出）。
+    term = payload["inferred_terms"][0][0].as_string()
+    span = payload["unmatched_phrases"][0].as_string()
+    phrase = func.coalesce(func.nullif(term, ""), func.nullif(span, ""), "")
+    kind = func.coalesce(payload["kind"].as_string(), "refused")
+    resolution = func.coalesce(payload["resolution"].as_string(), "")
+    question = func.coalesce(payload["question"].as_string(), "")
+    # 有说法就按说法聚合，没有才退回按问句——一个说法是一件事，同一句话问两次也是。
+    group_question = func.coalesce(func.nullif(phrase, ""), question)
+    return kind, phrase, resolution, question, group_question
+
+
+# 带正解的排前面（照着补别名即可），拒答排后面（还得先诊断）。次数在同档内比。
+_KIND_ORDER = {"clarified": 0, "inferred": 1, "unknown_value": 2, "refused": 3}
 
 
 def _schema_snapshot_storage_id(project_id: str, snapshot_id: str) -> str:
@@ -2231,77 +2283,105 @@ class CatalogStore:
                 )
             )
 
-    def list_failures(
+    def list_failure_groups(
         self,
         *,
         project_id: str,
-        limit: int = 500,
+        limit: int = 50,
         offset: int = 0,
         status: str | None = "open",
-    ) -> tuple[tuple, int]:
-        """Newest first，返回 (这一页, 总数)。
+    ) -> tuple[tuple[QueryFailureGroup, ...], int]:
+        """问数反馈列表：**先按说法聚合，再分页**，返回 (这一页, 总种数)。
 
-        要总数是因为没有它就没法分页——只给一页数据，界面既不知道有没有下一页，也说
-        不出"还剩多少条待处理"。而"还剩多少"正是这个页面存在的意义。
+        顺序不能反。此前是「取最新 50 行 → 前端 group by」，聚合只发生在那 50 行
+        里：一个被问过 21 次的说法散在三页，第一页显示 2 次、第二页 10 次、再往后
+        9 次，三行谁都不等于 21；按次数排序排的其实是"这一页里出现了几次"，于是
+        全库第一名被一堆碰巧挤在首页的三四次说法压在下面；页头也报不出真实种数
+        （界面显示 25 种，实际 45 种）。
 
-        ``status=None`` 表示不过滤（看全部，含已处理）。默认只看 ``open``：处理过的
-        收起来，否则页面永远是一堆。
-
-        ``status="archived"`` 是 resolved + ignored 的合称。界面上不区分这两者——
-        对建模者来说它们是同一件事："我不用再看它了"。区分处理与忽略是系统内部的
-        记账，不该变成用户要理解的两个页签。
+        ``status="archived"`` 是 resolved + ignored 的合称，``None`` 表示不过滤。
         """
-
-        from knowflow_analytics.query.contracts import QueryFailureRecord
 
         condition = query_failures.c.project_id == project_id
         if status == "archived":
             condition = and_(condition, query_failures.c.status.in_(("resolved", "ignored")))
         elif status is not None:
             condition = and_(condition, query_failures.c.status == status)
+
+        kind, phrase, resolution, question, group_question = _failure_group_expressions()
+        message = func.coalesce(query_failures.c.payload["message"].as_string(), "")
+        grouped = (
+            select(
+                kind.label("kind"),
+                phrase.label("phrase"),
+                resolution.label("resolution"),
+                # 同一个说法可能出现在多句问话里，取最早那句当代表。
+                func.min(question).label("question"),
+                func.min(query_failures.c.stage).label("stage"),
+                func.min(query_failures.c.code).label("code"),
+                func.min(message).label("message"),
+                func.count().label("count"),
+                func.max(query_failures.c.created_at).label("last_seen"),
+            )
+            .where(condition)
+            .group_by(kind, phrase, resolution, group_question)
+            .subquery()
+        )
+        # 带正解的排前面（照着补别名即可），拒答排后面（还得先诊断）；次数在同档内比。
+        by_kind = case(_KIND_ORDER, value=grouped.c.kind, else_=len(_KIND_ORDER))
         with self._engine.connect() as connection:
             total = connection.execute(
-                select(func.count()).select_from(query_failures).where(condition)
+                select(func.count()).select_from(grouped)
             ).scalar_one()
-            rows = connection.execute(
-                select(query_failures.c.id, query_failures.c.payload, query_failures.c.status)
-                .where(condition)
-                .order_by(query_failures.c.id.desc())
-                .limit(limit)
-                .offset(offset)
-            ).all()
-        items = []
-        for row in rows:
-            record = QueryFailureRecord.model_validate(row.payload)
-            # id 与 status 是行级状态，不在 payload 里——payload 是问数当时写下的
-            # 快照，事后改状态不该回头改它。
-            items.append(record.model_copy(update={"id": row.id, "status": row.status}))
-        return tuple(items), int(total)
+            rows = (
+                connection.execute(
+                    select(grouped)
+                    .order_by(by_kind, grouped.c.count.desc(), grouped.c.question)
+                    .limit(limit)
+                    .offset(offset)
+                )
+                .mappings()
+                .all()
+            )
+        return tuple(QueryFailureGroup(**row) for row in rows), int(total)
 
-    def update_failure_status(
+    def update_failures_by_group(
         self,
         *,
         project_id: str,
-        failure_ids: tuple[int, ...],
+        kind: str,
+        phrase: str,
+        resolution: str,
+        question: str,
         status: str,
         actor_id: str,
         now: datetime,
     ) -> int:
-        """把几条标成已处理/忽略，返回改了几行。
+        """把列表上的一行（= 一个说法的全部记录）标成已处理/忽略，返回改了几行。
 
-        带上 ``project_id``：id 是全局自增的，只按 id 更新会让一个项目的人改到另一个
-        项目的记录。
+        按聚合口径改，不按 id 列表改。此前界面拿的是当前页那批 id，而同一个说法
+        的记录是散在多页的——点一下"归档"只归掉这一页里的那几条，翻页回来它又在，
+        次数还变了。这里用 ``_failure_group_expressions()`` 的同一份表达式，覆盖
+        的正好是列表上那一行代表的全部记录。
+
+        带上 ``project_id``：说法在项目之间会重名，不限定就会改到别人的记录。
         """
 
-        if not failure_ids:
-            return 0
+        kind_expr, phrase_expr, resolution_expr, _question, group_question = (
+            _failure_group_expressions()
+        )
+        # 聚合键的第四项：有说法时就是说法本身，没有才退回问句。
+        group_key = phrase or question
         with self._engine.begin() as connection:
             result = connection.execute(
                 query_failures.update()
                 .where(
                     and_(
                         query_failures.c.project_id == project_id,
-                        query_failures.c.id.in_(failure_ids),
+                        kind_expr == kind,
+                        phrase_expr == phrase,
+                        resolution_expr == resolution,
+                        group_question == group_key,
                     )
                 )
                 .values(

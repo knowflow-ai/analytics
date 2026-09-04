@@ -834,13 +834,15 @@ function QueryFailuresCard({
     <div className="mt-5 rounded-lg border border-slate-200 p-3">
       {/*
         这句话原先三处都不实：①"没接住"——四种收场里 clarified 和 inferred 其实
-        答上来了，只是靠反问和猜；②数字用的是 rows.length，而 rows 是把这一页
-        50 行聚合出来的，全量另算（实测界面报 25 种、真实 45 种）；③"最高频"
-        ——rows 的第一排序键是收场类型不是次数，rows[0] 常常只被问过一次。
-        改用后端给的行数，例子就说是例子。
+        答上来了，只是靠反问和猜；②数字用的是 rows.length，而 rows 当时是前端把
+        这一页 50 行聚合出来的，全量另算（实测界面报 25 种、真实 45 种）；③"最高
+        频"——第一排序键是收场类型不是次数，rows[0] 常常只被问过一次。
+
+        聚合下沉到 SQL 之后 total 就是真实种数了，这里可以照实说"多少种"。但排序
+        仍是"收场类型优先"，所以例子还是只说例子。
       */}
       <div className="text-xs text-slate-700">
-        有 <b className="font-semibold">{failures.data?.total ?? rows.length}</b> 条提问系统没直接听懂
+        有 <b className="font-semibold">{failures.data?.total ?? rows.length}</b> 种说法系统没直接听懂
       </div>
       <div className="mt-1.5 text-[11px] leading-relaxed text-slate-400">
         比如「{rows[0].question}」。多数补个别名就能答上。

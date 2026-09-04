@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 
-import type { AnalyticsQueryFailure } from '@analytics/api/types';
 import {
   feedbackEmptyCopy,
   failureReason,
@@ -15,39 +14,28 @@ const record = (
 ) =>
   ({
     question,
-    effective_question: question,
-    stage: 'CANDIDATE_DISCOVERY',
     code,
     message: '',
-    release_id: 'rel-1',
-    dataset_ids: [],
+    phrase: '',
+    resolution: '',
+    count: 1,
+    last_seen: '2026-09-04T00:00:00Z',
     ...extra,
   }) as any;
 
 describe('系统没直接听懂的说法', () => {
-  it('用户澄清后答出来的排最前：它自带正解，照着补别名就行', () => {
+  it('四种收场都翻译成建模者看得懂的话', () => {
+    // 顺序由 SQL 的 ORDER BY 决定，这里只管翻译。
     const rows = feedbackRows([
       record('各城市有哪些门店', 'QUERY_EXECUTION_FAILED'),
       record('哪些门店售卖摩卡', 'UNKNOWN_FILTER_VALUE', {
         kind: 'unknown_value',
         message: '「摩卡」不在「商品名称」的已发布取值里',
       }),
-      record('各门店的营业额', 'SEMANTIC_INFERRED', {
-        kind: 'inferred',
-        resolution: '销售金额',
-      }),
-      record('各门店的业绩', 'SEMANTIC_CLARIFIED', {
-        kind: 'clarified',
-        resolution: '销售金额',
-      }),
     ]);
 
-    expect(rows.map((row) => row.kind)).toEqual([
-      'clarified',
-      'inferred',
-      'unknown_value',
-      'refused',
-    ]);
+    expect(rows.map((row) => row.kind)).toEqual(['refused', 'unknown_value']);
+    expect(rows[1].what).toContain('摩卡');
   });
 
   it('猜和反问这两种收场不再重复说明：标签加落点已经把话说完了', () => {
@@ -123,29 +111,12 @@ describe('系统没直接听懂的说法', () => {
     expect(rows.every((row) => row.fixableByAlias)).toBe(true);
   });
 
-  it('同一问句的同一种收场只占一行，按次数降序', () => {
-    const rows = feedbackRows([
-      record('甲', 'NO_SEMANTIC_MAPPING'),
-      record('乙', 'NO_SEMANTIC_MAPPING'),
-      record('乙', 'NO_SEMANTIC_MAPPING'),
-    ]);
+  it('次数原样透传，不再自己数', () => {
+    // 聚合和排序都在 SQL 里做了：前端只看得到当前这一页，自己数出来的次数只是
+    // "这一页里出现了几次"（实测 21 次的说法散在三页，各显示 2/10/9 次）。
+    const [row] = feedbackRows([record('各门店的业绩', 'NO_SEMANTIC_MAPPING', { count: 21 })]);
 
-    expect(rows.map((row) => [row.question, row.count])).toEqual([
-      ['乙', 2],
-      ['甲', 1],
-    ]);
-  });
-
-  it('同一问句不同收场分开计数——处理方式也不同', () => {
-    const rows = feedbackRows([
-      record('各门店的业绩', 'NO_SEMANTIC_MAPPING'),
-      record('各门店的业绩', 'SEMANTIC_CLARIFIED', {
-        kind: 'clarified',
-        resolution: '销售金额',
-      }),
-    ]);
-
-    expect(rows).toHaveLength(2);
+    expect(row.count).toBe(21);
   });
 
   it('空问句被丢弃', () => {
@@ -217,66 +188,6 @@ describe('这条证据能落到词典的哪个成员上', () => {
   });
 });
 
-describe('按说法聚合', () => {
-  const record = (over: Partial<AnalyticsQueryFailure>): AnalyticsQueryFailure => ({
-    question: '各门店的业绩',
-    effective_question: '',
-    stage: 'CANDIDATE_DISCOVERY',
-    code: 'SEMANTIC_INFERRED',
-    message: '',
-    release_id: 'rel',
-    dataset_ids: [],
-    kind: 'inferred',
-    resolution: '销售金额',
-    ...over,
-  });
-
-  it('同一个说法的不同问句并成一条', () => {
-    // 摊成 20 行会让真正要补的东西淹在里面——这正是"一堆问题"的由来。
-    const rows = feedbackRows([
-      record({ id: 1, question: '各门店的业绩', inferred_terms: [['业绩', '销售金额']] }),
-      record({ id: 2, question: '门店业绩排名', inferred_terms: [['业绩', '销售金额']] }),
-      record({ id: 3, question: '上海门店的业绩如何', unmatched_phrases: ['业绩'] }),
-    ]);
-
-    expect(rows).toHaveLength(1);
-    expect(rows[0].phrase).toBe('业绩');
-    expect(rows[0].count).toBe(3);
-    // 一次把这一组全标成已处理，不用逐条点。
-    expect(rows[0].ids).toEqual([1, 2, 3]);
-  });
-
-  it('不同说法不能并到一起', () => {
-    const rows = feedbackRows([
-      record({ id: 1, inferred_terms: [['业绩', '销售金额']] }),
-      record({ id: 2, question: '各门店的坪效', inferred_terms: [['坪效', '销售金额']] }),
-    ]);
-
-    expect(rows.map((item) => item.phrase).sort()).toEqual(['业绩', '坪效']);
-  });
-
-  it('例句最多留 3 条', () => {
-    const rows = feedbackRows(
-      [1, 2, 3, 4, 5].map((n) =>
-        record({ id: n, question: `问法${n}`, inferred_terms: [['业绩', '销售金额']] }),
-      ),
-    );
-
-    expect(rows[0].count).toBe(5);
-    expect(rows[0].questions).toHaveLength(3);
-  });
-
-  it('没有说法时退回按问句聚合', () => {
-    // 拒答那类往往两个来源都空，那时问句本身就是唯一能区分的东西。
-    const rows = feedbackRows([
-      record({ id: 1, kind: 'refused', resolution: '', question: 'A' }),
-      record({ id: 2, kind: 'refused', resolution: '', question: 'B' }),
-    ]);
-
-    expect(rows).toHaveLength(2);
-  });
-});
-
 describe('预填说法', () => {
   const catalog = {
     metrics: [{ id: 'metric:sales', name: '销售金额' }],
@@ -316,36 +227,21 @@ describe('feedbackEmptyCopy', () => {
 });
 
 describe('列表 key', () => {
-  it('同一句问话按不同说法聚合出的两行，key 必须不同', () => {
+  it('同一句问话按不同说法分出的两行，key 必须不同', () => {
     // key 相同会让 React 复用错 DOM 节点——实测切到归档时，上一屏待办的行留在
     // 原地不动，× 和「恢复」两种动作同时出现在一个列表里。
     const rows = feedbackRows([
-      {
-        question: '各城市有多少门店',
-        effective_question: '各城市有多少门店',
-        stage: 'FINAL_PARSING',
-        code: 'SEMANTIC_INFERRED',
-        message: '',
-        release_id: 'rel',
-        dataset_ids: [],
+      record('各城市有多少门店', 'SEMANTIC_INFERRED', {
         kind: 'inferred',
         resolution: '门店数量',
-      },
-      {
-        question: '各城市有多少门店',
-        effective_question: '各城市有多少门店',
-        stage: 'FINAL_PARSING',
-        code: 'SEMANTIC_INFERRED',
-        message: '',
-        release_id: 'rel',
-        dataset_ids: [],
+      }),
+      record('各城市有多少门店', 'SEMANTIC_INFERRED', {
         kind: 'inferred',
         resolution: '门店数量',
-        unmatched_phrases: ['多少'],
-      },
+        phrase: '多少',
+      }),
     ]);
 
-    expect(rows).toHaveLength(2);
     expect(new Set(rows.map((row) => row.key)).size).toBe(2);
   });
 });

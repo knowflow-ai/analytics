@@ -27,6 +27,24 @@ def store():
     return catalog
 
 
+def _archive(store, *, question: str, phrase: str = "", status: str = "resolved") -> int:
+    """按列表上那一行的聚合口径归档。
+
+    界面点的是"这一行"（一个说法），不是"这几条 id"——同一个说法的记录散在多页。
+    """
+
+    return store.update_failures_by_group(
+        project_id="p",
+        kind="inferred",
+        phrase=phrase,
+        resolution="",
+        question=question,
+        status=status,
+        actor_id="u1",
+        now=datetime.now(UTC),
+    )
+
+
 def _record(question: str, *, phrases=(), terms=()) -> QueryFailureRecord:
     return QueryFailureRecord(
         kind="inferred",
@@ -44,82 +62,112 @@ def _record(question: str, *, phrases=(), terms=()) -> QueryFailureRecord:
 class TestHandledOnesGoAway:
     def test_a_resolved_record_leaves_the_default_list(self, store) -> None:
         store.save_failure(_record("各门店的业绩"), actor_id="a", project_id="p")
-        listed, _total = store.list_failures(project_id="p")
 
-        store.update_failure_status(
-            project_id="p",
-            failure_ids=(listed[0].id,),
-            status="resolved",
-            actor_id="u1",
-            now=datetime.now(UTC),
-        )
+        assert _archive(store, question="各门店的业绩") == 1
 
-        remaining, total = store.list_failures(project_id="p")
+        remaining, total = store.list_failure_groups(project_id="p")
         assert remaining == () and total == 0
         # 但没有被删掉：这份数据同时是补词典的依据和"这一版比上一版好"的素材。
-        archived, archived_total = store.list_failures(project_id="p", status="resolved")
+        archived, archived_total = store.list_failure_groups(project_id="p", status="resolved")
         assert archived_total == 1 and archived[0].question == "各门店的业绩"
 
     def test_another_project_is_not_touched(self, store) -> None:
-        """id 是全局自增的，只按 id 更新会改到别的项目的记录。"""
+        """说法在项目之间会重名，归档不限定项目就会改到别人的记录。"""
 
-        store.save_failure(_record("我的"), actor_id="a", project_id="mine")
-        store.save_failure(_record("别人的"), actor_id="a", project_id="theirs")
-        theirs, _ = store.list_failures(project_id="theirs")
+        store.save_failure(_record("各门店的业绩"), actor_id="a", project_id="p")
+        store.save_failure(_record("各门店的业绩"), actor_id="a", project_id="theirs")
 
-        changed = store.update_failure_status(
-            project_id="mine",
-            failure_ids=(theirs[0].id,),
-            status="resolved",
-            actor_id="u1",
-            now=datetime.now(UTC),
+        assert _archive(store, question="各门店的业绩") == 1
+
+        assert store.list_failure_groups(project_id="p")[1] == 0
+        assert store.list_failure_groups(project_id="theirs")[1] == 1
+
+
+class TestGroupingHappensBeforePaging:
+    """聚合必须发生在分页之前，否则次数、排序、总数三样全是错的。
+
+    此前是「取最新 50 行 → 前端 group by」：实测一个被问过 21 次的说法散在三页，
+    第一页显示 2 次、第二页 10 次、再往后 9 次——三行谁都不等于 21。
+    """
+
+    def test_a_saying_asked_across_pages_counts_every_occurrence(self, store) -> None:
+        for _ in range(21):
+            store.save_failure(
+                _record("各门店的业绩", phrases=("业绩",)), actor_id="a", project_id="p"
+            )
+        # 足够多的杂音，把那 21 条挤到分页边界之外。
+        for index in range(30):
+            store.save_failure(_record(f"杂音{index}"), actor_id="a", project_id="p")
+
+        page, total = store.list_failure_groups(project_id="p", limit=5)
+
+        assert total == 31, "31 种说法，不是 51 行"
+        top = page[0]
+        assert top.phrase == "业绩"
+        assert top.count == 21, "次数是全库的，不是这一页里数出来的"
+
+    def test_archiving_one_row_covers_the_records_on_other_pages(self, store) -> None:
+        """点一下归档，那个说法就该整个消失，而不是只消掉看得见的几条。"""
+
+        for _ in range(21):
+            store.save_failure(
+                _record("各门店的业绩", phrases=("业绩",)), actor_id="a", project_id="p"
+            )
+
+        assert _archive(store, question="各门店的业绩", phrase="业绩") == 21
+        assert store.list_failure_groups(project_id="p")[1] == 0
+
+    def test_the_same_question_splits_by_saying(self, store) -> None:
+        """同一句问话按不同说法聚合成不同行——说法才是这一页的主语。"""
+
+        store.save_failure(_record("各城市有多少门店"), actor_id="a", project_id="p")
+        store.save_failure(
+            _record("各城市有多少门店", phrases=("多少",)), actor_id="a", project_id="p"
         )
 
-        assert changed == 0
-        assert store.list_failures(project_id="theirs")[1] == 1
+        page, total = store.list_failure_groups(project_id="p")
+
+        assert total == 2
+        assert sorted(item.phrase for item in page) == ["", "多少"]
 
 
 class TestAddingTheTermClosesTheLoop:
     def test_records_naming_the_same_phrase_are_resolved(self, store) -> None:
-        """用户补了「业绩」，说的是「业绩」的那些记录就该消失。"""
-
-        store.save_failure(_record("各门店的业绩", phrases=("业绩",)), actor_id="a", project_id="p")
+        store.save_failure(
+            _record("各门店的业绩", phrases=("业绩",)), actor_id="a", project_id="p"
+        )
         store.save_failure(
             _record("门店业绩排名", terms=(("业绩", "销售金额"),)), actor_id="a", project_id="p"
         )
-        store.save_failure(
-            _record("各门店的坪效", phrases=("坪效",)), actor_id="a", project_id="p"
-        )
+        store.save_failure(_record("各门店的毛利"), actor_id="a", project_id="p")
 
         changed = store.resolve_failures_by_phrase(
             project_id="p", phrases=("业绩",), actor_id="u1", now=datetime.now(UTC)
         )
 
-        assert changed == 2, "两个来源记下的说法都要能消掉，只看一个的话另一个消不了"
-        remaining, total = store.list_failures(project_id="p")
-        assert total == 1 and remaining[0].question == "各门店的坪效"
+        assert changed == 2
+        remaining, total = store.list_failure_groups(project_id="p")
+        assert total == 1 and remaining[0].question == "各门店的毛利"
 
     def test_a_similar_phrase_is_not_treated_as_the_same(self, store) -> None:
-        """不做模糊匹配——把「业绩」和「营业额」当成一回事，用户会以为自己补过了。"""
+        """只认字面相等：把「毛利」当成「毛利率」处理会静默改掉不该动的记录。"""
 
         store.save_failure(
-            _record("各门店的营业额", phrases=("营业额",)), actor_id="a", project_id="p"
+            _record("各门店的毛利率", phrases=("毛利率",)), actor_id="a", project_id="p"
         )
 
         changed = store.resolve_failures_by_phrase(
-            project_id="p", phrases=("业绩",), actor_id="u1", now=datetime.now(UTC)
+            project_id="p", phrases=("毛利",), actor_id="u1", now=datetime.now(UTC)
         )
 
         assert changed == 0
-        assert store.list_failures(project_id="p")[1] == 1
+        assert store.list_failure_groups(project_id="p")[1] == 1
 
     def test_already_handled_records_are_left_alone(self, store) -> None:
-        store.save_failure(_record("各门店的业绩", phrases=("业绩",)), actor_id="a", project_id="p")
-        listed, _ = store.list_failures(project_id="p")
-        store.update_failure_status(
-            project_id="p", failure_ids=(listed[0].id,), status="ignored",
-            actor_id="u1", now=datetime.now(UTC),
+        store.save_failure(
+            _record("各门店的业绩", phrases=("业绩",)), actor_id="a", project_id="p"
         )
+        _archive(store, question="各门店的业绩", phrase="业绩", status="ignored")
 
         changed = store.resolve_failures_by_phrase(
             project_id="p", phrases=("业绩",), actor_id="u2", now=datetime.now(UTC)
@@ -135,7 +183,7 @@ class TestPagination:
         for index in range(7):
             store.save_failure(_record(f"问题{index}"), actor_id="a", project_id="p")
 
-        page, total = store.list_failures(project_id="p", limit=3)
+        page, total = store.list_failure_groups(project_id="p", limit=3)
 
         assert len(page) == 3 and total == 7
 
@@ -145,11 +193,11 @@ class TestPagination:
         for index in range(5):
             store.save_failure(_record(f"问题{index}"), actor_id="a", project_id="p")
 
-        first, _ = store.list_failures(project_id="p", limit=2, offset=0)
-        second, _ = store.list_failures(project_id="p", limit=2, offset=2)
+        first, _ = store.list_failure_groups(project_id="p", limit=2, offset=0)
+        second, _ = store.list_failure_groups(project_id="p", limit=2, offset=2)
 
-        assert [item.question for item in first] == ["问题4", "问题3"]
-        assert [item.question for item in second] == ["问题2", "问题1"]
+        assert [item.question for item in first] == ["问题0", "问题1"]
+        assert [item.question for item in second] == ["问题2", "问题3"]
 
 
 class TestArchivedIsOneThingToTheUser:
@@ -163,26 +211,13 @@ class TestArchivedIsOneThingToTheUser:
     def test_archived_covers_both_resolved_and_ignored(self, store) -> None:
         for question in ("问一", "问二", "问三"):
             store.save_failure(_record(question), actor_id="a", project_id="p")
-        listed, _ = store.list_failures(project_id="p")
-        ids = [item.id for item in listed]
-        store.update_failure_status(
-            project_id="p",
-            failure_ids=(ids[0],),
-            status="resolved",
-            actor_id="a",
-            now=datetime.now(UTC),
-        )
-        store.update_failure_status(
-            project_id="p",
-            failure_ids=(ids[1],),
-            status="ignored",
-            actor_id="a",
-            now=datetime.now(UTC),
-        )
 
-        archived, total = store.list_failures(project_id="p", status="archived")
+        _archive(store, question="问一", status="resolved")
+        _archive(store, question="问二", status="ignored")
+
+        archived, total = store.list_failure_groups(project_id="p", status="archived")
 
         assert total == 2
-        assert {item.status for item in archived} == {"resolved", "ignored"}
+        assert sorted(item.question for item in archived) == ["问一", "问二"]
         # 待办里只剩没动过的那条。
-        assert store.list_failures(project_id="p")[1] == 1
+        assert store.list_failure_groups(project_id="p")[1] == 1

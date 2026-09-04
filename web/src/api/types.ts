@@ -1280,37 +1280,27 @@ export interface AnalyticsDictionaryDecision {
   enabled?: boolean | null;
 }
 
-/**
- * 一条「系统没直接听懂用户说法」的记录，系统「听不懂什么」的一手数据，供别名/术语补全。
- *
- * 三种收场记在同一处（`kind`）：拒答只知道失败了；用户澄清后答出来的**自带正解**；
- * 用了系统不认识的取值则可能有近似建议。
- */
 export type AnalyticsFeedbackStatus = 'open' | 'resolved' | 'ignored';
 
+/**
+ * 问数反馈列表的一行：**同一个说法**的所有记录并成一条。
+ *
+ * 这是后端聚合后的结果，不是原始记录行——聚合必须发生在分页之前。此前后端返回
+ * 最新 50 行、由前端 group by，于是一个被问过 21 次的说法散在三页，第一页显示
+ * 2 次、第二页 10 次、再往后 9 次；按次数排序排的其实是"这一页里出现了几次"，
+ * 页头也报不出真实种数。
+ */
 export interface AnalyticsQueryFailure {
-  /** 行级 id。标记已处理要用它；老记录可能没有。 */
-  id?: number;
-  status?: AnalyticsFeedbackStatus;
   kind?: 'refused' | 'clarified' | 'inferred' | 'unknown_value';
+  /** 用户那个说法。空串表示这条没能提出说法，此时按问句聚合。 */
+  phrase: string;
   /** 这次的正解：用户选中的成员名，或近似取值建议。没有就是空串。 */
-  resolution?: string;
-  /**
-   * 模型报的「这个说法我理解成了那个成员」，已过字面子串校验。**首选**：它带配对，
-   * 预填术语表单要的正是这一对。
-   */
-  inferred_terms?: [string, string][];
-  /** 问句里没被任何精确证据覆盖的片段。**补漏用**：模型会漏报，这条永远算得出来。 */
-  unmatched_phrases?: string[];
+  resolution: string;
+  /** 代表问句。同一个说法可能出现在多句问话里，取最早的一句。 */
   question: string;
-  effective_question: string;
-  stage: string;
   code: string;
   message: string;
-  release_id: string;
-  spec_hash?: string;
-  index_snapshot_id?: string;
-  dataset_ids: string[];
-  details?: Record<string, unknown>;
-  created_at?: string;
+  /** 真实总次数，跨页。 */
+  count: number;
+  last_seen: string;
 }

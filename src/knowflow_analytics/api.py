@@ -829,9 +829,18 @@ def _upload_plan(raw: str) -> tuple[tuple[str, str], ...]:
 
 
 class FeedbackStatusRequest(BaseModel):
+    """把反馈列表上的一行标成已处理/忽略。
+
+    标识的是"哪一个说法"而不是"哪几条记录"：同一个说法的记录散在多页，按 id 改
+    只能改掉当前页看得见的那几条。这四个字段就是列表的聚合口径。
+    """
+
     model_config = ConfigDict(extra="forbid")
 
-    failure_ids: list[int] = Field(min_length=1, max_length=500)
+    kind: str = Field(max_length=32)
+    phrase: str = Field(default="", max_length=256)
+    resolution: str = Field(default="", max_length=256)
+    question: str = Field(default="", max_length=4_000)
     status: Literal["open", "resolved", "ignored"]
 
 
@@ -2401,13 +2410,16 @@ def create_api(
         payload: FeedbackStatusRequest,
         request_context: Context,
     ):
-        """把几条反馈标成已处理/忽略。没有删除——处理过的收起来，不是抹掉。"""
+        """把反馈列表上的一行标成已处理/忽略。没有删除——处理过的收起来，不是抹掉。"""
 
         require_project(project_id, request_context)
         expensive(request_context)
         return application.update_query_failure_status(
             project_id,
-            failure_ids=tuple(payload.failure_ids),
+            kind=payload.kind,
+            phrase=payload.phrase,
+            resolution=payload.resolution,
+            question=payload.question,
             status=payload.status,
             actor_id=request_context.actor_id,
         )

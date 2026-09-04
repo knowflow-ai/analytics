@@ -13,6 +13,7 @@ import {
   feedbackRows,
   type FeedbackCatalogIndex,
   type FeedbackFixTarget,
+  type FeedbackRow,
   type FeedbackKind,
 } from "./ask-feedback-state";
 import { ANALYTICS_TASK_PANEL_CLASS } from "@analytics/lib/layout";
@@ -85,9 +86,14 @@ export function AskFeedbackPanel({
   const total = failures.data?.total ?? 0;
 
   const mark = useMutation({
-    mutationFn: (input: { ids: number[]; next: AnalyticsFeedbackStatus }) =>
+    // 按说法归档，不按 id：同一个说法的记录散在多页，拿当前页那批 id 去改只归掉
+    // 看得见的几条，翻页回来它还在、次数还变了。
+    mutationFn: (input: { row: FeedbackRow; next: AnalyticsFeedbackStatus }) =>
       updateQueryFailureStatus(projectId, {
-        failure_ids: input.ids,
+        kind: input.row.kind,
+        phrase: input.row.phrase,
+        resolution: input.row.resolution,
+        question: input.row.question,
         status: input.next,
       }),
     onSuccess: () => {
@@ -234,28 +240,27 @@ export function AskFeedbackPanel({
                     </Button>
                   </span>
                 ) : null}
-                {row.ids.length > 0 &&
-                  /* 归档不是删除——这份数据还是补词典的依据，也是"这一版比上一版好"
-                     的素材。所以归档里始终能恢复。 */
-                  (view === "open" ? (
-                    <button
-                      type="button"
-                      title="不打算处理，收进归档"
-                      aria-label="收进归档"
-                      className="grid h-7 w-7 place-items-center rounded-md text-slate-300 transition-colors hover:bg-slate-100 hover:text-slate-600"
-                      onClick={() => mark.mutate({ ids: row.ids, next: "ignored" })}
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      className="rounded-md px-2 py-1 text-[11px] text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700"
-                      onClick={() => mark.mutate({ ids: row.ids, next: "open" })}
-                    >
-                      恢复
-                    </button>
-                  ))}
+                {/* 归档不是删除——这份数据还是补词典的依据，也是"这一版比上一版好"
+                    的素材。所以归档里始终能恢复。 */}
+                {view === "open" ? (
+                  <button
+                    type="button"
+                    title="不打算处理，收进归档"
+                    aria-label="收进归档"
+                    className="grid h-7 w-7 place-items-center rounded-md text-slate-300 transition-colors hover:bg-slate-100 hover:text-slate-600"
+                    onClick={() => mark.mutate({ row, next: "ignored" })}
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="rounded-md px-2 py-1 text-[11px] text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700"
+                    onClick={() => mark.mutate({ row, next: "open" })}
+                  >
+                    恢复
+                  </button>
+                )}
               </div>
             </li>
           ))}
@@ -363,9 +368,9 @@ function Header({ view, total }: { view: "open" | "archived"; total: number }) {
         {view === "open" ? (
           <>
             线上真实提问回流到建模。这一页只回答一个问题：下一版该补哪些说法。
-            {/* 报后端给的行数，不报前端聚合出来的"种数"：聚合只在当前这一页里
-                做，跨页会把同一个说法重新算成一条，说出来的数字是错的。 */}
-            {total > 0 && <> 还有 {total} 条待处理。</>}
+            {/* 种数由 SQL 聚合后给出，跨页也是对的。此前聚合在前端、只看得到当前
+                这一页，同一个说法跨页会被重新算成一条，报出来的数字必然偏小。 */}
+            {total > 0 && <> 还有 {total} 种说法待处理。</>}
           </>
         ) : (
           <>处理过和忽略掉的都在这里。想要哪条回到待办，点「恢复」。</>

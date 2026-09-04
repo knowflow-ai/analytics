@@ -64,13 +64,14 @@ class Settlement(FrozenModel):
 def semantic_ambiguity_groups(
     mapping: MappingResult,
 ) -> tuple[tuple[tuple[str, ...], str], ...]:
-    """Groups of METRIC/DIMENSION members, each with the phrase that caused it.
+    """Groups of members, each with the phrase that caused it.
 
-    Dimension values are dropped from every group, not merely tolerated: a value
-    can never appear in ``SemanticQuery`` ids, so counting it would make every
-    mixed group look unsettled forever. Pure value collisions stay with the
-    grounding validator. A group that keeps fewer than two members is no longer
-    ambiguous.
+    维度值也算数。它确实不会出现在 ``SemanticQuery`` 的 ids 里，但
+    ``_query_uses_dimension_value`` 能直接看这条查询有没有按它过滤——这正是义务路径
+    早就在用的判断。把值成员整个剔掉会让混合组塌成一个成员、随即被丢弃，于是
+    「按门店名称分组 + 按渠道=门店过滤」这种同一个词消费两次的对冲无人接管（实测
+    demo_cafe「哪些门店售卖卡布奇诺」5 次里 3 次这样答）。纯值碰撞仍归 grounding
+    validator。少于两个成员的组不再是歧义。
     """
 
     return tuple(
@@ -84,15 +85,32 @@ def semantic_ambiguity_groups(
 
 def _typed_semantic_ambiguity_groups(
     mapping: MappingResult,
+    *,
+    include_values: bool = True,
 ) -> tuple[SemanticAmbiguityGroup, ...]:
-    """Return Mapper-authored groups without reconstructing them from bare IDs."""
+    """Return Mapper-authored groups without reconstructing them from bare IDs.
+
+    ``include_values`` 分开两个门：同名门问的是"模型能不能用名字表达这个选择"，
+    维度值写成过滤值本来就表达得出来，且 Release 的名字表里根本没有它——放进去会被
+    当成"叫不出名字的成员"，在模型还没跑之前就弹卡（实测「门店渠道的销售金额」）。
+    结算门问的是"模型有没有对冲"，那里维度值必须算数。
+    """
 
     groups: list[SemanticAmbiguityGroup] = []
     for group in mapping.semantic_ambiguity_groups:
-        members = tuple(
+        typed = tuple(
             member
             for member in group.members
             if member.element_type in {SemanticElementType.METRIC, SemanticElementType.DIMENSION}
+        )
+        # 值成员只在**混合**组里算数。纯值碰撞是另一回事：同一维度的多个取值共用一个
+        # 说法（「大区」→ 华东/华南/…）本来就该合成 IN 过滤，不是对冲，归 grounding
+        # validator 管。把它们也算进来会把那条既有行为变成澄清。
+        members = (
+            (*typed, *(m for m in group.members
+                       if m.element_type is SemanticElementType.DIMENSION_VALUE))
+            if typed and include_values
+            else typed
         )
         if len(members) < 2:
             continue
@@ -136,7 +154,7 @@ def same_name_ambiguities(
         },
     }
     groups = []
-    for group in _typed_semantic_ambiguity_groups(mapping):
+    for group in _typed_semantic_ambiguity_groups(mapping, include_values=False):
         labels = [names.get((member.element_type, member.element_id)) for member in group.members]
         if None in labels or len(labels) != len(set(labels)):
             groups.append(group)
@@ -260,11 +278,23 @@ def settle_after_parse(
                 ),
             )
         )
+    mapping_bindings = _value_bindings(mapping)
     for group in _typed_semantic_ambiguity_groups(mapping):
         typed_group = {(member.element_type, member.element_id) for member in group.members}
         if frozenset(typed_group) in obligated_groups:
             continue
-        chosen_members = typed_used.intersection(typed_group)
+        # 值成员不在 typed_used 里（SemanticQuery 只有 ids），按过滤条件判断它有没有
+        # 被真正用上——与义务路径同一个判断。
+        chosen_members = {
+            (member.element_type, member.element_id)
+            for member in group.members
+            if (
+                _query_uses_dimension_value(query, mapping_bindings[member.element_id])
+                if member.element_type is SemanticElementType.DIMENSION_VALUE
+                and member.element_id in mapping_bindings
+                else (member.element_type, member.element_id) in typed_used
+            )
+        }
         if not chosen_members:
             continue
         if len(chosen_members) > 1:
@@ -302,6 +332,27 @@ def settle_after_parse(
             )
         )
     return Settlement(resolved=tuple(resolved), decisions=tuple(decisions))
+
+
+
+def _value_bindings(mapping: MappingResult) -> dict[str, SemanticValueBinding]:
+    """从 Mapper 证据里取出每个维度值成员的 (维度, 原始值)。
+
+    结算要判断"这条查询有没有按这个值过滤"，光有 element_id 不够。
+    """
+
+    bindings: dict[str, SemanticValueBinding] = {}
+    for item in mapping.matches:
+        if item.element_type is not SemanticElementType.DIMENSION_VALUE:
+            continue
+        if item.dimension_id is None or item.element_id in bindings:
+            continue
+        bindings[item.element_id] = SemanticValueBinding(
+            element_id=item.element_id,
+            dimension_id=item.dimension_id,
+            raw_value=item.raw_value,
+        )
+    return bindings
 
 
 def _query_uses_dimension_value(

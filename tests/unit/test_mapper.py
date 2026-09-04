@@ -1350,3 +1350,128 @@ def test_moderate_mapping_keeps_partial_fragment_with_an_independent_span(
     assert by_id["amount"].method is MatchMethod.EXACT
     assert by_id["scope"].detected_text.endswith(f"{fragment}{metric_phrase}")
     assert by_id["date"].detected_text == fragment
+
+
+def _match(
+    *,
+    element_type: SemanticElementType,
+    element_id: str,
+    text: str,
+    span: tuple[int, int],
+    dimension_id: str | None = None,
+    raw_value: object = None,
+    method: MatchMethod = MatchMethod.EXACT,
+) -> SchemaMatch:
+    return SchemaMatch(
+        entry_id=f"entry-{element_id}",
+        dataset_id="sales",
+        element_type=element_type,
+        element_id=element_id,
+        phrase=text,
+        detected_text=text,
+        method=method,
+        score=1.0 if method is MatchMethod.EXACT else 0.5,
+        priority=300,
+        dimension_id=dimension_id,
+        raw_value=raw_value,
+        detected_spans=(span,),
+    )
+
+
+class TestAWordThatHappensToBeAValue:
+    """一个词恰好也是某维度的取值时，别把它当成用户要的过滤条件。
+
+    实测（demo_cafe）：「门店」既是实体本名，又是「销售渠道」的一个取值。同一个 span
+    上两条精确证据，模型于是同时按门店名称分组、按渠道=门店过滤——一个词消费两次，
+    「哪家门店咖啡卖的最好」因此把三分之二的数据滤掉，冠军也换了人。
+    """
+
+    @staticmethod
+    def _store_name(span: tuple[int, int] = (2, 4)) -> SchemaMatch:
+        return _match(
+            element_type=SemanticElementType.DIMENSION,
+            element_id="store_name",
+            text="门店",
+            span=span,
+        )
+
+    @staticmethod
+    def _channel_value(span: tuple[int, int] = (2, 4)) -> SchemaMatch:
+        return _match(
+            element_type=SemanticElementType.DIMENSION_VALUE,
+            element_id="channel_store",
+            text="门店",
+            span=span,
+            dimension_id="channel",
+            raw_value="门店",
+        )
+
+    def test_the_value_hit_is_dropped_when_nobody_named_that_dimension(self) -> None:
+        kept = SemanticMapper._drop_coincidental_value_hits(
+            [self._store_name(), self._channel_value()]
+        )
+
+        assert [item.element_id for item in kept] == ["store_name"]
+
+    def test_the_value_hit_survives_when_the_question_names_the_dimension(self) -> None:
+        """「门店渠道的销售金额」——问句点名了渠道，那就是真意图。"""
+
+        kept = SemanticMapper._drop_coincidental_value_hits(
+            [
+                self._store_name((0, 2)),
+                self._channel_value((0, 2)),
+                _match(
+                    element_type=SemanticElementType.DIMENSION,
+                    element_id="channel",
+                    text="渠道",
+                    span=(2, 4),
+                ),
+            ]
+        )
+
+        assert set(item.element_id for item in kept) == {"store_name", "channel_store", "channel"}
+
+    def test_a_weak_hit_on_that_dimension_is_not_naming_it(self) -> None:
+        """「售卖」会以 keyword 弱召回撞上「销售渠道」。
+
+        拿它当"用户点名"会把误伤原样放回去——实测就是这条让「哪些门店售卖卡布奇诺」
+        继续带上渠道过滤。
+        """
+
+        kept = SemanticMapper._drop_coincidental_value_hits(
+            [
+                self._store_name(),
+                self._channel_value(),
+                _match(
+                    element_type=SemanticElementType.DIMENSION,
+                    element_id="channel",
+                    text="售卖",
+                    span=(4, 6),
+                    method=MatchMethod.KEYWORD,
+                ),
+            ]
+        )
+
+        assert "channel_store" not in {item.element_id for item in kept}
+
+    def test_a_value_on_its_own_span_is_untouched(self) -> None:
+        """「外卖的销售金额」——没有碰撞，规则不介入。"""
+
+        matches = [
+            _match(
+                element_type=SemanticElementType.DIMENSION_VALUE,
+                element_id="channel_delivery",
+                text="外卖",
+                span=(0, 2),
+                dimension_id="channel",
+                raw_value="外卖",
+            ),
+            _match(
+                element_type=SemanticElementType.METRIC,
+                element_id="net_revenue",
+                text="销售金额",
+                span=(3, 7),
+            ),
+        ]
+
+        assert SemanticMapper._drop_coincidental_value_hits(matches) == matches

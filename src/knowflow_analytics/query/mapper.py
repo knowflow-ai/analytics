@@ -1359,11 +1359,49 @@ class SemanticMapper:
             for short in exact_phrases
             if any(short != long and short in long for long in exact_phrases)
         }
-        return [
+        shadow_filtered = [
             item
             for item in longest_filtered
             if item.score != 1.0 or normalize_text(item.phrase) not in shadowed
         ]
+        return SemanticMapper._drop_coincidental_value_hits(shadow_filtered)
+
+    @staticmethod
+    def _drop_coincidental_value_hits(matches: list[SchemaMatch]) -> list[SchemaMatch]:
+        """一个词恰好也是某维度的取值时，别把它当成用户要的过滤条件。
+
+        实测（demo_cafe）：「门店」既是实体本名（维度「门店名称」），又是「销售渠道」
+        的一个取值。同一个 span 上两条精确证据，Prompt 又要求"EXACT 值命中必须形成
+        过滤"，于是模型**同时**按门店名称分组、按渠道=门店过滤——一个词被消费两次。
+        「哪家门店咖啡卖的最好」因此把三分之二的数据滤掉，冠军从西湖店变成南京西路店。
+        而且不稳定：同一问题重复 5 次，3 次加了这条过滤、2 次没加。
+
+        判据是**用户有没有点名那个维度**：真想按渠道过滤时，问句里总会出现「渠道」
+        （「门店渠道的销售金额」「销售渠道是门店的销售数量」）；问门店时从来不会。
+        没点名就是巧合，不是意图。
+
+        必须要求**精确**命中：「售卖」会以 keyword 弱召回撞上「销售渠道」，拿它当
+        "点名"会把误伤原样放回去（实测）。只读证据、不读问句文本、不比分数。
+        """
+
+        exact = [item for item in matches if item.method is MatchMethod.EXACT]
+        named_dimension_ids = {
+            item.element_id for item in exact if item.element_type is SemanticElementType.DIMENSION
+        }
+        dimension_spans = {
+            span
+            for item in exact
+            if item.element_type is SemanticElementType.DIMENSION
+            for span in item.detected_spans
+        }
+        coincidental = {
+            id(item)
+            for item in exact
+            if item.element_type is SemanticElementType.DIMENSION_VALUE
+            and item.dimension_id not in named_dimension_ids
+            and any(span in dimension_spans for span in item.detected_spans)
+        }
+        return [item for item in matches if id(item) not in coincidental]
 
     @staticmethod
     def _partial_match_is_fully_covered(

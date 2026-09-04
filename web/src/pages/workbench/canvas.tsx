@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiError } from '@analytics/api/client';
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import {
   deleteRelation,
   getGraphLayout,
@@ -24,7 +24,7 @@ import {
 import type { WorkbenchContext } from './index';
 import { EntityEditor } from './entity-editor';
 import { ModelGraph } from './model-graph';
-import { availableCanvasHeight } from '@analytics/lib/layout';
+import { useAvailableCanvasHeight } from '@analytics/lib/use-available-height';
 
 type Cardinality = AnalyticsRelation['cardinality'];
 
@@ -43,58 +43,6 @@ const JOIN_TYPES: Array<{ value: RelationDraft['join_type']; label: string }> = 
   { value: 'right', label: 'RIGHT JOIN' },
   { value: 'full', label: 'FULL JOIN' },
 ];
-
-function useAvailableCanvasHeight(enabled: boolean, measurementKey: string) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [height, setHeight] = useState<number>();
-
-  useLayoutEffect(() => {
-    if (!enabled) return;
-    let frame = 0;
-    const measure = () => {
-      const node = ref.current;
-      if (!node) return;
-      const visualViewport = window.visualViewport;
-      const next = availableCanvasHeight(
-        visualViewport?.height ?? window.innerHeight,
-        node.getBoundingClientRect().top - (visualViewport?.offsetTop ?? 0),
-      );
-      setHeight((current) => (current === next ? current : next));
-    };
-    const scheduleMeasure = () => {
-      window.cancelAnimationFrame(frame);
-      frame = window.requestAnimationFrame(measure);
-    };
-
-    measure();
-    window.addEventListener('resize', scheduleMeasure);
-    window.visualViewport?.addEventListener('resize', scheduleMeasure);
-    const observer =
-      typeof ResizeObserver === 'undefined'
-        ? null
-        : new ResizeObserver(scheduleMeasure);
-    const parent = ref.current?.parentElement;
-    let ancestor = parent;
-    for (let depth = 0; ancestor && depth < 3; depth += 1) {
-      observer?.observe(ancestor);
-      ancestor = ancestor.parentElement;
-    }
-    const mutationObserver =
-      typeof MutationObserver === 'undefined'
-        ? null
-        : new MutationObserver(scheduleMeasure);
-    if (parent) mutationObserver?.observe(parent, { childList: true });
-    return () => {
-      window.cancelAnimationFrame(frame);
-      window.removeEventListener('resize', scheduleMeasure);
-      window.visualViewport?.removeEventListener('resize', scheduleMeasure);
-      observer?.disconnect();
-      mutationObserver?.disconnect();
-    };
-  }, [enabled, measurementKey]);
-
-  return { ref, height };
-}
 
 export function CanvasPanel({ projectId, revision, acceptRevision, readOnly }: WorkbenchContext) {
   const toast = useToast();

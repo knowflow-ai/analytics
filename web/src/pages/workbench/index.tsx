@@ -11,6 +11,7 @@ import type { FeedbackFixTarget } from './ask-feedback-state';
 import { PublishPanel } from './publish';
 import { CompletenessStrip } from './completeness-strip';
 import { showsCompleteness } from './completeness';
+import { useAvailableCanvasHeight } from '@analytics/lib/use-available-height';
 import { TablesPanel } from './tables';
 import { appPath } from '@analytics/api/edition';
 import { normalizeWorkbenchStep, type WorkbenchStep } from './catalog-view';
@@ -94,6 +95,9 @@ export function WorkbenchPage() {
   const queryClient = useQueryClient();
   const [params, setParams] = useSearchParams();
   const step = normalizeWorkbenchStep(params.get('step'));
+  // 四个 tab 共用一个高度，见下面容器处的说明。measurementKey 用 step：切 tab 时
+  // 上方的提示条可能出现或消失，顶边跟着变，不重测就会差一截。
+  const panelViewport = useAvailableCanvasHeight(true, String(step));
   const goTo = useCallback(
     (next: StepKey) => setParams({ step: next }, { replace: true }),
     [setParams],
@@ -225,7 +229,16 @@ export function WorkbenchPage() {
             点击右上角「基于此版本继续编辑」派生一个新草稿后再修改。
           </div>
         )}
-        <div className={ANALYTICS_FLUID_PANEL_CLASS}>
+        {/*
+          四个 tab 共用一个高度：不固定的话容器跟着各自内容撑开，切 tab 时整块面板
+          忽上忽下。用的是关系画布同一个公式（顶边到视口底），所以画布那一页和其它
+          三页的框对得齐。各面板内部自己滚，容器不滚——否则会出现两条滚动条。
+        */}
+        <div
+          ref={panelViewport.ref}
+          className={`${ANALYTICS_FLUID_PANEL_CLASS} overflow-y-auto`}
+          style={panelViewport.height ? { height: panelViewport.height } : undefined}
+        >
           {!context && (revisionId && revisionQuery.isPending) && <Spinner />}
           {!context && !revisionId && (
             <TablesPanel projectId={projectId} revision={null} acceptRevision={acceptRevision} />

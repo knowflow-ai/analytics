@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Database, Plus, Trash2, UserPlus } from 'lucide-react';
+import { Database, Plus, Trash2, Upload, UserPlus } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate } from '@analytics/lib/router';
 import {
@@ -22,6 +22,7 @@ import {
 } from '@analytics/components/ui';
 import { avatarGradientOf, avatarStripeOf } from '@analytics/lib/avatar-gradient';
 import { DataSourcesDialog } from './data-sources';
+import { UploadsDialog } from './uploads';
 import {
   canCreateProject,
   engineLabel,
@@ -141,6 +142,7 @@ export function ProjectsPage({ ready }: { ready: boolean }) {
   const projects = useQuery({ queryKey: ['projects'], queryFn: listProjects, enabled: ready });
   const [creating, setCreating] = useState(false);
   const [managingSources, setManagingSources] = useState(false);
+  const [managingUploads, setManagingUploads] = useState(false);
   const [pickingSourceFor, setPickingSourceFor] = useState<AnalyticsProject | null>(null);
   const [authorizing, setAuthorizing] = useState<AnalyticsProject | null>(null);
   const [deleting, setDeleting] = useState<AnalyticsProject | null>(null);
@@ -229,12 +231,20 @@ export function ProjectsPage({ ready }: { ready: boolean }) {
         </div>
         <div className="flex items-center gap-2">
           {EDITION === 'embedded' && (
-            <Button
-              icon={<Database className="h-4 w-4" />}
-              onClick={() => setManagingSources(true)}
-            >
-              数据源
-            </Button>
+            <>
+              <Button
+                icon={<Upload className="h-4 w-4" />}
+                onClick={() => setManagingUploads(true)}
+              >
+                上传表格
+              </Button>
+              <Button
+                icon={<Database className="h-4 w-4" />}
+                onClick={() => setManagingSources(true)}
+              >
+                数据源
+              </Button>
+            </>
           )}
           <Button variant="primary" icon={<Plus className="h-4 w-4" />} onClick={() => setCreating(true)}>
             新建项目
@@ -285,6 +295,11 @@ export function ProjectsPage({ ready }: { ready: boolean }) {
       <DataSourcesDialog
         open={managingSources}
         onClose={() => setManagingSources(false)}
+      />
+
+      <UploadsDialog
+        open={managingUploads}
+        onClose={() => setManagingUploads(false)}
       />
 
       {pickingSourceFor && (

@@ -51,6 +51,13 @@ export function setAccessToken(token: string) {
 interface RequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
   body?: unknown;
+  /**
+   * 原样发送的二进制体（上传表格）。走这条时不做 JSON 序列化。
+   *
+   * 表格文件走请求体、参数走 query——核心侧不接 multipart（那要多一颗
+   * python-multipart 依赖），所以这里也不能包成 FormData。
+   */
+  file?: Blob;
   projectId?: string;
   query?: Record<string, string | number | boolean | undefined>;
 }
@@ -108,9 +115,14 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   if (options.projectId) headers['X-KnowFlow-Project-Id'] = options.projectId;
   const method = options.method ?? 'GET';
   // The core refuses bodyless writes (411), so every write carries JSON.
-  const body =
-    method === 'GET' ? undefined : JSON.stringify(options.body ?? {});
-  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  let body: BodyInit | undefined;
+  if (options.file !== undefined) {
+    body = options.file;
+    headers['Content-Type'] = 'application/octet-stream';
+  } else if (method !== 'GET') {
+    body = JSON.stringify(options.body ?? {});
+    headers['Content-Type'] = 'application/json';
+  }
 
   const response = await fetch(url, { method, headers, body });
   const text = await response.text();

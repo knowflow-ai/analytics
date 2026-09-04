@@ -1012,6 +1012,33 @@ def create_api(
             data=await _upload_bytes(request), sheet=sheet, table=table
         )
 
+    @app.get("/v1/analytics/uploads")
+    def list_uploads(request_context: Context):
+        expensive(request_context)
+        return application.list_uploads()
+
+    @app.delete("/v1/analytics/uploads/{table}")
+    def delete_upload(table: str, request_context: Context):
+        """删掉一张上传的表。被已发布模型用着的不让删。"""
+
+        expensive(request_context)
+        return application.delete_upload(table)
+
+    @app.post("/v1/analytics/uploads:load")
+    async def load_upload(
+        request: Request,
+        request_context: Context,
+        sheet: Annotated[str, Query(min_length=1, max_length=256)],
+        table: Annotated[str, Query(min_length=1, max_length=63)],
+        mode: Annotated[Literal["append", "replace"], Query()] = "append",
+    ):
+        """往已有的表里追加或整表替换。结构对不上就明确说差在哪。"""
+
+        expensive(request_context)
+        return application.load_upload_rows(
+            data=await _upload_bytes(request), sheet=sheet, table=table, mode=mode
+        )
+
     @app.post("/v1/analytics/data-sources:test")
     def test_data_source(payload: TestDataSourceRequest, request_context: Context):
         """连一下但不保存。让用户在填写时就知道信息对不对。"""

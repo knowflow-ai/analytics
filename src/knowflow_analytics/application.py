@@ -50,9 +50,13 @@ from knowflow_analytics.ingest import list_sheets, preview_sheet, read_rows
 from knowflow_analytics.ingest.uploads import (
     UPLOAD_DATA_SOURCE_NAME,
     UploadError,
+    assert_same_shape,
     create_table,
+    drop_table,
     ensure_upload_database,
     insert_rows,
+    list_tables,
+    truncate_table,
 )
 from knowflow_analytics.modeling.ai_artifacts import (
     OneClickModelingArtifactService,
@@ -841,6 +845,83 @@ class AnalyticsApplication:
             engine.dispose()
         record = self._ensure_upload_data_source(url)
         return {"table": name, "row_count": written, "data_source_id": record.id}
+
+    def list_uploads(self) -> dict[str, object]:
+        engine = create_engine(self._upload_url())
+        try:
+            return {"items": list(list_tables(engine))}
+        finally:
+            engine.dispose()
+
+    def delete_upload(self, table: str) -> dict[str, object]:
+        """删掉一张上传的表。已经被建模用上的不让删。
+
+        删掉之后那个项目的问数会以"表不存在"整条失败，而用户在这里看不到任何线索说明
+        为什么。把用到它的项目名说出来，让他先去处理。
+        """
+
+        users = self._projects_modeling(table)
+        if users:
+            raise UploadError(
+                f"「{table}」正被这些项目的已发布模型使用：{'、'.join(users)}。"
+                f"请先在建模页移除它，再回来删。",
+                code="UPLOAD_TABLE_IN_USE",
+            )
+        engine = create_engine(self._upload_url())
+        try:
+            drop_table(engine, table)
+        finally:
+            engine.dispose()
+        return {"table": table, "deleted": True}
+
+    def load_upload_rows(
+        self, *, data: bytes, sheet: str, table: str, mode: str
+    ) -> dict[str, object]:
+        """往已有的表里追加或替换数据。结构必须对得上。
+
+        ``mode`` 只有 append / replace 两种：一个是补新数据，一个是整表换一批。没有
+        "按主键更新"——那需要用户指定主键，是另一个概念，这里不悄悄替他决定。
+        """
+
+        if mode not in {"append", "replace"}:
+            raise UploadError("只支持追加或整表替换。", code="UPLOAD_MODE_INVALID")
+        preview = preview_sheet(data, sheet)
+        engine = create_engine(self._upload_url())
+        try:
+            assert_same_shape(engine, table=table, preview=preview)
+            if mode == "replace":
+                truncate_table(engine, table)
+            written = insert_rows(
+                engine, table=table, preview=preview, rows=read_rows(data, preview)
+            )
+        finally:
+            engine.dispose()
+        return {"table": table, "row_count": written, "mode": mode}
+
+    def _upload_url(self) -> str:
+        if not self._catalog_database_url:
+            raise UploadError("当前部署没有配置上传库。", code="UPLOAD_NOT_CONFIGURED")
+        return ensure_upload_database(self._catalog_database_url)
+
+    def _projects_modeling(self, table: str) -> tuple[str, ...]:
+        """哪些项目的**已发布**模型引用了这张表。"""
+
+        source = next(
+            (item for item in self._sources.list() if item.name == UPLOAD_DATA_SOURCE_NAME),
+            None,
+        )
+        if source is None:
+            return ()
+        names: list[str] = []
+        for project_id in self.catalog.list_projects_using_data_source(source.id):
+            try:
+                published = self.catalog.get_active_release(project_id)
+            except Exception:  # noqa: BLE001 没有发布版本就谈不上被使用
+                continue
+            if any(model.table == table for model in published.release.models):
+                project = self.catalog.get_project(project_id)
+                names.append(getattr(project, "name", project_id))
+        return tuple(names)
 
     def _ensure_upload_data_source(self, url: str):
         """上传库要能被项目绑定，所以它必须是一条真实的数据源记录。

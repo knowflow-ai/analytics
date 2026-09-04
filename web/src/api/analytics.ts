@@ -929,3 +929,68 @@ export const bindProjectDataSource = (
     body: { data_source_id: dataSourceId },
   });
 
+
+/** 上传的表格。 */
+export interface UploadedTable {
+  table: string;
+  row_count: number;
+  columns: string[];
+}
+
+export interface UploadColumn {
+  name: string;
+  source_name: string;
+  type: string;
+}
+
+export interface UploadPreview {
+  sheet: string;
+  row_count: number;
+  columns: UploadColumn[];
+  /** 自动做了哪些改动。落库前要让用户过目。 */
+  changes: string[];
+}
+
+export interface UploadInspection {
+  sheets: string[];
+  preview: UploadPreview | null;
+}
+
+export const inspectUpload = (file: Blob, sheet?: string): Promise<UploadInspection> =>
+  request<UploadInspection>(`${DATA_SOURCE_BASE}/uploads:inspect`, {
+    method: 'POST',
+    file,
+    query: { sheet },
+  });
+
+export const commitUpload = (
+  file: Blob,
+  input: { sheet: string; table: string },
+): Promise<{ table: string; row_count: number; data_source_id: string }> =>
+  request(`${DATA_SOURCE_BASE}/uploads:commit`, {
+    method: 'POST',
+    file,
+    query: input,
+  });
+
+export const loadUpload = (
+  file: Blob,
+  input: { sheet: string; table: string; mode: 'append' | 'replace' },
+): Promise<{ table: string; row_count: number; mode: string }> =>
+  request(`${DATA_SOURCE_BASE}/uploads:load`, {
+    method: 'POST',
+    file,
+    query: input,
+  });
+
+export const listUploads = async (): Promise<UploadedTable[]> => {
+  const data = (await request<{ items?: UploadedTable[] }>(
+    `${DATA_SOURCE_BASE}/uploads`,
+  )) as { items?: UploadedTable[] } | null;
+  return data?.items ?? [];
+};
+
+export const deleteUpload = (table: string): Promise<{ deleted: boolean }> =>
+  request(`${DATA_SOURCE_BASE}/uploads/${encodeURIComponent(table)}`, {
+    method: 'DELETE',
+  });

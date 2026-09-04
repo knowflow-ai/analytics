@@ -108,3 +108,90 @@ def _batched(rows: Iterable[tuple], size: int) -> Iterator[list[tuple]]:
             batch = []
     if batch:
         yield batch
+
+
+def list_tables(engine: Engine) -> tuple[dict[str, object], ...]:
+    inspector = inspect(engine)
+    names = sorted(inspector.get_table_names())
+    items: list[dict[str, object]] = []
+    with engine.connect() as connection:
+        for name in names:
+            count = connection.execute(text(f'SELECT count(*) FROM "{name}"')).scalar()
+            items.append(
+                {
+                    "table": name,
+                    "row_count": int(count or 0),
+                    "columns": [column["name"] for column in inspector.get_columns(name)],
+                }
+            )
+    return tuple(items)
+
+
+def drop_table(engine: Engine, table: str) -> None:
+    if not table_exists(engine, table):
+        raise UploadError(f"没有这张表：「{table}」。", code="UPLOAD_TABLE_NOT_FOUND")
+    with engine.begin() as connection:
+        connection.execute(text(f'DROP TABLE "{table}"'))
+
+
+def assert_same_shape(engine: Engine, *, table: str, preview: SheetPreview) -> None:
+    """往已有的表里写之前，先确认结构对得上。
+
+    列名或类型对不上还硬写，轻则报数据库错误，重则把一列数据灌进意思完全不同的列。
+    说清楚差在哪，比"导入失败"有用。
+    """
+
+    if not table_exists(engine, table):
+        raise UploadError(f"没有这张表：「{table}」。", code="UPLOAD_TABLE_NOT_FOUND")
+    existing = {
+        column["name"]: str(column["type"]).split("(")[0].strip().lower()
+        for column in inspect(engine).get_columns(table)
+    }
+    incoming = {item.name: item.sql_type.lower() for item in preview.columns}
+    missing = sorted(set(existing) - set(incoming))
+    extra = sorted(set(incoming) - set(existing))
+    if missing or extra:
+        parts = []
+        if missing:
+            parts.append(f"表里有但文件里没有：{'、'.join(missing)}")
+        if extra:
+            parts.append(f"文件里有但表里没有：{'、'.join(extra)}")
+        raise UploadError(
+            f"这个文件和「{table}」的列对不上。{'；'.join(parts)}。",
+            code="UPLOAD_SHAPE_MISMATCH",
+        )
+    changed = [
+        f"{name}（表里是 {existing[name]}，文件里是 {incoming[name]}）"
+        for name in incoming
+        if not _compatible(existing[name], incoming[name])
+    ]
+    if changed:
+        raise UploadError(
+            f"这些列的类型和「{table}」对不上：{'、'.join(changed)}。",
+            code="UPLOAD_TYPE_MISMATCH",
+        )
+
+
+def _compatible(existing: str, incoming: str) -> bool:
+    """同一族的类型算兼容。
+
+    整数列后来来了一批小数是真的不兼容（会被截断）；反过来 numeric 收 bigint 没问题。
+    文本收任何东西都行——这一列本来就没有更强的约定。
+    """
+
+    families = {
+        "text": {"text", "varchar", "character varying", "char"},
+        "numeric": {"numeric", "decimal", "double precision", "real", "bigint", "integer"},
+        "bigint": {"bigint", "integer", "smallint"},
+        "boolean": {"boolean"},
+        "date": {"date"},
+        "timestamp": {"timestamp", "timestamp without time zone"},
+    }
+    if existing in families.get("text", set()):
+        return True
+    return incoming in families.get(existing, {existing})
+
+
+def truncate_table(engine: Engine, table: str) -> None:
+    with engine.begin() as connection:
+        connection.execute(text(f'TRUNCATE TABLE "{table}"'))

@@ -1,4 +1,7 @@
-import type { AnalyticsQueryFailure } from '@analytics/api/types';
+import type {
+  AnalyticsFeedbackStatus,
+  AnalyticsQueryFailure,
+} from '@analytics/api/types';
 
 /** 拒答原因 → 建模者视角的一句话，以及这条证据是否可能靠补别名解决。 */
 const FAILURE_REASONS: Record<
@@ -283,4 +286,31 @@ export function matchesFeedbackFilter(
   if (filter === 'all') return true;
   if (filter === 'dictionary') return fix !== null;
   return fix === null;
+}
+
+/**
+ * 空态说什么，取决于当前站在哪个页签上。
+ *
+ * 三个页签共用一句文案会直接说假话：切到「已忽略」时写「还没有没接住的说法」，
+ * 而实际情况是待处理里正堆着二十几条——只是没人忽略过而已。
+ */
+export function feedbackEmptyCopy(
+  status: AnalyticsFeedbackStatus,
+): { title: string; hint: string } {
+  if (status === 'resolved') {
+    return {
+      title: '还没有处理过的记录',
+      hint: '在「待处理」里补进词典或标为已处理后，那条说法会归到这里。',
+    };
+  }
+  if (status === 'ignored') {
+    return {
+      title: '还没有忽略过的记录',
+      hint: '「待处理」里不打算改的说法可以点忽略，它会归到这里，不再占用视线。',
+    };
+  }
+  return {
+    title: '还没有没接住的说法',
+    hint: '用户问数时被反问、说了系统不认识的词，或者没答上来，都会出现在这里。',
+  };
 }

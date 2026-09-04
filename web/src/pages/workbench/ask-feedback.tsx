@@ -9,6 +9,7 @@ import type { AnalyticsFeedbackStatus } from "@analytics/api/types";
 import { Badge, Button, Empty, Spinner } from "@analytics/components/ui";
 import {
   FEEDBACK_FILTERS,
+  feedbackEmptyCopy,
   feedbackFixTarget,
   feedbackRows,
   feedbackSummary,
@@ -120,22 +121,6 @@ export function AskFeedbackPanel({
   const visible = rows.filter((entry) => matchesFeedbackFilter(filter, entry.fix));
 
   if (failures.isPending) return <Spinner label="加载中" />;
-
-  if (rows.length === 0) {
-    return (
-      <div className={`flex h-full flex-col px-6 py-5 ${ANALYTICS_TASK_PANEL_CLASS}`}>
-        <Header />
-        {/* 空态在剩余空间里居中：不这样的话它只按宽度居中，而标题是左对齐的，
-            两者不在一条线上，看起来像一段飘在半空的文字。 */}
-        <div className="flex flex-1 items-center justify-center">
-          <Empty
-            title="还没有没接住的说法"
-            hint="用户问数时被反问、说了系统不认识的词，或者没答上来，都会出现在这里。"
-          />
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div
@@ -279,11 +264,18 @@ export function AskFeedbackPanel({
               </div>
             </li>
           ))}
-          {visible.length === 0 && (
-            <li className="px-4 py-8 text-center text-xs text-slate-400">
-              这一类现在是空的。
-            </li>
-          )}
+          {visible.length === 0 &&
+            /* 空态只换列表内容。页签、筛选和统计留在原地——否则点进一个恰好为空的
+               页签，连"切回去"的入口都跟着消失了。 */
+            (rows.length === 0 ? (
+              <li className="px-4 py-12">
+                <Empty {...feedbackEmptyCopy(status)} />
+              </li>
+            ) : (
+              <li className="px-4 py-8 text-center text-xs text-slate-400">
+                这一类现在是空的。
+              </li>
+            ))}
         </ul>
 
         {total > 0 && (

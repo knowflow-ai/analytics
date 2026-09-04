@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { AnalyticsQueryFailure } from '@analytics/api/types';
 import {
+  feedbackEmptyCopy,
   FEEDBACK_FILTERS,
   failureReason,
   feedbackFixTarget,
@@ -341,5 +342,19 @@ describe('预填说法', () => {
     const target = feedbackFixTarget({ kind: 'inferred', resolution: '销售金额' }, catalog);
 
     expect(target?.phrase).toBe('');
+  });
+});
+
+describe('feedbackEmptyCopy', () => {
+  it('三个页签各说各的，不共用一句话', () => {
+    // 站在「已忽略」上说"还没有没接住的说法"，而待处理里正堆着二十几条——
+    // 那是一句关于用户自己数据的假话。
+    const titles = (['open', 'resolved', 'ignored'] as const).map(
+      (status) => feedbackEmptyCopy(status).title,
+    );
+
+    expect(new Set(titles).size).toBe(3);
+    expect(feedbackEmptyCopy('ignored').title).toContain('忽略');
+    expect(feedbackEmptyCopy('resolved').title).toContain('处理');
   });
 });

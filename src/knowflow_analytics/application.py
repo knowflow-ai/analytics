@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from typing import Literal
 
 from pydantic import ValidationError
+from sqlalchemy import create_engine
 
 from knowflow_analytics.catalog.data_sources import (
     DataSourceBinding,
@@ -45,6 +46,14 @@ from knowflow_analytics.execution.dialect import SqlDialect
 from knowflow_analytics.execution.executor import SqlExecutor
 from knowflow_analytics.execution.targets import ExecutionTargetProvider
 from knowflow_analytics.hashing import content_hash, semantic_evidence_hash
+from knowflow_analytics.ingest import list_sheets, preview_sheet, read_rows
+from knowflow_analytics.ingest.uploads import (
+    UPLOAD_DATA_SOURCE_NAME,
+    UploadError,
+    create_table,
+    ensure_upload_database,
+    insert_rows,
+)
 from knowflow_analytics.modeling.ai_artifacts import (
     OneClickModelingArtifactService,
     reconcile_query_scopes,
@@ -506,8 +515,12 @@ class AnalyticsApplication:
         query_diagnostic_export_wait_seconds: float = 0.5,
         query_diagnostic_purge_interval_seconds: float = 60.0,
         data_sources: ExecutionTargetProvider | None = None,
+        # 上传的表格落在同一个 PostgreSQL 实例的独立库里（见 ingest/uploads.py）。
+        # 没配就是这套装配不支持上传，调用时明确报错，不静默降级。
+        catalog_database_url: str = "",
     ) -> None:
         self.catalog = catalog
+        self._catalog_database_url = catalog_database_url
         self._introspector = introspector
         self._executor = executor
         # 数据源解析器。没传就把构造参数包成单数据源装配——内部只有
@@ -773,6 +786,75 @@ class AnalyticsApplication:
 
     def test_data_source(self, *, engine: str, dsn: str) -> None:
         self._sources.test(engine=engine, dsn=dsn)
+
+    def inspect_upload(self, *, data: bytes, sheet: str | None = None) -> dict[str, object]:
+        """看一眼这个文件：有哪些 sheet，选中的那张会建成什么样。
+
+        落库前必须先看到"自动改了什么"——列名被规范化过却不说，用户会在建模页对着一个
+        自己没写过的列名。
+        """
+
+        sheets = list_sheets(data)
+        if sheet is None:
+            return {"sheets": list(sheets), "preview": None}
+        preview = preview_sheet(data, sheet)
+        return {
+            "sheets": list(sheets),
+            "preview": {
+                "sheet": preview.sheet,
+                "row_count": preview.row_count,
+                "columns": [
+                    {
+                        "name": item.name,
+                        "source_name": item.source_name,
+                        "type": item.sql_type,
+                    }
+                    for item in preview.columns
+                ],
+                "changes": list(preview.changes),
+            },
+        }
+
+    def commit_upload(self, *, data: bytes, sheet: str, table: str) -> dict[str, object]:
+        """建表、灌数，并保证上传库已经是一条数据源记录。
+
+        表名由用户定：他要在建模页按这个名字找到它。同名不覆盖——覆盖会让一张已经建好
+        模型、已发布的表在他不知情时换掉结构。
+        """
+
+        if not self._catalog_database_url:
+            raise UploadError(
+                "当前部署没有配置上传库。", code="UPLOAD_NOT_CONFIGURED"
+            )
+        name = table.strip()
+        if not name:
+            raise UploadError("请给这张表起个名字。", code="UPLOAD_TABLE_NAME_REQUIRED")
+        preview = preview_sheet(data, sheet)
+        url = ensure_upload_database(self._catalog_database_url)
+        engine = create_engine(url)
+        try:
+            create_table(engine, table=name, preview=preview)
+            written = insert_rows(
+                engine, table=name, preview=preview, rows=read_rows(data, preview)
+            )
+        finally:
+            engine.dispose()
+        record = self._ensure_upload_data_source(url)
+        return {"table": name, "row_count": written, "data_source_id": record.id}
+
+    def _ensure_upload_data_source(self, url: str):
+        """上传库要能被项目绑定，所以它必须是一条真实的数据源记录。
+
+        找已有的那条而不是每次新建：重复记录会让用户在绑定下拉里看到一堆同名的东西，
+        还分不清哪个是这次的。
+        """
+
+        for item in self._sources.list():
+            if item.name == UPLOAD_DATA_SOURCE_NAME:
+                return item
+        return self._sources.create(
+            name=UPLOAD_DATA_SOURCE_NAME, engine=SqlDialect.POSTGRES.value, dsn=url
+        )
 
     def bind_project_data_source(self, *, project_id: str, data_source_id: str) -> None:
         self.catalog.get_project(project_id)

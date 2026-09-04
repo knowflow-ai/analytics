@@ -780,6 +780,25 @@ class _RateLimiter:
             queue.append(now)
 
 
+
+# 上传文件的大小上限。整表要读进内存做类型推断，没有上限时一个几百兆的文件会拖垮
+# 服务，而用户只会看到超时。
+_MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+
+
+async def _upload_bytes(request: Request) -> bytes:
+    data = await request.body()
+    if len(data) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail={
+                "code": "UPLOAD_TOO_LARGE",
+                "message": f"文件超过 {_MAX_UPLOAD_BYTES // (1024 * 1024)} MB。",
+            },
+        )
+    return data
+
+
 def create_api(
     *,
     application: AnalyticsApplication,
@@ -961,6 +980,37 @@ def create_api(
             name=payload.name, engine=payload.engine, dsn=payload.dsn
         )
         return record.model_dump(mode="json")
+
+    @app.post("/v1/analytics/uploads:inspect")
+    async def inspect_upload(
+        request: Request,
+        request_context: Context,
+        sheet: Annotated[str | None, Query(max_length=256)] = None,
+    ):
+        """看一眼上传的表格：有哪些 sheet，选中那张会建成什么样、自动改了什么。
+
+        不落库。用户要先看到改动再决定，否则他会在建模页对着自己没写过的列名。
+
+        文件走请求体，sheet/表名走 query——multipart 要多一颗 ``python-multipart``
+        依赖，而这个依赖表是刻意精简的，为两个短字符串加它不划算。
+        """
+
+        expensive(request_context)
+        return application.inspect_upload(data=await _upload_bytes(request), sheet=sheet)
+
+    @app.post("/v1/analytics/uploads:commit")
+    async def commit_upload(
+        request: Request,
+        request_context: Context,
+        sheet: Annotated[str, Query(min_length=1, max_length=256)],
+        table: Annotated[str, Query(min_length=1, max_length=63)],
+    ):
+        """确认之后建表灌数。同名表不覆盖。"""
+
+        expensive(request_context)
+        return application.commit_upload(
+            data=await _upload_bytes(request), sheet=sheet, table=table
+        )
 
     @app.post("/v1/analytics/data-sources:test")
     def test_data_source(payload: TestDataSourceRequest, request_context: Context):

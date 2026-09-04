@@ -16,6 +16,9 @@ dependencies = [
   "fastapi==0.140.1",
   "httpx==0.28.1",
   "jsonschema>=4.23.0,<5.0.0",
+  # 读上传的 .xlsx。不引 pandas：我们只需要行和单元格的类型，不需要 DataFrame，
+  # 而 pandas 会把 numpy 一起拖进这个刻意保持精简的依赖表。
+  "openpyxl>=3.1.5,<4.0.0",
   "psycopg[binary,pool]>=3.2.3,<4.0.0",
   "pydantic>=2.12.5,<3.0.0",
   "pydantic-settings>=2.10.0,<3.0.0",

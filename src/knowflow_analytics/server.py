@@ -67,6 +67,7 @@ def create_app() -> FastAPI:
     application = AnalyticsApplication(
         catalog=catalog,
         data_sources=data_sources,
+        catalog_database_url=settings.catalog_database_url.get_secret_value(),
         embedding_gateway=embedding_gateway,
         ai_modeller=AiSemanticModeller(
             model_gateway=model_gateway,

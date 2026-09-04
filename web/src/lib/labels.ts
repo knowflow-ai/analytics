@@ -88,7 +88,7 @@ export function formatDateTime(value: string | null | undefined): string {
  * 原文比一句润色过的中文更有用。
  */
 const ERROR_MESSAGES: Record<string, string> = {
-  NO_EARLIER_RELEASE: '线上已经是最早的一个发布版本，没有更早的可以回滚了。',
+  RELEASE_NOT_FOUND: '这个发布版本不存在，或者不属于当前项目。',
 };
 
 export function describeError(error: unknown): string {

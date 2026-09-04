@@ -386,6 +386,13 @@ class ReleaseSummary(FrozenModel):
     spec_hash: str
     status: str = Field(pattern="^(active|retired)$")
     created_at: datetime
+    """第几次发布，从 1 开始。
+
+    `rel_a312bd311a94455a9518a06837b9657e` 记不住也认不出先后，界面上要的是
+    "第几版"。在 SQL 里按发布时间编号而不是让前端数数组下标：列表是分页的，
+    下标只在拿到全部记录时才等于序号。
+    """
+    sequence: int
 
 
 class PublishedRelease(FrozenModel):
@@ -1910,41 +1917,39 @@ class CatalogStore:
                     )
         return PublishedRelease(release=release, index_snapshot=index_snapshot, status="active")
 
-    def rollback_active_release(self, *, project_id: str) -> str:
-        """Point the project back at the release published before the active one.
+    def activate_release(self, *, project_id: str, release_id: str) -> str:
+        """Point production at any published release of this project.
 
         A wrong metric definition that reached production previously had no fast
         exit: the only path was building a new candidate, re-running the quality
-        scan and the 30-case evaluation, and publishing again, while production
-        kept serving wrong numbers. The published releases are immutable
-        snapshots, so switching the pointer is enough.
+        scan and the evaluation, and publishing again, while production kept
+        serving wrong numbers.
+
+        This replaces the earlier `rollback_active_release`, which only walked
+        one step towards older releases and had no way back: after rolling back
+        once, production sat on the oldest release and the newer one — still
+        listed in the history — was unreachable. Published releases are
+        immutable snapshots carrying their own spec hash and semantic index, so
+        moving the pointer to any of them is the whole operation; "roll back to
+        the previous version" was only ever a special case of it.
         """
 
         with self._engine.begin() as connection:
-            active = connection.execute(
-                select(projects.c.active_release_id).where(projects.c.id == project_id)
-            ).scalar_one_or_none()
-            if not active:
-                raise CatalogError("project has no active release to roll back")
-            active_created_at = connection.execute(
-                select(releases.c.created_at).where(releases.c.id == active)
-            ).scalar_one_or_none()
-            if active_created_at is None:
-                raise CatalogError("active release was not found")
-            previous = connection.execute(
-                select(releases.c.id)
-                .where(releases.c.project_id == project_id)
-                .where(releases.c.created_at < active_created_at)
-                .order_by(releases.c.created_at.desc())
-                .limit(1)
-            ).scalar_one_or_none()
-            if previous is None:
-                raise CatalogError(
-                    "no earlier release is available to roll back to",
-                    code="NO_EARLIER_RELEASE",
+            target = connection.execute(
+                select(releases.c.project_id, releases.c.status).where(
+                    releases.c.id == release_id
                 )
-            # publish 维护「同一项目下只有一条 status=active」的不变量，回滚
-            # 必须同样维护它：只改指针会让线上版本自称 retired，而被回滚掉的
+            ).one_or_none()
+            # 归属校验在这里做，不能只靠路由：release id 是可猜的，拿别的项目的
+            # 快照当自己的线上版本会让问数用上另一个项目的语义模型。
+            if target is None or target.project_id != project_id:
+                raise CatalogError(
+                    "release was not found in this project", code="RELEASE_NOT_FOUND"
+                )
+            if target.status == "active":
+                return release_id
+            # publish 维护「同一项目下只有一条 status=active」的不变量，切换
+            # 必须同样维护它：只改指针会让线上版本自称 retired，而被换下来的
             # 版本仍标着 active。
             connection.execute(
                 update(releases)
@@ -1953,30 +1958,37 @@ class CatalogStore:
                 .values(status="retired")
             )
             connection.execute(
-                update(releases).where(releases.c.id == previous).values(status="active")
+                update(releases).where(releases.c.id == release_id).values(status="active")
             )
             connection.execute(
                 update(projects)
                 .where(projects.c.id == project_id)
-                .values(active_release_id=previous)
+                .values(active_release_id=release_id)
             )
-        return previous
+        return release_id
 
     def list_releases(self, *, project_id: str, limit: int = 50) -> tuple[ReleaseSummary, ...]:
         """发布历史，最新在前。能发布却看不到发过什么、不能回滚，此前是盲的。"""
 
+        numbered = (
+            select(
+                releases.c.id,
+                releases.c.revision_id,
+                releases.c.spec_hash,
+                releases.c.status,
+                releases.c.created_at,
+                func.row_number()
+                .over(order_by=releases.c.created_at.asc())
+                .label("sequence"),
+            )
+            .where(releases.c.project_id == project_id)
+            .subquery()
+        )
         with self._engine.connect() as connection:
             rows = (
                 connection.execute(
-                    select(
-                        releases.c.id,
-                        releases.c.revision_id,
-                        releases.c.spec_hash,
-                        releases.c.status,
-                        releases.c.created_at,
-                    )
-                    .where(releases.c.project_id == project_id)
-                    .order_by(releases.c.created_at.desc())
+                    select(numbered)
+                    .order_by(numbered.c.created_at.desc())
                     .limit(limit)
                 )
                 .mappings()

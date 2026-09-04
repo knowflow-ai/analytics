@@ -19,7 +19,7 @@ import {
   listGoldenSuites,
   listQueryFailures,
   listReleases,
-  rollbackRelease,
+  activateRelease,
   saveGoldenSuite,
   newResourceId,
   previewQuery,
@@ -29,7 +29,11 @@ import {
   versionOf,
   type QueryInput,
 } from '@analytics/api/analytics';
-import type { AnalyticsClarificationOption, AnalyticsQueryResponse } from '@analytics/api/types';
+import type {
+  AnalyticsClarificationOption,
+  AnalyticsQueryResponse,
+  AnalyticsReleaseSummary,
+} from '@analytics/api/types';
 import {
   buildClarificationContinuation,
   QueryAnswer,
@@ -140,7 +144,8 @@ export function PublishPanel({ projectId, revision, acceptRevision, readOnly, go
 
   const [structureError, setStructureError] = useState<string | null>(null);
   const [showPassed, setShowPassed] = useState(false);
-  const [confirmingRollback, setConfirmingRollback] = useState(false);
+  /** 待确认要切到哪一版；null 表示没有待确认的切换。 */
+  const [switchingTo, setSwitchingTo] = useState<AnalyticsReleaseSummary | null>(null);
   // 评测集是三道检查里唯一要人主动跑的（重放会花掉一次模型预算）。格子里没有入口
   // 的话，用户得自己滚到页面最底下才找得到那张卡。
   const evaluationRef = useRef<HTMLDivElement>(null);
@@ -174,12 +179,12 @@ export function PublishPanel({ projectId, revision, acceptRevision, readOnly, go
     onSuccess: (next) => queryClient.setQueryData(qualityKey, { report: next }),
     onError: (error) => toast.error(describeError(error)),
   });
-  const rollback = useMutation({
-    mutationFn: () => rollbackRelease(projectId),
-    onSuccess: () => {
+  const switchRelease = useMutation({
+    mutationFn: (release: AnalyticsReleaseSummary) => activateRelease(projectId, release.id),
+    onSuccess: (_data, release) => {
       queryClient.invalidateQueries({ queryKey: ['releases', projectId] });
       queryClient.invalidateQueries({ queryKey: ['summary', projectId] });
-      toast.success('已回滚,线上问数现在使用上一版。');
+      toast.success(`线上问数现在使用第 ${release.sequence} 版。`);
     },
     onError: (error) => toast.error(describeError(error)),
   });
@@ -477,30 +482,30 @@ export function PublishPanel({ projectId, revision, acceptRevision, readOnly, go
           {releases.data?.items.map((release) => (
             <li key={release.id} className="rounded-md border border-slate-200 px-3 py-2 text-xs">
               <div className="flex items-center justify-between">
-                <span className="font-mono text-slate-600">{release.id.slice(0, 14)}</span>
+                {/* 完整 id 排障时才需要，留在 title 里；平时读"第几版"就够了。 */}
+                <span className="font-medium text-slate-700" title={release.id}>
+                  第 {release.sequence} 版
+                </span>
                 <Badge tone={release.status === 'active' ? 'green' : 'slate'}>
                   {release.status === 'active' ? '线上' : '历史'}
                 </Badge>
               </div>
               <div className="mt-0.5 text-slate-400">{formatDateTime(release.created_at)}</div>
               {/*
-                判据必须和后端一致：能不能回滚看的是"有没有比线上这一版更早的
-                发布"，不是"一共发过几版"。回滚过一次之后线上会停在更早的那版，
-                更新的那版变成历史——此时按 length > 1 判断，按钮照样显示，点下去
-                必然撞上 no earlier release。
+                入口挂在每个非线上版本上，而不是挂在线上那一行说"回滚到上一版"：
+                后者只能往更早走，走过头就回不来了——线上停在第 1 版时，第 2 版仍
+                列在这里却没有任何入口能切回去。已发布版本是不可变快照，切到哪一
+                版都只是改一个指针。
               */}
-              {release.status === 'active' &&
-                (releases.data?.items ?? []).some(
-                  (other) => other.created_at < release.created_at,
-                ) && (
-                  <button
-                    type="button"
-                    className="mt-1 text-[11px] text-slate-400 underline hover:text-red-600"
-                    onClick={() => setConfirmingRollback(true)}
-                  >
-                    回滚到上一版
-                  </button>
-                )}
+              {release.status !== 'active' && (
+                <button
+                  type="button"
+                  className="mt-1 text-[11px] text-slate-400 underline hover:text-slate-700"
+                  onClick={() => setSwitchingTo(release)}
+                >
+                  切到这一版
+                </button>
+              )}
             </li>
           ))}
         </ul>
@@ -508,17 +513,17 @@ export function PublishPanel({ projectId, revision, acceptRevision, readOnly, go
         {/* 原生 window.confirm 会弹出带 "localhost:9222 显示" 的浏览器系统框，
             读起来像是站点出了问题；项目里本来就有这个组件。 */}
         <ConfirmationDialog
-          open={confirmingRollback}
+          open={Boolean(switchingTo)}
           danger
-          title="回滚到上一版？"
-          description="线上问数会立即切换到上一个发布版本，当前版本进入历史。"
-          confirmText="回滚"
-          loading={rollback.isPending}
+          title={`把线上切到第 ${switchingTo?.sequence} 版？`}
+          description="线上问数会立即改用这一版的语义模型，当前线上版本进入历史。已发布的版本都是快照，之后随时可以再切回来。"
+          confirmText="切换"
+          loading={switchRelease.isPending}
           onConfirm={() => {
-            rollback.mutate();
-            setConfirmingRollback(false);
+            if (switchingTo) switchRelease.mutate(switchingTo);
+            setSwitchingTo(null);
           }}
-          onClose={() => setConfirmingRollback(false)}
+          onClose={() => setSwitchingTo(null)}
         />
       </aside>
     </div>

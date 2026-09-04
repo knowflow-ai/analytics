@@ -60,11 +60,11 @@ def _seed_release(store: CatalogStore, *, project_id: str, release_id: str, minu
     return release_id
 
 
-def test_rollback_points_the_project_at_the_previous_release(sales_release) -> None:
+def test_activating_an_earlier_release_switches_production(sales_release) -> None:
     """发布后发现口径算错，必须能一键切回上一版。
 
-    此前唯一出路是重建候选版本、重跑体检、重备 30 条黄金问题、再发布，
-    期间线上持续输出错误数据。
+    此前唯一出路是重建候选版本、重跑体检、重备黄金问题、再发布，期间线上持续
+    输出错误数据。
     """
 
     store = _store()
@@ -74,55 +74,78 @@ def test_rollback_points_the_project_at_the_previous_release(sales_release) -> N
 
     assert store.get_project("sales").active_release_id == second
 
-    rolled = store.rollback_active_release(project_id="sales")
-
-    assert rolled == first
+    assert store.activate_release(project_id="sales", release_id=first) == first
     assert store.get_project("sales").active_release_id == first
 
 
-def test_rollback_requires_an_earlier_release(sales_release) -> None:
-    """只有一个发布版本时无处可退，必须显式报错而不是静默无操作。"""
+def test_switching_back_to_a_newer_release_is_possible(sales_release) -> None:
+    """切换必须是双向的。
 
-    store = _store()
-    store.create_project(project_id="sales", name="销售分析")
-    _seed_release(store, project_id="sales", release_id="rel_only", minute=1)
-
-    with pytest.raises(CatalogError) as raised:
-        store.rollback_active_release(project_id="sales")
-    # code 是界面能把这句话翻成中文的唯一依据，笼统的 CATALOG_ERROR 翻不了。
-    assert raised.value.code == "NO_EARLIER_RELEASE"
-
-
-def test_rolling_back_twice_stops_at_the_earliest_release(sales_release) -> None:
-    """回滚之后线上停在更早的那一版，此时"上一版"已经不存在了。
-
-    界面上曾按"一共发过几版"决定要不要显示回滚入口——回滚过一次后仍然有两版，
-    入口照常显示，点下去必然撞上这里。判据是"有没有比线上更早的发布"。
+    原先的 `rollback_active_release` 只往更早走一步，没有回头路：切过一次之后
+    线上停在最早那版，更新的那版仍列在发布历史里却再也切不回去——用户看着"第 2
+    版 · 历史"，没有任何入口能回到它。
     """
 
     store = _store()
     store.create_project(project_id="sales", name="销售分析")
-    _seed_release(store, project_id="sales", release_id="rel_old", minute=1)
-    _seed_release(store, project_id="sales", release_id="rel_new", minute=2)
+    old = _seed_release(store, project_id="sales", release_id="rel_old", minute=1)
+    new = _seed_release(store, project_id="sales", release_id="rel_new", minute=2)
 
-    assert store.rollback_active_release(project_id="sales") == "rel_old"
+    store.activate_release(project_id="sales", release_id=old)
+    assert store.get_project("sales").active_release_id == old
 
-    with pytest.raises(CatalogError) as raised:
-        store.rollback_active_release(project_id="sales")
-    assert raised.value.code == "NO_EARLIER_RELEASE"
+    store.activate_release(project_id="sales", release_id=new)
+    assert store.get_project("sales").active_release_id == new
 
 
-def test_rollback_on_a_project_that_never_published(sales_release) -> None:
+def test_activating_the_live_release_changes_nothing(sales_release) -> None:
+    """重复点已经在线上的那一版是无操作，不该报错也不该翻搅 status。"""
+
     store = _store()
     store.create_project(project_id="sales", name="销售分析")
-    with pytest.raises(CatalogError):
-        store.rollback_active_release(project_id="sales")
+    _seed_release(store, project_id="sales", release_id="rel_1", minute=1)
+    live = _seed_release(store, project_id="sales", release_id="rel_2", minute=2)
+
+    assert store.activate_release(project_id="sales", release_id=live) == live
+    assert store.get_project("sales").active_release_id == live
 
 
-def test_rollback_keeps_exactly_one_active_release(sales_release) -> None:
+def test_a_release_from_another_project_is_refused(sales_release) -> None:
+    """归属校验不能只靠路由。
+
+    release id 是可猜的；拿别的项目的快照当自己的线上版本，会让问数用上另一个
+    项目的语义模型和索引。
+    """
+
+    store = _store()
+    store.create_project(project_id="sales", name="销售分析")
+    _seed_release(store, project_id="sales", release_id="rel_mine", minute=1)
+    store.create_project(project_id="other", name="别的")
+    theirs = _seed_release(store, project_id="other", release_id="rel_theirs", minute=2)
+
+    with pytest.raises(CatalogError) as raised:
+        store.activate_release(project_id="sales", release_id=theirs)
+    assert raised.value.code == "RELEASE_NOT_FOUND"
+    assert store.get_project("sales").active_release_id == "rel_mine"
+    # 对方项目的线上版本也不能被顺手改掉。
+    assert store.get_project("other").active_release_id == theirs
+
+
+def test_an_unknown_release_is_refused(sales_release) -> None:
+    store = _store()
+    store.create_project(project_id="sales", name="销售分析")
+    _seed_release(store, project_id="sales", release_id="rel_1", minute=1)
+
+    with pytest.raises(CatalogError) as raised:
+        store.activate_release(project_id="sales", release_id="rel_nope")
+    # code 是界面能把这句话翻成中文的唯一依据，笼统的 CATALOG_ERROR 翻不了。
+    assert raised.value.code == "RELEASE_NOT_FOUND"
+
+
+def test_activation_keeps_exactly_one_active_release(sales_release) -> None:
     """publish 维护「同一项目下只有一条 status=active」的不变量。
 
-    回滚只改 projects.active_release_id 而不碰 releases.status，会让指针指向
+    切换只改 projects.active_release_id 而不碰 releases.status，会让指针指向
     一条 status='retired' 的记录，同时旧版本仍标着 active —— 两条记录自相矛盾，
     get_active_release() 会把 'retired' 当成线上状态返回给上层。
     """
@@ -134,7 +157,7 @@ def test_rollback_keeps_exactly_one_active_release(sales_release) -> None:
     first = _seed_release(store, project_id="sales", release_id="rel_1", minute=1)
     _seed_release(store, project_id="sales", release_id="rel_2", minute=2)
 
-    store.rollback_active_release(project_id="sales")
+    store.activate_release(project_id="sales", release_id=first)
 
     with store._engine.connect() as connection:
         statuses = dict(
@@ -147,7 +170,7 @@ def test_rollback_keeps_exactly_one_active_release(sales_release) -> None:
 
 
 def test_release_history_is_listed_newest_first_with_the_live_one_marked(sales_release) -> None:
-    """能发布却看不到发过什么，回滚按钮也无从判断有没有上一版可退。"""
+    """能发布却看不到发过什么，就无从判断该切到哪一版。"""
 
     store = _store()
     store.create_project(project_id="sales", name="销售")
@@ -160,7 +183,9 @@ def test_release_history_is_listed_newest_first_with_the_live_one_marked(sales_r
 
     assert [item.id for item in listed] == ["rel-2", "rel-1"]
     assert [item.status for item in listed] == ["active", "retired"]
+    # 序号按发布先后编号，跟列表顺序（最新在前）相反。
+    assert [item.sequence for item in listed] == [2, 1]
 
-    store.rollback_active_release(project_id="sales")
+    store.activate_release(project_id="sales", release_id="rel-1")
     after = {item.id: item.status for item in store.list_releases(project_id="sales")}
     assert after == {"rel-2": "retired", "rel-1": "active"}

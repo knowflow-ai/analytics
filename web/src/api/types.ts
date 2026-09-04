@@ -1234,6 +1234,8 @@ export interface AnalyticsReleaseSummary {
   spec_hash: string;
   status: 'active' | 'retired';
   created_at: string;
+  /** 第几次发布，从 1 开始。界面显示这个，不显示 `rel_...`。 */
+  sequence: number;
 }
 
 // --- 维度值字典 ------------------------------------------------------------

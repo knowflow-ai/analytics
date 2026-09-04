@@ -2,7 +2,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Check, MessageSquareText } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from '@analytics/lib/router';
-import { deriveCandidate, getModelingSummary, getRevision } from '@analytics/api/analytics';
+import {
+  deriveCandidate,
+  getModelingSummary,
+  getRevision,
+  listReleases,
+} from '@analytics/api/analytics';
 import type { AnalyticsRevision } from '@analytics/api/types';
 import { Badge, Button, Spinner, useToast } from '@analytics/components/ui';
 import { describeError, REVISION_STATE_LABELS } from '@analytics/lib/labels';
@@ -112,6 +117,11 @@ export function WorkbenchPage() {
     queryFn: () => getRevision(projectId, revisionId!),
     enabled: Boolean(revisionId),
   });
+  // 只为把线上那一版的 id 翻成"第几版"。key 与发布页同一个，缓存共享。
+  const releases = useQuery({
+    queryKey: ['releases', projectId],
+    queryFn: () => listReleases(projectId),
+  });
   const [revision, setRevision] = useState<AnalyticsRevision | null>(null);
   // 「问数反馈」里点「补进词典」时带过来的落点：跨步骤只传这一个值,由业务词典
   // 打开对应编辑器后立刻清空。存在这里而不是 URL 里,是因为它只在这一次跳转里
@@ -174,6 +184,9 @@ export function WorkbenchPage() {
   }
 
   const readOnly = Boolean(revision && revision.state !== 'draft' && revision.state !== 'validated');
+  const liveSequence = releases.data?.items.find(
+    (item) => item.id === summary.data.active_release_id,
+  )?.sequence;
   const context: WorkbenchContext | null = revision
     ? { projectId, revision, acceptRevision, readOnly, goTo }
     : null;
@@ -200,8 +213,12 @@ export function WorkbenchPage() {
               )}
             </div>
             <div className="text-[11px] text-slate-400">
+              {/* `rel_a312bd311a94455a9518a06837b9657e` 认不出也记不住，更看不出
+                  先后。序号还没到手时先不写，别把一串哈希摆在这儿凑数。 */}
               {summary.data.active_release_id
-                ? `线上版本 ${summary.data.active_release_id}`
+                ? liveSequence
+                  ? `线上第 ${liveSequence} 版`
+                  : '已发布'
                 : '尚未发布'}
             </div>
           </div>

@@ -447,12 +447,17 @@ export const updateQueryFailureStatus = (
     body: input,
   });
 
-/** 回滚线上 Release 到上一版。 */
-export const rollbackRelease = (projectId: string) =>
-  request<{ active_release_id: string | null }>(`${base(projectId)}/releases:rollback`, {
-    method: 'POST',
-    projectId,
-  });
+/**
+ * 把线上问数切到本项目的某个已发布版本。
+ *
+ * 取代了原先无参数的 `releases:rollback`——它只往更早走一步，且没有回头路：
+ * 回滚一次后线上停在最早那版，更新的版本仍列在历史里却再也切不回去。
+ */
+export const activateRelease = (projectId: string, releaseId: string) =>
+  request<{ active_release_id: string | null }>(
+    `${base(projectId)}/releases/${encodeURIComponent(releaseId)}:activate`,
+    { method: 'POST', projectId },
+  );
 
 // --- 评测集 ---------------------------------------------------------------
 

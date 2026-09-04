@@ -1346,10 +1346,20 @@ def create_api(
             ]
         }
 
-    @app.post("/v1/analytics/projects/{project_id}/releases:rollback")
-    def rollback_active_release(project_id: str, request_context: Context):
+    @app.post("/v1/analytics/projects/{project_id}/releases/{release_id}:activate")
+    def activate_release(project_id: str, release_id: str, request_context: Context):
+        """把线上问数切到本项目的某个已发布版本。
+
+        取代了原先无参数的 `releases:rollback`——它只会往更早走一步，且没有回头路：
+        回滚一次后线上停在最早那版，更新的版本仍列在历史里却再也切不回去。
+        """
+
         require_project(project_id, request_context)
-        return {"active_release_id": application.rollback_active_release(project_id=project_id)}
+        return {
+            "active_release_id": application.activate_release(
+                project_id=project_id, release_id=release_id
+            )
+        }
 
     @app.post("/v1/analytics/projects/{project_id}/revisions/{revision_id}:derive")
     def derive_candidate_revision(

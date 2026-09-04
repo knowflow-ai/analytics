@@ -1202,10 +1202,10 @@ class AnalyticsApplication:
             semantic_catalog=updated_catalog,
         )
 
-    def rollback_active_release(self, *, project_id: str) -> str:
-        """Switch production back to the previously published release."""
+    def activate_release(self, *, project_id: str, release_id: str) -> str:
+        """Point production at one of this project's published releases."""
 
-        return self.catalog.rollback_active_release(project_id=project_id)
+        return self.catalog.activate_release(project_id=project_id, release_id=release_id)
 
     def derive_candidate_revision(self, *, revision_id: str) -> ModelingRevision:
         """Open a fresh editable candidate that inherits an existing revision.

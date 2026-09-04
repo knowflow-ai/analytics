@@ -150,7 +150,7 @@ query_id；Scope/Dataset/root/semantic ID、Trace 细节与 S2SQL/物理 SQL 只
 - 不重跑原问题来补 Trace。
 - 不导出服务日志、环境变量、容器信息或数据库全量数据。
 - 不修改 Scope、Mapper、Parser、Corrector 或 Translator 的行为。
-- 不在本次改造已废弃的 `/analytics-legacy` 页面。
+- 不在 `/analytics-legacy` 页面（那个旧巨石页已于 2026-09-04 整体删除）。
 
 ## 验证
 

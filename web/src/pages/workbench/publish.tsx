@@ -35,7 +35,14 @@ import {
   QueryAnswer,
   type QueryTurn,
 } from '@analytics/components/query-answer';
-import { Badge, Button, Empty, Spinner, useToast } from '@analytics/components/ui';
+import {
+  Badge,
+  Button,
+  ConfirmationDialog,
+  Empty,
+  Spinner,
+  useToast,
+} from '@analytics/components/ui';
 import { feedbackRows } from './ask-feedback-state';
 import { describeError, formatDateTime } from '@analytics/lib/labels';
 import type { WorkbenchContext } from './index';
@@ -133,6 +140,7 @@ export function PublishPanel({ projectId, revision, acceptRevision, readOnly, go
 
   const [structureError, setStructureError] = useState<string | null>(null);
   const [showPassed, setShowPassed] = useState(false);
+  const [confirmingRollback, setConfirmingRollback] = useState(false);
   // 评测集是三道检查里唯一要人主动跑的（重放会花掉一次模型预算）。格子里没有入口
   // 的话，用户得自己滚到页面最底下才找得到那张卡。
   const evaluationRef = useRef<HTMLDivElement>(null);
@@ -475,22 +483,43 @@ export function PublishPanel({ projectId, revision, acceptRevision, readOnly, go
                 </Badge>
               </div>
               <div className="mt-0.5 text-slate-400">{formatDateTime(release.created_at)}</div>
-              {release.status === 'active' && (releases.data?.items.length ?? 0) > 1 && (
-                <button
-                  type="button"
-                  className="mt-1 text-[11px] text-slate-400 underline hover:text-red-600"
-                  onClick={() => {
-                    if (window.confirm('回滚到上一版?线上问数会立即切换,当前版本进入历史。'))
-                      rollback.mutate();
-                  }}
-                >
-                  回滚到上一版
-                </button>
-              )}
+              {/*
+                判据必须和后端一致：能不能回滚看的是"有没有比线上这一版更早的
+                发布"，不是"一共发过几版"。回滚过一次之后线上会停在更早的那版，
+                更新的那版变成历史——此时按 length > 1 判断，按钮照样显示，点下去
+                必然撞上 no earlier release。
+              */}
+              {release.status === 'active' &&
+                (releases.data?.items ?? []).some(
+                  (other) => other.created_at < release.created_at,
+                ) && (
+                  <button
+                    type="button"
+                    className="mt-1 text-[11px] text-slate-400 underline hover:text-red-600"
+                    onClick={() => setConfirmingRollback(true)}
+                  >
+                    回滚到上一版
+                  </button>
+                )}
             </li>
           ))}
         </ul>
         <QueryFailuresCard projectId={projectId} onGo={() => goTo('feedback')} />
+        {/* 原生 window.confirm 会弹出带 "localhost:9222 显示" 的浏览器系统框，
+            读起来像是站点出了问题；项目里本来就有这个组件。 */}
+        <ConfirmationDialog
+          open={confirmingRollback}
+          danger
+          title="回滚到上一版？"
+          description="线上问数会立即切换到上一个发布版本，当前版本进入历史。"
+          confirmText="回滚"
+          loading={rollback.isPending}
+          onConfirm={() => {
+            rollback.mutate();
+            setConfirmingRollback(false);
+          }}
+          onClose={() => setConfirmingRollback(false)}
+        />
       </aside>
     </div>
   );

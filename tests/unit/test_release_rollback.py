@@ -87,8 +87,29 @@ def test_rollback_requires_an_earlier_release(sales_release) -> None:
     store.create_project(project_id="sales", name="销售分析")
     _seed_release(store, project_id="sales", release_id="rel_only", minute=1)
 
-    with pytest.raises(CatalogError):
+    with pytest.raises(CatalogError) as raised:
         store.rollback_active_release(project_id="sales")
+    # code 是界面能把这句话翻成中文的唯一依据，笼统的 CATALOG_ERROR 翻不了。
+    assert raised.value.code == "NO_EARLIER_RELEASE"
+
+
+def test_rolling_back_twice_stops_at_the_earliest_release(sales_release) -> None:
+    """回滚之后线上停在更早的那一版，此时"上一版"已经不存在了。
+
+    界面上曾按"一共发过几版"决定要不要显示回滚入口——回滚过一次后仍然有两版，
+    入口照常显示，点下去必然撞上这里。判据是"有没有比线上更早的发布"。
+    """
+
+    store = _store()
+    store.create_project(project_id="sales", name="销售分析")
+    _seed_release(store, project_id="sales", release_id="rel_old", minute=1)
+    _seed_release(store, project_id="sales", release_id="rel_new", minute=2)
+
+    assert store.rollback_active_release(project_id="sales") == "rel_old"
+
+    with pytest.raises(CatalogError) as raised:
+        store.rollback_active_release(project_id="sales")
+    assert raised.value.code == "NO_EARLIER_RELEASE"
 
 
 def test_rollback_on_a_project_that_never_published(sales_release) -> None:

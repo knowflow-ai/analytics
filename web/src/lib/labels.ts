@@ -80,6 +80,17 @@ export function formatDateTime(value: string | null | undefined): string {
 }
 
 /** Human-readable text for an API failure, with the business code when present. */
+/**
+ * 用户真会撞上、且原始英文说不清楚的业务错误。
+ *
+ * 核心的错误 message 按约定是英文（给日志和 API 消费者读），翻译在这一层做。
+ * 只收用户能在界面上直接触发的那些——内部一致性错误照旧原样显示，那种时候
+ * 原文比一句润色过的中文更有用。
+ */
+const ERROR_MESSAGES: Record<string, string> = {
+  NO_EARLIER_RELEASE: '线上已经是最早的一个发布版本，没有更早的可以回滚了。',
+};
+
 export function describeError(error: unknown): string {
   if (error && typeof error === 'object' && 'message' in error) {
     const record = error as { message: string; code?: string; status?: number };
@@ -87,6 +98,7 @@ export function describeError(error: unknown): string {
       return '服务尚未配置数据源或模型，请先完成设置。';
     }
     if (record.status === 401) return '需要登录。';
+    if (record.code && ERROR_MESSAGES[record.code]) return ERROR_MESSAGES[record.code];
     return record.code && record.code !== 'HTTP_ERROR' && record.code !== record.message
       ? `${record.message}（${record.code}）`
       : record.message;

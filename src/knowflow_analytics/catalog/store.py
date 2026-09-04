@@ -1939,7 +1939,10 @@ class CatalogStore:
                 .limit(1)
             ).scalar_one_or_none()
             if previous is None:
-                raise CatalogError("no earlier release is available to roll back to")
+                raise CatalogError(
+                    "no earlier release is available to roll back to",
+                    code="NO_EARLIER_RELEASE",
+                )
             # publish 维护「同一项目下只有一条 status=active」的不变量，回滚
             # 必须同样维护它：只改指针会让线上版本自称 retired，而被回滚掉的
             # 版本仍标着 active。

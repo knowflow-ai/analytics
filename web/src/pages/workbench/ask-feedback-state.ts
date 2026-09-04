@@ -48,10 +48,15 @@ export function failureReason(code: string): {
 export type FeedbackKind = 'clarified' | 'inferred' | 'unknown_value' | 'refused';
 
 /**
- * 一条「系统没接住的说法」。
+ * 一条「系统没直接听懂的说法」。
  *
- * 三种收场是同一个信号的三种样子。页面按**能不能直接动手**排序：带正解的排前面
- * （用户已经把答案告诉系统了，照着补别名即可），拒答排后面（还得先诊断原因）。
+ * 不是「没接住」——四种收场里有两种其实答上来了：反问一次之后用户自己选了
+ * （clarified），或者模型挑了个成员硬答（inferred）。共同点在过程不在结果：
+ * 用户的说法没被词表直接覆盖，系统只能靠问、靠猜，或者放弃。猜对了也要补，
+ * 因为下一次可能猜错。
+ *
+ * 页面按**能不能直接动手**排序：带正解的排前面（用户已经把答案告诉系统了，
+ * 照着补别名即可），拒答排后面（还得先诊断原因）。
  */
 export interface FeedbackRow {
   /**
@@ -108,17 +113,12 @@ function describe(item: AnalyticsQueryFailure): {
   fixableByAlias: boolean;
 } {
   const kind = item.kind ?? 'refused';
-  if (kind === 'clarified') {
-    return {
-      what: `系统没听懂，反问了一次；用户说他要看的是「${item.resolution ?? ''}」`,
-      fixableByAlias: true,
-    };
-  }
-  if (kind === 'inferred') {
-    return {
-      what: `没有匹配到这个说法，模型自己选了「${item.resolution ?? ''}」`,
-      fixableByAlias: true,
-    };
+  // 这两种收场，收场标签加落点已经把话说完了：「模型自己猜的 → 销售金额」。
+  // 再写一句"没有匹配到这个说法，模型自己选了「销售金额」"是把同一件事说第二遍，
+  // 还把成员名重复一次——那一整行文字挤掉了说法和落点的位置，长一点的条目直接
+  // 折成三行。留空，由界面用标签和落点表达。
+  if (kind === 'clarified' || kind === 'inferred') {
+    return { what: '', fixableByAlias: true };
   }
   if (kind === 'unknown_value') {
     return {
@@ -264,10 +264,10 @@ export function feedbackFixTarget(
 
 
 /**
- * 空态说什么，取决于当前站在哪个页签上。
+ * 空态说什么，取决于当前看的是待办还是归档。
  *
- * 三个页签共用一句文案会直接说假话：切到「已忽略」时写「还没有没接住的说法」，
- * 而实际情况是待处理里正堆着二十几条——只是没人忽略过而已。
+ * 两边共用一句文案会直接说假话：站在归档上写「待办清空了」，而待办里正堆着
+ * 一百多条——只是没人归档过而已。
  */
 export function feedbackEmptyCopy(
   view: 'open' | 'archived',

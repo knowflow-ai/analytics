@@ -24,7 +24,7 @@ const record = (
     ...extra,
   }) as any;
 
-describe('系统没接住的说法', () => {
+describe('系统没直接听懂的说法', () => {
   it('用户澄清后答出来的排最前：它自带正解，照着补别名就行', () => {
     const rows = feedbackRows([
       record('各城市有哪些门店', 'QUERY_EXECUTION_FAILED'),
@@ -50,31 +50,45 @@ describe('系统没接住的说法', () => {
     ]);
   });
 
-  it('模型自己猜的排在用户确认之后、其余之前：正解不可靠但次数就是信号', () => {
-    const [row] = feedbackRows([
+  it('猜和反问这两种收场不再重复说明：标签加落点已经把话说完了', () => {
+    // 「模型自己猜的 → 销售金额」已经完整；再写一句"没有匹配到这个说法，模型
+    // 自己选了「销售金额」"是把同一件事说第二遍、成员名重复一次，那一整行文字
+    // 会把说法和落点挤到第三行去。
+    const [guessed] = feedbackRows([
       record('各门店的业绩', 'SEMANTIC_INFERRED', {
         kind: 'inferred',
         resolution: '销售金额',
       }),
     ]);
-
-    expect(row.what).toContain('模型自己选了');
-    expect(row.what).toContain('销售金额');
-    expect(row.fixableByAlias).toBe(true);
-    expect(row.what).not.toContain('inferred');
-  });
-
-  it('说的是发生了什么，不是内部状态名', () => {
-    const [row] = feedbackRows([
+    const [asked] = feedbackRows([
       record('各门店的业绩', 'SEMANTIC_CLARIFIED', {
         kind: 'clarified',
         resolution: '销售金额',
       }),
     ]);
 
-    expect(row.what).toContain('销售金额');
-    expect(row.what).not.toContain('clarified');
-    expect(row.what).not.toContain('SEMANTIC_CLARIFIED');
+    expect(guessed.what).toBe('');
+    expect(asked.what).toBe('');
+    // 成员名没丢，它在 resolution 上——界面渲染的就是这个字段。
+    expect(guessed.resolution).toBe('销售金额');
+    expect(asked.resolution).toBe('销售金额');
+    expect(guessed.fixableByAlias).toBe(true);
+    expect(asked.fixableByAlias).toBe(true);
+  });
+
+  it('说明里从不出现内部状态名', () => {
+    const rows = feedbackRows([
+      record('哪些门店售卖卡布奇洛', 'UNKNOWN_FILTER_VALUE', {
+        kind: 'unknown_value',
+        message: '「卡布奇洛」不在「商品名称」的已发布取值里',
+      }),
+      record('花为什么是红色的', 'NO_SEMANTIC_MAPPING', { kind: 'refused' }),
+    ]);
+
+    for (const row of rows) {
+      expect(row.what).not.toContain(row.kind);
+      expect(row.what).not.toContain(row.code);
+    }
   });
 
   it('近似取值建议带上，没有就不编', () => {

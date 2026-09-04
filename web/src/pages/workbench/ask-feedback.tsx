@@ -82,12 +82,6 @@ export function AskFeedbackPanel({
     queryFn: () =>
       listQueryFailures(projectId, { limit: PAGE_SIZE, offset, status: view }),
   });
-  // 归档条数单独问一次：入口要能显示"里面有没有东西"，但不需要它的内容。
-  const archivedCount = useQuery({
-    queryKey: ["analytics-query-failures", projectId, "archived-count"],
-    queryFn: () => listQueryFailures(projectId, { limit: 1, offset: 0, status: "archived" }),
-    select: (page) => page.total,
-  });
   const total = failures.data?.total ?? 0;
 
   const mark = useMutation({
@@ -136,9 +130,13 @@ export function AskFeedbackPanel({
               setOffset(0);
             }}
           >
-            {view === "open"
-              ? `已归档${archivedCount.data ? ` ${archivedCount.data}` : ""}`
-              : "← 回到待办"}
+            {/*
+              这里曾经带一个数字，取的是后端 total——**行数**；而点进去看到的是
+              前端把这些行按说法聚合之后的**种数**（实测 15 行归成 4 种）。同一
+              个入口给出两个数，读者只会认为其中一个是错的。种数要等聚合下沉到
+              SQL 才拿得到，在那之前宁可不写：一个会说假话的数字不如没有。
+            */}
+            {view === "open" ? "已归档" : "← 回到待办"}
           </button>
         </div>
 
@@ -158,28 +156,55 @@ export function AskFeedbackPanel({
                 <div className="text-sm leading-relaxed text-slate-900">
                   「{row.question}」
                 </div>
-                {/* 类型、说明、落点原先分两行，其中"有没有落点"还得看右侧有没有
-                    按钮才知道。压成一行，一眼读完这条是什么、能不能补。 */}
+                {/*
+                  第二行的顺序就是读者的关注顺序：**怎么收场的 → 落到哪个成员 →
+                  用户原话怎么说**。徽章留在行首而不是挪到问句右侧：左边的次数列
+                  宽度固定，所有徽章因此天然落在同一条竖线上，既成列又不受问句
+                  长短影响。
+
+                  这一行原先还夹着一句完整的说明（"没有匹配到这个说法，模型自己
+                  选了「销售金额」"），和徽章、落点讲的是同一件事，成员名还重复
+                  一遍——挤得说法和落点没地方站，稍长的条目就折成三行。现在只有
+                  徽章说不了的信息才会出现在这里（不认识的取值、拒答原因）。
+                */}
                 <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
                   <Badge tone={KIND_TONE[row.kind]}>{KIND_LABEL[row.kind]}</Badge>
-                  {/* 说法是这一页的主角，也是聚合依据：不显示它，同一句问话按不同
-                      说法聚合出的几行看起来就一模一样，读者只会觉得列表在重复。 */}
-                  {row.phrase && (
+                  {row.resolution ? (
                     <span>
-                      说法
-                      <span className="font-medium text-slate-700">「{row.phrase}」</span>
-                    </span>
-                  )}
-                  <span>{row.what}</span>
-                  {fix ? (
-                    <span>
-                      · 落点：
-                      <span className="font-medium text-slate-700">{fix.name}</span>
-                      <span className="text-slate-400">（{TARGET_LABEL[fix.kind]}）</span>
+                      {/* 说法在前、成员在后，中间一个等号——这正是待会儿要写进
+                          词典的那条记录的样子。说法原先缀在行尾，可它是主语：
+                          「毛利如何」被理解成了销售金额，读起来才顺。 */}
+                      {row.phrase && (
+                        <>
+                          <span className="font-medium text-slate-600">
+                            「{row.phrase}」
+                          </span>
+                          <span className="text-slate-400">= </span>
+                        </>
+                      )}
+                      <span className="font-medium text-slate-700">{row.resolution}</span>
+                      {/* 落点算不出来时要说清是为什么，否则读者看到一个成员名却
+                          没有「补进词典」按钮，不知道该怪谁。 */}
+                      {fix ? (
+                        <span className="text-slate-400">（{TARGET_LABEL[fix.kind]}）</span>
+                      ) : (
+                        <span className="text-slate-400">（当前版本里没有这个成员）</span>
+                      )}
                     </span>
                   ) : (
-                    <span className="text-slate-400">· 没有落点，要先诊断</span>
+                    <>
+                      <span className="text-slate-400">没有落点，要先诊断</span>
+                      {/* 没有落点时说法无处可等号，但它仍是这一行的聚合依据，
+                          不显示就会有几行看起来一模一样。 */}
+                      {row.phrase && (
+                        <span className="text-slate-400">
+                          · 说法
+                          <span className="font-medium text-slate-600">「{row.phrase}」</span>
+                        </span>
+                      )}
+                    </>
                   )}
+                  {row.what && <span>{row.what}</span>}
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-1.5 pt-0.5">
@@ -332,7 +357,7 @@ function Header({ view, total }: { view: "open" | "archived"; total: number }) {
     <header>
       <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
         <MessageSquareText className="h-4 w-4 text-slate-400" />
-        {view === "open" ? "用户说了什么，系统没接住" : "已归档"}
+        {view === "open" ? "用户这么说，系统没直接听懂" : "已归档"}
       </h2>
       <p className="mt-1 max-w-2xl text-xs leading-relaxed text-slate-500">
         {view === "open" ? (

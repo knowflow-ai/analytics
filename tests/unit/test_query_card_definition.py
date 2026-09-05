@@ -64,6 +64,9 @@ def _app(catalog):
 
     application = AnalyticsApplication.__new__(AnalyticsApplication)
     application.catalog = catalog
+    # 产物异步落盘：接口先等记录器写完再取。这里没有记录器，等待立即返回。
+    application._query_diagnostic_recorder = SimpleNamespace(wait_for=lambda key, *, timeout: None)
+    application._query_diagnostic_export_wait_seconds = 0.0
     return application
 
 
@@ -72,6 +75,31 @@ def _client(catalog):
         create_api(application=_app(catalog), service_secret=_SECRET),
         raise_server_exceptions=False,
     )
+
+
+_S2SQL = 'SELECT DATE_TRUNC(\'MONTH\', "下单日期"), RATIO_ROLL("净收入") FROM "销售经营" GROUP BY 1'
+_MARKER = "time:order_date:2026-08-01:2026-09-01:近 30 天"
+
+
+def test_it_returns_the_textual_s2sql_as_the_rerun_authority():
+    """卡片重跑的权威是文本 S2SQL：粒度、期间比只在它里面，投影表达不了。"""
+    catalog = _Catalog(
+        _artifact(
+            {
+                "semantic_query": _SEMANTIC_QUERY,
+                "corrected_s2sql": _S2SQL,
+                "interpretation": {"applied_defaults": [_MARKER]},
+            }
+        )
+    )
+    payload = (
+        _client(catalog)
+        .get("/v1/analytics/projects/sales/query-card?query_id=q1", headers=_HEADERS)
+        .json()
+    )
+    assert payload["s2sql"] == _S2SQL
+    assert payload["dataset_id"] == "sales_dataset"
+    assert payload["applied_defaults"] == [_MARKER]
 
 
 def test_it_returns_the_governed_query_and_its_version_binding():
@@ -94,9 +122,7 @@ def test_it_is_scoped_to_the_asking_actor():
 
     catalog = _Catalog(_artifact({"semantic_query": _SEMANTIC_QUERY}))
 
-    _client(catalog).get(
-        "/v1/analytics/projects/sales/query-card?query_id=q1", headers=_HEADERS
-    )
+    _client(catalog).get("/v1/analytics/projects/sales/query-card?query_id=q1", headers=_HEADERS)
 
     assert catalog.seen["actor_id"] == "actor-1"
     assert catalog.seen["project_id"] == "sales"
@@ -181,15 +207,11 @@ class TestRollingTimeWindow:
             metric_ids=("m1",),
             dimension_ids=("d1",),
             filters=(
-                QueryFilter(
-                    dimension_id="t1", operator=FilterOperator.GTE, value="2026-08-03"
-                ),
+                QueryFilter(dimension_id="t1", operator=FilterOperator.GTE, value="2026-08-03"),
             ),
         )
 
-        rolled = apply_relative_time_window(
-            pinned, "t1", 30, now=datetime(2026, 12, 1, tzinfo=UTC)
-        )
+        rolled = apply_relative_time_window(pinned, "t1", 30, now=datetime(2026, 12, 1, tzinfo=UTC))
 
         bounds = [item.value for item in rolled.filters if item.dimension_id == "t1"]
         assert bounds == ["2026-11-01"]
@@ -212,16 +234,12 @@ class TestRollingTimeWindow:
             query_type=SemanticQueryType.AGGREGATE,
             metric_ids=("m1",),
             filters=(
-                QueryFilter(
-                    dimension_id="t1", operator=FilterOperator.GTE, value="2026-08-03"
-                ),
+                QueryFilter(dimension_id="t1", operator=FilterOperator.GTE, value="2026-08-03"),
                 QueryFilter(dimension_id="d1", operator=FilterOperator.EQ, value="华东"),
             ),
         )
 
-        rolled = apply_relative_time_window(
-            pinned, "t1", 7, now=datetime(2026, 12, 1, tzinfo=UTC)
-        )
+        rolled = apply_relative_time_window(pinned, "t1", 7, now=datetime(2026, 12, 1, tzinfo=UTC))
 
         assert len([i for i in rolled.filters if i.dimension_id == "t1"]) == 1
         # 非时间的过滤原样保留：滚动的只是时间窗。
@@ -251,9 +269,7 @@ class TestRollingTimeWindow:
                     "dataset_id": "ds",
                     "query_type": "aggregate",
                     "metric_ids": ["m1"],
-                    "filters": [
-                        {"dimension_id": "t1", "operator": "gte", "value": "2020-01-01"}
-                    ],
+                    "filters": [{"dimension_id": "t1", "operator": "gte", "value": "2020-01-01"}],
                 },
                 "time_window_dimension_id": "t1",
                 "time_window_days": 30,
@@ -286,9 +302,7 @@ class TestRollingTimeWindow:
                     "dataset_id": "ds",
                     "query_type": "aggregate",
                     "metric_ids": ["m1"],
-                    "filters": [
-                        {"dimension_id": "t1", "operator": "gte", "value": "2020-01-01"}
-                    ],
+                    "filters": [{"dimension_id": "t1", "operator": "gte", "value": "2020-01-01"}],
                 },
             },
         )

@@ -13,7 +13,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
 
-from pydantic import ValidationError
 from sqlalchemy import create_engine
 
 from knowflow_analytics.catalog.data_sources import (
@@ -203,6 +202,7 @@ from knowflow_analytics.query.contracts import (
     QueryRowFilter,
     QueryState,
     QueryTraceStep,
+    S2SqlQueryRequest,
     StructuredQueryRequest,
 )
 from knowflow_analytics.query.corrector import LlmPhysicalSqlCorrector
@@ -234,13 +234,36 @@ LOGGER = logging.getLogger(__name__)
 _MAX_UPLOAD_SHEETS = 20
 
 
+def _continuation_base(response: object) -> tuple[str, str, tuple[str, ...]] | None:
+    """从持久化产物里取"继续这个回答"所需的三样：作用域、文本 S2SQL、当时补的默认。
+
+    只有完成态的回答才有这三样；澄清卡与失败回答返回 None。
+    """
+
+    if not isinstance(response, dict):
+        return None
+    s2sql = response.get("corrected_s2sql")
+    semantic_query = response.get("semantic_query")
+    if not isinstance(s2sql, str) or not s2sql.strip() or not isinstance(semantic_query, dict):
+        return None
+    dataset_id = semantic_query.get("dataset_id")
+    if not isinstance(dataset_id, str) or not dataset_id:
+        return None
+    interpretation = response.get("interpretation")
+    raw_defaults = (
+        interpretation.get("applied_defaults") if isinstance(interpretation, dict) else ()
+    )
+    applied_defaults = tuple(item for item in (raw_defaults or ()) if isinstance(item, str))
+    return dataset_id, s2sql, applied_defaults
+
+
 @dataclass(frozen=True)
 class _QueryDiagnosticRecord:
-    request: QueryRequest | StructuredQueryRequest
+    request: QueryRequest | StructuredQueryRequest | S2SqlQueryRequest
     response: QueryResponse
     actor_id: str
     permission_scope_hash: str
-    mode: Literal["natural", "structured"]
+    mode: Literal["natural", "structured", "continuation"]
     revision: ModelingRevision | None = None
 
     @property
@@ -3952,6 +3975,25 @@ class AnalyticsApplication:
         )
         return response
 
+    def s2sql_query(
+        self,
+        request: S2SqlQueryRequest,
+        *,
+        actor_id: str | None = None,
+        permission_scope_hash: str | None = None,
+    ) -> QueryResponse:
+        """续跑一个已完成回答：以它的文本 S2SQL 重跑（报表卡片每次打开走这里）。"""
+
+        response = self._query_service.query_s2sql(request, actor_id=actor_id)
+        self._save_query_diagnostic_best_effort(
+            request=request,
+            response=response,
+            actor_id=actor_id,
+            permission_scope_hash=permission_scope_hash,
+            mode="continuation",
+        )
+        return response
+
     def drilldown_query(
         self,
         *,
@@ -3972,6 +4014,12 @@ class AnalyticsApplication:
         the opaque token it was shown.
         """
 
+        # 产物是异步落盘的：回答一到就点下钻，可能比落盘还快。与导出一样先等
+        # 记录器写完，否则用户看到的是"下钻已过期"这句假话（实测点得快就中）。
+        self._query_diagnostic_recorder.wait_for(
+            (actor_id, project_id, permission_scope_hash, query_id),
+            timeout=self._query_diagnostic_export_wait_seconds,
+        )
         try:
             artifact = self.catalog.get_query_diagnostic(
                 actor_id=actor_id,
@@ -3984,46 +4032,42 @@ class AnalyticsApplication:
                 "下钻已过期或不属于当前查询，请重新提问",
                 code="STALE_QUERY_SELECTION",
             ) from exc
-        base_raw = artifact.response.get("semantic_query")
-        if not isinstance(base_raw, dict):
+        base = _continuation_base(artifact.response)
+        if base is None:
             raise SemanticParsingError(
                 "该回答不支持下钻，请重新提问",
                 code="CANDIDATE_NOT_FOUND",
             )
-        try:
-            base_query = SemanticQuery.model_validate(base_raw)
-        except ValidationError as exc:
-            raise SemanticParsingError(
-                "该回答不支持下钻，请重新提问",
-                code="CANDIDATE_NOT_FOUND",
-            ) from exc
+        dataset_id, s2sql, applied_defaults = base
         response = self._query_service.query_drilldown(
             project_id=project_id,
             query_id=query_id,
             token=token,
-            base_query=base_query,
+            base_s2sql=s2sql,
+            base_dataset_id=dataset_id,
             base_release_id=artifact.release_id,
             base_spec_hash=artifact.spec_hash,
             actor_id=actor_id,
             value=value,
+            base_applied_defaults=applied_defaults,
             allowed_element_ids=allowed_element_ids,
             row_filters=row_filters,
             options=options,
         )
-        # 诊断里的 request 记实际执行的 continuation；链式下钻的语义恢复
-        # 走 artifact.response.semantic_query，不依赖这里。
-        executed_query = (
-            response.semantic_query if isinstance(response, CompletedQueryResponse) else base_query
+        executed_s2sql = (
+            response.corrected_s2sql if isinstance(response, CompletedQueryResponse) else s2sql
         )
         self._save_query_diagnostic_best_effort(
-            request=StructuredQueryRequest(
+            request=S2SqlQueryRequest(
                 project_id=project_id,
-                semantic_query=executed_query,
+                dataset_id=dataset_id,
+                s2sql=executed_s2sql,
+                applied_defaults=applied_defaults,
             ),
             response=response,
             actor_id=actor_id,
             permission_scope_hash=permission_scope_hash,
-            mode="structured",
+            mode="continuation",
         )
         return response
 
@@ -4049,6 +4093,10 @@ class AnalyticsApplication:
         定义由调用方永久保存，不再依赖产物存活。
         """
 
+        self._query_diagnostic_recorder.wait_for(
+            (actor_id, project_id, permission_scope_hash, query_id),
+            timeout=self._query_diagnostic_export_wait_seconds,
+        )
         try:
             artifact = self.catalog.get_query_diagnostic(
                 actor_id=actor_id,
@@ -4067,12 +4115,25 @@ class AnalyticsApplication:
                 "这次回答没有可重跑的查询，无法固定成卡片",
                 code="QUERY_CARD_UNSUPPORTED",
             )
-        return {
+        definition: dict[str, object] = {
             "query_id": query_id,
             "semantic_query": semantic_query,
             "release_id": artifact.release_id,
             "spec_hash": artifact.spec_hash,
         }
+        # 可重跑定义的权威是文本 S2SQL：粒度、期间比、别名只在它里面。``semantic_query``
+        # 保留给查看者白名单的前置判断（成员 ID），不再是执行合同。
+        base = _continuation_base(artifact.response)
+        if base is not None:
+            dataset_id, s2sql, applied_defaults = base
+            definition.update(
+                {
+                    "dataset_id": dataset_id,
+                    "s2sql": s2sql,
+                    "applied_defaults": list(applied_defaults),
+                }
+            )
+        return definition
 
     def export_query_diagnostic(
         self,
@@ -4236,11 +4297,11 @@ class AnalyticsApplication:
     def _save_query_diagnostic_best_effort(
         self,
         *,
-        request: QueryRequest | StructuredQueryRequest,
+        request: QueryRequest | StructuredQueryRequest | S2SqlQueryRequest,
         response: QueryResponse,
         actor_id: str | None,
         permission_scope_hash: str | None,
-        mode: Literal["natural", "structured"],
+        mode: Literal["natural", "structured", "continuation"],
         revision: ModelingRevision | None = None,
     ) -> None:
         """Enqueue after response formation without waiting for storage I/O."""

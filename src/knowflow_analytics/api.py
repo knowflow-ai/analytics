@@ -61,6 +61,7 @@ from knowflow_analytics.query.contracts import (
     QueryRowFilter,
     QueryState,
     QueryTraceStep,
+    S2SqlQueryRequest,
     StructuredQueryRequest,
 )
 from knowflow_analytics.query.diagnostics import QueryDiagnosticExport
@@ -2680,6 +2681,47 @@ def create_api(
             ),
             actor_id=request_context.actor_id,
             permission_scope_hash=request_context.permission_scope_hash,
+        )
+
+    class S2SqlContinuationRequest(_RequestModel):
+        """续跑一个已完成回答：文本 S2SQL 是唯一权威，报表卡片每次打开走这里。"""
+
+        project_id: str = Field(min_length=1, max_length=128)
+        dataset_id: str = Field(min_length=1, max_length=256)
+        s2sql: str = Field(min_length=1, max_length=100_000)
+        applied_defaults: tuple[str, ...] = Field(default=(), max_length=50)
+        # 滚动窗：每次打开按今天重算下界；不传 = 固定区间。
+        time_window_dimension_id: str | None = Field(default=None, min_length=1, max_length=128)
+        time_window_days: int | None = Field(default=None, ge=1, le=3_650)
+        query_id: str | None = Field(default=None, min_length=1, max_length=128)
+        include_debug_sql: bool = False
+        allowed_element_ids: tuple[str, ...] | None = Field(default=None, max_length=5_000)
+        row_filters: tuple[QueryRowFilter, ...] | None = Field(default=None, max_length=100)
+        options: QueryOptions = Field(default_factory=QueryOptions)
+
+    @app.post("/v1/analytics/query:s2sql")
+    def s2sql_query(payload: S2SqlContinuationRequest, request_context: Context):
+        """续跑已完成回答的业务投影：不经 Mapper / LLM，粒度与期间比原样保留。"""
+        require_project(payload.project_id, request_context)
+        expensive(request_context)
+        return _ordinary_query_projection(
+            application.s2sql_query(
+                S2SqlQueryRequest(
+                    project_id=payload.project_id,
+                    dataset_id=payload.dataset_id,
+                    s2sql=payload.s2sql,
+                    applied_defaults=payload.applied_defaults,
+                    time_window_dimension_id=payload.time_window_dimension_id,
+                    time_window_days=payload.time_window_days,
+                    query_id=payload.query_id,
+                    include_debug_sql=payload.include_debug_sql and allow_debug_sql,
+                    allowed_element_ids=payload.allowed_element_ids,
+                    row_filters=payload.row_filters,
+                    options=payload.options,
+                ),
+                actor_id=request_context.actor_id,
+                permission_scope_hash=request_context.permission_scope_hash,
+            )
         )
 
     class DrilldownRequest(_RequestModel):

@@ -15,16 +15,18 @@ import pytest
 from knowflow_analytics.catalog.store import PublishedRelease
 from knowflow_analytics.contracts import (
     QueryFilter,
-    QueryMetricFilter,
-    QueryOrder,
     QueryResult,
     SemanticQuery,
 )
-from knowflow_analytics.query.contracts import QueryState, StructuredQueryRequest
+from knowflow_analytics.query.contracts import (
+    QueryState,
+    S2SqlQueryRequest,
+    StructuredQueryRequest,
+)
 from knowflow_analytics.query.errors import SemanticParsingError
 from knowflow_analytics.query.mapper import SemanticMapper
 from knowflow_analytics.query.orchestrator import CandidateOrchestrator
-from knowflow_analytics.query.service import AnalyticsQueryService, _apply_drilldown
+from knowflow_analytics.query.service import AnalyticsQueryService
 from knowflow_analytics.semantic import SemanticTranslator
 
 
@@ -111,7 +113,8 @@ def test_split_by_dimension_executes_structured_continuation(sales_release, sale
         project_id="sales",
         query_id=response.query_id,
         token=option.token,
-        base_query=response.semantic_query,
+        base_s2sql=response.corrected_s2sql,
+        base_dataset_id=response.semantic_query.dataset_id,
         base_release_id=response.release_id,
         base_spec_hash=response.spec_hash,
         actor_id="user-1",
@@ -136,7 +139,8 @@ def test_remove_dimension_shrinks_the_chain(sales_release, sales_index):
         token=next(
             item for item in response.drilldown if item.action == "add" and item.label == "渠道"
         ).token,
-        base_query=response.semantic_query,
+        base_s2sql=response.corrected_s2sql,
+        base_dataset_id=response.semantic_query.dataset_id,
         base_release_id=response.release_id,
         base_spec_hash=response.spec_hash,
         actor_id="user-1",
@@ -150,7 +154,8 @@ def test_remove_dimension_shrinks_the_chain(sales_release, sales_index):
         project_id="sales",
         query_id=split.query_id,
         token=remove_region.token,
-        base_query=split.semantic_query,
+        base_s2sql=split.corrected_s2sql,
+        base_dataset_id=split.semantic_query.dataset_id,
         base_release_id=split.release_id,
         base_spec_hash=split.spec_hash,
         actor_id="user-1",
@@ -174,7 +179,8 @@ def test_switch_metric_replaces_projection(sales_release, sales_index):
         project_id="sales",
         query_id=response.query_id,
         token=option.token,
-        base_query=response.semantic_query,
+        base_s2sql=response.corrected_s2sql,
+        base_dataset_id=response.semantic_query.dataset_id,
         base_release_id=response.release_id,
         base_spec_hash=response.spec_hash,
         actor_id="user-1",
@@ -191,7 +197,8 @@ def test_drilldown_token_binds_actor_query_and_release(sales_release, sales_inde
     option = response.drilldown[0]
     common = {
         "project_id": "sales",
-        "base_query": response.semantic_query,
+        "base_s2sql": response.corrected_s2sql,
+        "base_dataset_id": response.semantic_query.dataset_id,
         "base_release_id": response.release_id,
         "base_spec_hash": response.spec_hash,
     }
@@ -205,9 +212,7 @@ def test_drilldown_token_binds_actor_query_and_release(sales_release, sales_inde
 
     # 跨查询重放。
     with pytest.raises(SemanticParsingError) as exc:
-        service.query_drilldown(
-            query_id="q_other", token=option.token, actor_id="user-1", **common
-        )
+        service.query_drilldown(query_id="q_other", token=option.token, actor_id="user-1", **common)
     assert exc.value.code == "CANDIDATE_NOT_FOUND"
 
     # 篡改签名。
@@ -224,7 +229,8 @@ def test_drilldown_token_binds_actor_query_and_release(sales_release, sales_inde
             project_id="sales",
             query_id=response.query_id,
             token=option.token,
-            base_query=response.semantic_query,
+            base_s2sql=response.corrected_s2sql,
+            base_dataset_id=response.semantic_query.dataset_id,
             base_release_id=response.release_id,
             base_spec_hash="sha256:another-spec",
             actor_id="user-1",
@@ -246,7 +252,8 @@ def test_drilldown_token_expires(sales_release, sales_index, monkeypatch):
             project_id="sales",
             query_id=response.query_id,
             token=option.token,
-            base_query=response.semantic_query,
+            base_s2sql=response.corrected_s2sql,
+            base_dataset_id=response.semantic_query.dataset_id,
             base_release_id=response.release_id,
             base_spec_hash=response.spec_hash,
             actor_id="user-1",
@@ -287,7 +294,8 @@ def test_refilter_swaps_the_dimension_value(sales_release, sales_index):
         project_id="sales",
         query_id=response.query_id,
         token=option.token,
-        base_query=response.semantic_query,
+        base_s2sql=response.corrected_s2sql,
+        base_dataset_id=response.semantic_query.dataset_id,
         base_release_id=response.release_id,
         base_spec_hash=response.spec_hash,
         actor_id="user-1",
@@ -306,7 +314,8 @@ def test_refilter_swaps_the_dimension_value(sales_release, sales_index):
             project_id="sales",
             query_id=response.query_id,
             token=option.token,
-            base_query=response.semantic_query,
+            base_s2sql=response.corrected_s2sql,
+            base_dataset_id=response.semantic_query.dataset_id,
             base_release_id=response.release_id,
             base_spec_hash=response.spec_hash,
             actor_id="user-1",
@@ -331,7 +340,8 @@ def test_retime_replaces_the_governed_time_window(sales_release, sales_index):
         project_id="sales",
         query_id=response.query_id,
         token=option.token,
-        base_query=response.semantic_query,
+        base_s2sql=response.corrected_s2sql,
+        base_dataset_id=response.semantic_query.dataset_id,
         base_release_id=response.release_id,
         base_spec_hash=response.spec_hash,
         actor_id="user-1",
@@ -353,7 +363,8 @@ def test_retime_replaces_the_governed_time_window(sales_release, sales_index):
         project_id="sales",
         query_id=continuation.query_id,
         token=all_time.token,
-        base_query=continuation.semantic_query,
+        base_s2sql=continuation.corrected_s2sql,
+        base_dataset_id=continuation.semantic_query.dataset_id,
         base_release_id=continuation.release_id,
         base_spec_hash=continuation.spec_hash,
         actor_id="user-1",
@@ -370,42 +381,135 @@ def test_no_time_windows_without_a_governed_default_time_dimension(sales_release
     assert not [item for item in response.drilldown if item.action == "retime"]
 
 
-def test_apply_drilldown_semantics():
-    base = SemanticQuery(
-        dataset_id="sales_dataset",
-        metric_ids=("net_revenue",),
-        dimension_ids=("region",),
-        metric_filters=(
-            QueryMetricFilter(metric_id="net_revenue", operator="gt", value=100),
+MONTHLY_RATIO = (
+    'SELECT DATE_TRUNC(\'MONTH\', "下单日期") AS "月份", RATIO_ROLL("净收入") AS "环比" '
+    'FROM "销售经营" WHERE "区域" = \'华东\' GROUP BY DATE_TRUNC(\'MONTH\', "下单日期")'
+)
+
+
+def _continued(service, s2sql, *, applied_defaults=(), actor_id="user-1"):
+    response = service.query_s2sql(
+        S2SqlQueryRequest(
+            project_id="sales",
+            dataset_id="sales_dataset",
+            s2sql=s2sql,
+            applied_defaults=applied_defaults,
         ),
-        order_by=(
-            QueryOrder(element_id="net_revenue", direction="desc"),
-            QueryOrder(element_id="region", direction="asc"),
-        ),
-        limit=10,
+        actor_id=actor_id,
+    )
+    assert response.state is QueryState.COMPLETED, response.model_dump_json(indent=2)
+    return response
+
+
+def _drill(service, response, option, **extra):
+    return service.query_drilldown(
+        project_id="sales",
+        query_id=response.query_id,
+        token=option.token,
+        base_s2sql=response.corrected_s2sql,
+        base_dataset_id=response.semantic_query.dataset_id,
+        base_release_id=response.release_id,
+        base_spec_hash=response.spec_hash,
+        base_applied_defaults=response.interpretation.applied_defaults,
+        actor_id="user-1",
+        **extra,
     )
 
-    split = _apply_drilldown(base, "add", "channel")
-    assert split.dimension_ids == ("region", "channel")
-    assert split.metric_filters == base.metric_filters
-    assert split.order_by == base.order_by
 
-    # 重复加同一维度不产生重复列。
-    dedup = _apply_drilldown(base, "add", "region")
-    assert dedup.dimension_ids == ("region",)
+class TestContinuationKeepsTheTextualShape:
+    """续跑的权威是回答的文本 S2SQL，不是它的投影。
 
-    switched = _apply_drilldown(base, "replace", "refund_amount")
-    assert switched.metric_ids == ("refund_amount",)
-    # 引用旧指标的过滤与排序被清掉，维度排序保留。
-    assert switched.metric_filters == ()
-    assert switched.aggregation_overrides == ()
-    assert switched.order_by == (QueryOrder(element_id="region", direction="asc"),)
+    实机（2026-09-05）：「按月咖啡的环比销售情况」答对了，下钻「商品类别」换成「烘焙」
+    之后变成按天的销售金额——投影表达不了 DATE_TRUNC 粒度与 RATIO_ROLL，拿它重跑
+    就把形状丢了，chip 上却写着只换了过滤值。
+    """
 
-    removed = _apply_drilldown(split, "remove", "region")
-    assert removed.dimension_ids == ("channel",)
-    # 被移除维度的排序引用一并清掉；指标过滤（独立语义）保留。
-    assert removed.order_by == (QueryOrder(element_id="net_revenue", direction="desc"),)
-    assert removed.metric_filters == base.metric_filters
+    def test_refilter_keeps_the_monthly_period_ratio(self, sales_release, sales_index):
+        service = _service(sales_release, sales_index)
+        base = _continued(service, MONTHLY_RATIO)
+        option = next(item for item in base.drilldown if item.action == "refilter")
+        assert option.label == "区域"
+        continuation = _drill(service, base, option, value="华南")
+        assert continuation.state is QueryState.COMPLETED, continuation.model_dump_json(indent=2)
+        assert "DATE_TRUNC('MONTH', \"下单日期\")" in continuation.corrected_s2sql
+        assert 'RATIO_ROLL("净收入")' in continuation.corrected_s2sql
+        assert "'华南'" in continuation.corrected_s2sql
+        assert "'华东'" not in continuation.corrected_s2sql
+        # 业务层理解同步：过滤值换了，月粒度还在。
+        filters = continuation.semantic_query.filters
+        assert [(item.dimension_id, item.value) for item in filters] == [("region", "华南")]
+        assert "MONTH" in [grain for grain in continuation.column_grains if grain]
+
+    def test_add_dimension_keeps_the_ratio_and_extends_group_by(self, sales_release, sales_index):
+        service = _service(sales_release, sales_index)
+        base = _continued(service, MONTHLY_RATIO)
+        option = next(
+            item for item in base.drilldown if item.action == "add" and item.label == "渠道"
+        )
+        continuation = _drill(service, base, option)
+        assert continuation.state is QueryState.COMPLETED, continuation.model_dump_json(indent=2)
+        assert 'RATIO_ROLL("净收入")' in continuation.corrected_s2sql
+        assert continuation.corrected_s2sql.endswith(
+            'GROUP BY DATE_TRUNC(\'MONTH\', "下单日期"), "渠道"'
+        )
+        assert continuation.semantic_query.dimension_ids == ("order_date", "channel")
+
+    def test_replace_metric_keeps_the_ratio_shape(self, sales_release, sales_index):
+        service = _service(sales_release, sales_index)
+        base = _continued(service, MONTHLY_RATIO)
+        option = next(
+            item for item in base.drilldown if item.kind == "metric" and item.label == "退款金额"
+        )
+        continuation = _drill(service, base, option)
+        assert continuation.state is QueryState.COMPLETED, continuation.model_dump_json(indent=2)
+        assert 'RATIO_ROLL("退款金额")' in continuation.corrected_s2sql
+        assert "净收入" not in continuation.corrected_s2sql
+
+    def test_shapes_that_cannot_be_edited_get_no_options(self, sales_release, sales_index):
+        """带 CTE 的回答不给下钻：与其给一个注定失败的按钮，不如不给。"""
+        service = _service(sales_release, sales_index)
+        base = _continued(
+            service,
+            'WITH "汇总" AS (SELECT "区域", "净收入" FROM "销售经营" GROUP BY "区域") '
+            'SELECT "区域", "净收入" FROM "汇总"',
+        )
+        assert base.drilldown == ()
+
+    def test_retime_replaces_the_range_and_retires_the_default_marker(
+        self, sales_release, sales_index
+    ):
+        release = _with_default_time(sales_release)
+        service = _service(release, sales_index)
+        base = _continued(
+            service,
+            'SELECT "区域", "净收入" FROM "销售经营" WHERE "下单日期" >= \'2026-08-01\' '
+            'AND "下单日期" < \'2026-09-01\' GROUP BY "区域"',
+            applied_defaults=("time:order_date:2026-08-01:2026-09-01:最近 30 天",),
+        )
+        assert base.interpretation.default_time_window is not None
+        option = next(
+            item for item in base.drilldown if item.action == "retime" and item.label == "近 7 天"
+        )
+        continuation = _drill(service, base, option, now=datetime(2026, 9, 5, tzinfo=UTC))
+        assert continuation.state is QueryState.COMPLETED, continuation.model_dump_json(indent=2)
+        assert "\"下单日期\" >= '2026-08-29'" in continuation.corrected_s2sql
+        assert "2026-09-01" not in continuation.corrected_s2sql
+        # 用户亲手选了窗，它就不再是"默认"。
+        assert continuation.interpretation.default_time_window is None
+        assert not [
+            marker
+            for marker in continuation.interpretation.applied_defaults
+            if marker.startswith("time:")
+        ]
+        all_time = next(
+            item
+            for item in continuation.drilldown
+            if item.action == "retime" and item.label == "不限时间"
+        )
+        cleared = _drill(service, continuation, all_time)
+        assert cleared.state is QueryState.COMPLETED
+        where_clause = cleared.corrected_s2sql.split("FROM", 1)[1].split("GROUP BY")[0]
+        assert "下单日期" not in where_clause
 
 
 def test_visualization_marks_groupless_ratio_as_ratio_chart(sales_release):
@@ -417,7 +521,7 @@ def test_visualization_marks_groupless_ratio_as_ratio_chart(sales_release):
     marked = AnalyticsQueryService._visualization(
         sales_release,
         ratio_query,
-        "SELECT RATIO_TO_TOTAL(\"净收入\", \"区域\", '华东') FROM \"销售经营\"",
+        'SELECT RATIO_TO_TOTAL("净收入", "区域", \'华东\') FROM "销售经营"',
     )
     assert marked["type"] == "ratio"
 
@@ -493,9 +597,7 @@ def test_period_ratio_projection_keeps_aliased_columns_and_marks_delta(
     )
 
     response = service.query(
-        QueryRequest(
-            project_id="sales", question="按月净收入同比", dataset_ids=("sales_dataset",)
-        ),
+        QueryRequest(project_id="sales", question="按月净收入同比", dataset_ids=("sales_dataset",)),
         actor_id="user-1",
     )
     assert response.state is QueryState.COMPLETED
@@ -542,9 +644,11 @@ def test_ratio_column_alone_is_percent_formatted_not_the_metric_beside_it(
     assert visualization["y"] == ("_净收入_", "_同比_")
     assert visualization["y_formats"] == ["number", "delta"]
     # 别名的包裹下划线不进展示名。
-    assert AnalyticsQueryService._column_labels(
-        release, translated.physical_query.columns
-    ) == ("年", "净收入", "同比")
+    assert AnalyticsQueryService._column_labels(release, translated.physical_query.columns) == (
+        "年",
+        "净收入",
+        "同比",
+    )
 
 
 def test_time_column_is_projected_at_its_group_grain(sales_release):
@@ -563,9 +667,9 @@ def test_time_column_is_projected_at_its_group_grain(sales_release):
         ("day", "2026-08-01"),
     ):
         s2sql = (
-            f"SELECT DATE_TRUNC('{grain}', \"下单日期\") AS \"_期_\", "
+            f'SELECT DATE_TRUNC(\'{grain}\', "下单日期") AS "_期_", '
             'RATIO_OVER("净收入") AS "_同比_" '
-            f"FROM \"销售经营\" GROUP BY DATE_TRUNC('{grain}', \"下单日期\")"
+            f'FROM "销售经营" GROUP BY DATE_TRUNC(\'{grain}\', "下单日期")'
         )
         translated = S2SqlSemanticTranslator().translate(
             release=release, dataset_id="sales_dataset", corrected_s2sql=s2sql
@@ -573,8 +677,6 @@ def test_time_column_is_projected_at_its_group_grain(sales_release):
         grains = AnalyticsQueryService._column_grains(translated.physical_query.columns)
         assert grains[0] == grain.upper()
         assert grains[1] is None
-        assert (
-            _format_grain_value(datetime(2026, 8, 1, tzinfo=UTC), grains[0]) == expected
-        )
+        assert _format_grain_value(datetime(2026, 8, 1, tzinfo=UTC), grains[0]) == expected
         # 趋势按时间升序：图与表都从早读到晚。
         assert "ASC" in translated.physical_query.sql.upper()

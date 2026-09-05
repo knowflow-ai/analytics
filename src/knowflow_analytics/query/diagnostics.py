@@ -19,6 +19,7 @@ from knowflow_analytics.query.contracts import (
     QueryResponse,
     QueryStage,
     QueryTraceStep,
+    S2SqlQueryRequest,
     StructuredQueryRequest,
 )
 
@@ -163,7 +164,7 @@ class QueryDiagnosticArtifact(FrozenModel):
     permission_scope_hash: str = Field(min_length=1, max_length=128)
     created_at: datetime
     expires_at: datetime
-    mode: Literal["natural", "structured"]
+    mode: Literal["natural", "structured", "continuation"]
     question: str = Field(max_length=4_000)
     request: dict[str, Any]
     response: dict[str, Any]
@@ -226,11 +227,11 @@ class QueryDiagnosticExport(FrozenModel):
 
 def build_query_diagnostic_artifact(
     *,
-    request: QueryRequest | StructuredQueryRequest,
+    request: QueryRequest | StructuredQueryRequest | S2SqlQueryRequest,
     response: QueryResponse,
     actor_id: str,
     permission_scope_hash: str,
-    mode: Literal["natural", "structured"],
+    mode: Literal["natural", "structured", "continuation"],
     revision_id: str | None = None,
     revision_etag: int | None = None,
     revision_schema_snapshot_hash: str | None = None,
@@ -258,7 +259,12 @@ def build_query_diagnostic_artifact(
     trace = tuple(
         step.model_copy(update={"detail": _bounded_detail(step.detail)}) for step in raw_trace
     )
-    question = request.question if isinstance(request, QueryRequest) else "结构化语义查询"
+    if isinstance(request, QueryRequest):
+        question = request.question
+    elif isinstance(request, S2SqlQueryRequest):
+        question = "续跑查询"
+    else:
+        question = "结构化语义查询"
     artifact = QueryDiagnosticArtifact(
         query_id=response.query_id,
         actor_id=str(actor_id or ""),
@@ -391,7 +397,7 @@ def _gate_artifact_executable_sql(
 
 
 def _request_projection(
-    request: QueryRequest | StructuredQueryRequest,
+    request: QueryRequest | StructuredQueryRequest | S2SqlQueryRequest,
 ) -> dict[str, Any]:
     payload = request.model_dump(mode="json")
     # The opaque continuation is deliberately never part of persisted evidence.
@@ -856,7 +862,7 @@ def _recorded_stage_summary(
 def _missing_stage_status(
     *,
     stage: QueryStage,
-    mode: Literal["natural", "structured"],
+    mode: Literal["natural", "structured", "continuation"],
     position: int,
     first_terminal_position: int | None,
     recorded_positions: set[int],

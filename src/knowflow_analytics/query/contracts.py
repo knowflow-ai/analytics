@@ -740,3 +740,26 @@ class StructuredQueryRequest(FrozenModel):
     row_filters: tuple[QueryRowFilter, ...] | None = Field(default=None, max_length=100)
     # 报表卡片与下钻也要吃助手的返回行数设置；结构化路径不用 LLM，其余项无副作用。
     options: QueryOptions = Field(default_factory=QueryOptions)
+
+
+class S2SqlQueryRequest(FrozenModel):
+    """续跑一个已完成回答：以它的文本 S2SQL 为唯一权威重跑，不经 Mapper / LLM。
+
+    回答里 ``DATE_TRUNC`` 粒度、``RATIO_*`` 期间比、别名都只存在于文本 S2SQL；
+    ``semantic_query`` 是投影，拿它重跑会把这些静默丢掉（实机：「按月环比」下钻换个
+    过滤值变成「按天销售金额」）。下钻与报表卡片都走这条请求。
+    """
+
+    project_id: str = Field(min_length=1, max_length=128)
+    dataset_id: str = Field(min_length=1, max_length=256)
+    s2sql: str = Field(min_length=1, max_length=100_000)
+    # 回答当时系统补的默认（默认时间窗等）标记，原样带回让 chip 继续说"默认"。
+    applied_defaults: tuple[str, ...] = Field(default=(), max_length=50)
+    # 报表卡片的滚动窗：每次打开按今天重算下界；None = 固定区间。
+    time_window_dimension_id: str | None = Field(default=None, min_length=1, max_length=128)
+    time_window_days: int | None = Field(default=None, ge=1, le=3_650)
+    query_id: str | None = Field(default=None, min_length=1, max_length=128)
+    include_debug_sql: bool = False
+    allowed_element_ids: tuple[str, ...] | None = Field(default=None, max_length=5_000)
+    row_filters: tuple[QueryRowFilter, ...] | None = Field(default=None, max_length=100)
+    options: QueryOptions = Field(default_factory=QueryOptions)

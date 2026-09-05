@@ -19,6 +19,7 @@ from sqlglot import exp
 
 from knowflow_analytics.catalog.store import PublishedRelease
 from knowflow_analytics.contracts import (
+    DatasetSpec,
     DimensionSpec,
     DimensionValueSpec,
     FilterOperator,
@@ -70,6 +71,7 @@ from knowflow_analytics.query.contracts import (
     QueryRowFilter,
     QueryStage,
     QueryTraceStep,
+    S2SqlQueryRequest,
     SemanticAmbiguityGroup,
     SemanticAmbiguityMember,
     SemanticDecision,
@@ -97,10 +99,19 @@ from knowflow_analytics.query.multi_turn import (
 )
 from knowflow_analytics.query.orchestrator import CandidateOrchestrator
 from knowflow_analytics.query.rules import QueryRuleEngine
+from knowflow_analytics.query.s2sql_edit import (
+    add_dimension,
+    editable_select,
+    remove_dimension,
+    replace_filter_value,
+    replace_metric,
+    set_time_window,
+)
 from knowflow_analytics.query.scope_resolver import (
     QueryScopeResolutionStatus,
     QueryScopeResolver,
 )
+from knowflow_analytics.query.symbols import SemanticSymbolTable
 from knowflow_analytics.semantic.index import (
     SemanticElementType,
     SemanticIndexSnapshot,
@@ -1552,6 +1563,7 @@ class AnalyticsQueryService:
                     query_id=query_id,
                     actor_id=actor_id,
                     allowed_element_ids=allowed_element_ids,
+                    s2sql=corrected.corrected_s2sql,
                 ),
                 parsed_s2sql=corrected.parsed_s2sql,
                 corrected_s2sql=corrected.corrected_s2sql,
@@ -1837,6 +1849,7 @@ class AnalyticsQueryService:
                     query_id=query_id,
                     actor_id=actor_id,
                     allowed_element_ids=structured_visible,
+                    s2sql=corrected.canonical_s2sql,
                 ),
                 parsed_s2sql=corrected.canonical_s2sql,
                 corrected_s2sql=corrected.canonical_s2sql,
@@ -2569,8 +2582,12 @@ class AnalyticsQueryService:
         query_id: str,
         actor_id: str | None,
         allowed_element_ids: frozenset[str] | None = None,
+        s2sql: str = "",
     ) -> tuple[DrilldownOption, ...]:
         """Sign follow-up cuts for a completed aggregate answer.
+
+        续跑在回答的文本 S2SQL 上做（``s2sql_edit``），所以只有可编辑的形状才签发：
+        带 CTE / 子查询 / 集合运算的回答不给选项，而不是给一个注定失败的按钮。
 
         Candidates come only from the frozen Dataset membership (scope members
         are reachability-compiled at publish time); anything the compiled route
@@ -2580,6 +2597,8 @@ class AnalyticsQueryService:
 
         actor = str(actor_id or "").strip()
         if not actor or query.query_type is not SemanticQueryType.AGGREGATE:
+            return ()
+        if editable_select(s2sql) is None:
             return ()
         dataset = next((item for item in release.datasets if item.id == query.dataset_id), None)
         if dataset is None:
@@ -2754,28 +2773,224 @@ class AnalyticsQueryService:
             )
         return action, matches[0]
 
+    def query_s2sql(
+        self,
+        request: S2SqlQueryRequest,
+        *,
+        now: datetime | None = None,
+        actor_id: str | None = None,
+    ) -> QueryResponse:
+        """以回答的文本 S2SQL 为唯一权威重跑：下钻与报表卡片都从这里走。
+
+        与结构化路径同一条权威链（路由绑定 → 翻译 → Guard → 执行），只是入口是文本
+        而不是 ``SemanticQuery`` 投影。文本翻译器本来就是从这里展开 ``RATIO_*`` 与
+        ``DATE_TRUNC`` 的，粒度、期间比、别名因此原样保留。不经 Mapper、LLM、
+        QueryRule 与默认时间窗注入——它们在首轮已经作用在这段文本上了，再来一遍会
+        叠加。``time_window_*`` 是报表卡片的滚动窗：每次打开按今天重算下界。
+        """
+
+        query_id = request.query_id or f"q_{uuid.uuid4().hex}"
+        trace: list[QueryTraceStep] = [QueryTraceStep(stage=QueryStage.PRECHECK, status="started")]
+        published: PublishedRelease | None = None
+        try:
+            published = self._releases.get_active_release(request.project_id)
+            release = published.release
+            if release.project_id != request.project_id:
+                raise SemanticParsingError(
+                    "请求的语义模型不属于当前项目",
+                    code="RELEASE_SCOPE_VIOLATION",
+                )
+            dataset = next(
+                (item for item in release.datasets if item.id == request.dataset_id), None
+            )
+            if dataset is None:
+                raise SemanticParsingError(
+                    "请求的数据集不属于当前发布版本",
+                    code="DATASET_SCOPE_VIOLATION",
+                )
+            row_filters = _resolve_row_filters(release, request.row_filters)
+            visible = (
+                frozenset(request.allowed_element_ids)
+                if request.allowed_element_ids is not None
+                else None
+            )
+            s2sql = request.s2sql
+            applied_defaults = tuple(request.applied_defaults)
+            if request.time_window_dimension_id is not None:
+                s2sql, applied_defaults = _retime(
+                    s2sql,
+                    applied_defaults,
+                    release=release,
+                    dataset=dataset,
+                    time_dimension_id=request.time_window_dimension_id,
+                    days=request.time_window_days,
+                    now=now,
+                )
+            trace[-1] = QueryTraceStep(
+                stage=QueryStage.PRECHECK,
+                status="completed",
+                detail={
+                    "release_id": release.id,
+                    "spec_hash": release.spec_hash,
+                    "index_snapshot_id": published.index_snapshot.id,
+                    "semantic_index_required": False,
+                    "entry": "continuation",
+                },
+            )
+            trace.append(QueryTraceStep(stage=QueryStage.ROUTE_BINDING, status="started"))
+            translated = self._s2sql_translator.translate(
+                release=release,
+                dataset_id=dataset.id,
+                corrected_s2sql=s2sql,
+                visible_element_ids=visible,
+                row_filters=row_filters,
+                dialect=self._targets.for_project(release.project_id).dialect,
+                row_limits=request.options.row_limits(),
+            )
+            physical = translated.physical_query
+            trace[-1] = QueryTraceStep(
+                stage=QueryStage.ROUTE_BINDING,
+                status="completed",
+                detail={"relation_ids": list(physical.relation_ids)},
+            )
+            trace.append(
+                QueryTraceStep(
+                    stage=QueryStage.TRANSLATING,
+                    status="completed",
+                    detail={
+                        "relation_ids": list(physical.relation_ids),
+                        "registry": list(translated.parser_trace),
+                        "corrected_s2sql": s2sql,
+                        **({"physical_sql": physical.sql} if request.include_debug_sql else {}),
+                    },
+                )
+            )
+            trace.append(
+                QueryTraceStep(
+                    stage=QueryStage.PHYSICAL_SQL_VALIDATING,
+                    status="completed",
+                    detail={"guard": "executor_preflight"},
+                )
+            )
+            self._dry_run(physical=physical, release=release, trace=trace, options=request.options)
+            trace.append(QueryTraceStep(stage=QueryStage.EXECUTING, status="started"))
+            result = self._targets.for_project(release.project_id).executor.execute(
+                query=physical, release=release
+            )
+            trace[-1] = QueryTraceStep(
+                stage=QueryStage.EXECUTING,
+                status="completed",
+                detail={"row_count": result.row_count, "truncated": result.truncated},
+            )
+            trace.extend(
+                (
+                    QueryTraceStep(stage=QueryStage.POST_PROCESSING, status="completed"),
+                    QueryTraceStep(stage=QueryStage.FINISHED, status="completed"),
+                )
+            )
+            defaults = tuple(dict.fromkeys((*applied_defaults, *physical.applied_defaults)))
+            return CompletedQueryResponse(
+                query_id=query_id,
+                release_id=release.id,
+                spec_hash=release.spec_hash,
+                index_snapshot_id=published.index_snapshot.id,
+                trace=tuple(trace),
+                interpretation=self._interpretation(release, translated.audit_query, defaults),
+                data=result,
+                visualization=self._visualization(
+                    release, translated.audit_query, s2sql, physical.columns
+                ),
+                column_labels=self._column_labels(release, physical.columns),
+                column_grains=self._column_grains(physical.columns),
+                semantic_query=translated.audit_query,
+                drilldown=self._drilldown_options(
+                    release=release,
+                    query=translated.audit_query,
+                    project_id=request.project_id,
+                    query_id=query_id,
+                    actor_id=actor_id,
+                    allowed_element_ids=visible,
+                    s2sql=s2sql,
+                ),
+                parsed_s2sql=s2sql,
+                corrected_s2sql=s2sql,
+                physical_sql=physical.sql if request.include_debug_sql else None,
+            )
+        except AnalyticsError as exc:
+            trace.append(
+                QueryTraceStep(
+                    stage=_stage_or_precheck(exc.stage),
+                    status="failed",
+                    detail={"code": exc.code},
+                )
+            )
+            if published is None:
+                return self._failed_without_release(query_id, trace, exc.code, str(exc), exc.stage)
+            return FailedQueryResponse(
+                query_id=query_id,
+                release_id=published.release.id,
+                spec_hash=published.release.spec_hash,
+                index_snapshot_id=published.index_snapshot.id,
+                trace=tuple(trace),
+                error=QueryError(stage=exc.stage, code=exc.code, message=_failure_message(exc)),
+            )
+        except Exception:
+            LOGGER.exception(
+                "Unhandled continuation query error query_id=%s project_id=%s",
+                query_id,
+                request.project_id,
+            )
+            trace.append(
+                QueryTraceStep(
+                    stage=QueryStage.FINISHED,
+                    status="failed",
+                    detail={"code": "INTERNAL_ERROR"},
+                )
+            )
+            message = "问数服务发生内部错误，请稍后重试。"
+            if published is None:
+                return self._failed_without_release(query_id, trace, "INTERNAL_ERROR", message)
+            return FailedQueryResponse(
+                query_id=query_id,
+                release_id=published.release.id,
+                spec_hash=published.release.spec_hash,
+                index_snapshot_id=published.index_snapshot.id,
+                trace=tuple(trace),
+                error=QueryError(
+                    stage=QueryStage.FINISHED.value,
+                    code="INTERNAL_ERROR",
+                    message=message,
+                ),
+            )
+
     def query_drilldown(
         self,
         *,
         project_id: str,
         query_id: str,
         token: str,
-        base_query: SemanticQuery,
+        base_s2sql: str,
+        base_dataset_id: str,
         base_release_id: str,
         base_spec_hash: str,
         actor_id: str,
         value: str | None = None,
-        now: datetime | None = None,
+        base_applied_defaults: tuple[str, ...] = (),
         allowed_element_ids: tuple[str, ...] | None = None,
         row_filters: tuple[QueryRowFilter, ...] | None = None,
         options: QueryOptions | None = None,
+        now: datetime | None = None,
     ) -> QueryResponse:
         """Continue a completed answer by one signed drilldown option.
 
-        The base semantics come from the persisted query artifact, never from
-        the client.  The continuation always executes against the Active
-        Release; if publishing moved it since the answer, the token fails
-        closed instead of silently re-running on different semantics.
+        基础语义来自持久化产物里的**文本 S2SQL**，不是它的 ``semantic_query`` 投影：
+        投影表达不了 ``DATE_TRUNC`` 粒度与 ``RATIO_*`` 期间比，拿它重跑等于把
+        「按月环比」静默改成「按天求和」（2026-09-05 实机）。编辑只改 AST
+        （``s2sql_edit``），然后走 ``query_s2sql`` 同一条权威链。
+
+        The continuation always executes against the Active Release; if publishing
+        moved it since the answer, the token fails closed instead of silently
+        re-running on different semantics.
         """
 
         published = self._releases.get_active_release(project_id)
@@ -2791,50 +3006,72 @@ class AnalyticsQueryService:
             project_id=project_id,
             actor_id=actor_id,
             query_id=query_id,
-            dataset_id=base_query.dataset_id,
+            dataset_id=base_dataset_id,
         )
+        dataset = next((item for item in release.datasets if item.id == base_dataset_id), None)
+        if dataset is None:
+            raise SemanticParsingError(
+                "下钻选项已失效，请重新提问",
+                code="CANDIDATE_NOT_FOUND",
+            )
+        symbols = SemanticSymbolTable.from_release(release, dataset_id=dataset.id)
+
+        def is_metric(name: str) -> bool:
+            try:
+                return symbols.resolve_first(name).kind == "metric"
+            except AnalyticsError:
+                return False
+
+        time_window_dimension_id: str | None = None
+        time_window_days: int | None = None
         if action == "refilter":
             if not value or not value.strip():
                 raise SemanticParsingError(
                     "请选择要替换的过滤值",
                     code="DRILLDOWN_VALUE_REQUIRED",
                 )
-            new_query = _apply_refilter(base_query, element_id, value.strip())
-        elif action == "retime":
-            dataset = next(
-                (item for item in release.datasets if item.id == base_query.dataset_id),
-                None,
+            edited = replace_filter_value(
+                base_s2sql, symbols.canonical_name(element_id), value.strip()
             )
-            time_dimension_id = dataset.default_time_dimension_id if dataset else None
-            if not time_dimension_id:
+        elif action == "retime":
+            if not dataset.default_time_dimension_id:
                 raise SemanticParsingError(
                     "下钻选项已失效，请重新提问",
                     code="CANDIDATE_NOT_FOUND",
                 )
-            new_query = apply_relative_time_window(
-                base_query,
-                time_dimension_id,
-                self._DRILLDOWN_TIME_WINDOWS[element_id][1],
-                now=now,
+            # 日期算法只在 _retime 一处：卡片的「跟着今天走」也用它。
+            edited = base_s2sql
+            time_window_dimension_id = dataset.default_time_dimension_id
+            time_window_days = self._DRILLDOWN_TIME_WINDOWS[element_id][1]
+        elif action == "add":
+            edited = add_dimension(
+                base_s2sql, symbols.canonical_name(element_id), is_metric=is_metric
             )
-            if self._DRILLDOWN_TIME_WINDOWS[element_id][1] is None:
-                # 用户点了「不限时间」：结构化路径不能再按发布配置把默认窗补回去，
-                # 否则这一下等于没点。
-                options = (options or QueryOptions()).model_copy(
-                    update={"default_time_window": "none"}
-                )
+        elif action == "remove":
+            edited = remove_dimension(
+                base_s2sql, symbols.canonical_name(element_id), is_metric=is_metric
+            )
         else:
-            new_query = _apply_drilldown(base_query, action, element_id)
-        request = StructuredQueryRequest(
-            project_id=project_id,
-            semantic_query=new_query,
-            # 下钻不从 token 恢复权限：token 的 TTL 内授权可能已被撤销，必须用
-            # 调用方本次请求重算出的范围。
-            allowed_element_ids=allowed_element_ids,
-            row_filters=row_filters,
-            options=options or QueryOptions(),
+            edited = replace_metric(
+                base_s2sql, symbols.canonical_name(element_id), is_metric=is_metric
+            )
+        return self.query_s2sql(
+            S2SqlQueryRequest(
+                project_id=project_id,
+                dataset_id=dataset.id,
+                s2sql=edited,
+                applied_defaults=tuple(base_applied_defaults),
+                time_window_dimension_id=time_window_dimension_id,
+                time_window_days=time_window_days,
+                # 下钻不从 token 恢复权限：token 的 TTL 内授权可能已被撤销，必须用
+                # 调用方本次请求重算出的范围。
+                allowed_element_ids=allowed_element_ids,
+                row_filters=row_filters,
+                options=options or QueryOptions(),
+            ),
+            now=now,
+            actor_id=actor_id,
         )
-        return self.query_structured(request, now=now, actor_id=actor_id)
 
     @staticmethod
     def _semantic_selection_token(
@@ -3948,49 +4185,6 @@ class AnalyticsQueryService:
         )
 
 
-def _apply_drilldown(base: SemanticQuery, action: str, element_id: str) -> SemanticQuery:
-    """Derive the continuation query from the persisted base semantics.
-
-    ``add`` splits by one more governed dimension and keeps every other
-    constraint.  ``remove`` drops a grouping dimension: its ORDER BY reference
-    goes with it, while value filters on it stay — "not grouped by region" and
-    "only 华南" are independent statements.  ``replace`` switches the metric and
-    drops anything that referenced the previous metrics (overrides,
-    metric/measure filters, metric order columns) — carrying them over would
-    either fail validation or quietly filter the new metric by the old one's
-    values.
-    """
-
-    if action == "add":
-        return base.model_copy(
-            update={
-                "dimension_ids": tuple(dict.fromkeys((*base.dimension_ids, element_id))),
-            }
-        )
-    if action == "remove":
-        remaining = tuple(item for item in base.dimension_ids if item != element_id)
-        return base.model_copy(
-            update={
-                "dimension_ids": remaining,
-                "order_by": tuple(item for item in base.order_by if item.element_id != element_id),
-            }
-        )
-    kept_order = tuple(
-        item
-        for item in base.order_by
-        if item.element_id in base.dimension_ids or item.element_id == element_id
-    )
-    return base.model_copy(
-        update={
-            "metric_ids": (element_id,),
-            "aggregation_overrides": (),
-            "measure_filters": (),
-            "metric_filters": (),
-            "order_by": kept_order,
-        }
-    )
-
-
 def _display_alias(alias: str) -> str:
     """脱掉 S2SQL 别名的包裹下划线：``_月份_`` → ``月份``。
 
@@ -4005,34 +4199,41 @@ def _display_alias(alias: str) -> str:
     return text
 
 
-def _apply_refilter(base: SemanticQuery, dimension_id: str, value: str) -> SemanticQuery:
-    """Swap the equality filter on one governed dimension for a new value.
+def _retime(
+    s2sql: str,
+    applied_defaults: tuple[str, ...],
+    *,
+    release: SemanticRelease,
+    dataset: DatasetSpec,
+    time_dimension_id: str,
+    days: int | None,
+    now: datetime | None,
+) -> tuple[str, tuple[str, ...]]:
+    """把文本 S2SQL 里时间维上的范围换成「最近 N 天」；``days=None`` 即不限时间。
 
-    Only that dimension's eq/in predicates are replaced; every other filter,
-    grouping, and ordering stays.  The value is a caller-supplied business
-    literal — an unknown value matches no rows, which is the safe outcome.
+    下钻的「换时间窗」与报表卡片的「跟着今天走」共用这一处日期算法。回答当时系统补
+    的默认时间窗标记一并撤掉：用户亲手选了窗，它就不再是"默认"。
     """
 
-    kept = tuple(
-        item
-        for item in base.filters
-        if not (
-            item.dimension_id == dimension_id
-            and item.operator in (FilterOperator.EQ, FilterOperator.IN)
+    if time_dimension_id not in dataset.dimension_ids:
+        raise SemanticParsingError(
+            "下钻选项已失效，请重新提问",
+            code="CANDIDATE_NOT_FOUND",
         )
+    symbols = SemanticSymbolTable.from_release(release, dataset_id=dataset.id)
+    start = (
+        None
+        if days is None
+        else ((now or datetime.now(UTC)).date() - timedelta(days=days)).isoformat()
     )
-    return base.model_copy(
-        update={
-            "filters": (
-                *kept,
-                QueryFilter(
-                    dimension_id=dimension_id,
-                    operator=FilterOperator.EQ,
-                    value=value,
-                ),
-            ),
-        }
+    edited = set_time_window(s2sql, symbols.canonical_name(time_dimension_id), start)
+    kept = tuple(
+        marker
+        for marker in applied_defaults
+        if (parsed := parse_time_window_marker(marker)) is None
+        or parsed.dimension_id != time_dimension_id
     )
+    return edited, kept
 
 
 def apply_relative_time_window(

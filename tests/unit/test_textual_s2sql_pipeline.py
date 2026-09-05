@@ -714,6 +714,39 @@ def test_ratio_metric_argument_rejects_a_pre_aggregated_expression(sales_release
         assert raised.value.code == "S2SQL_RATIO_METRIC_PRE_AGGREGATED"
 
 
+def test_unaliased_ratio_projections_get_business_column_names(sales_release) -> None:
+    """实机「按月咖啡的环比销售情况」：模型没写 AS，列头和图表标题就是
+    ``__kf_ratio_value_1`` / ``__kf_ratio_group_0``。没有别名时按业务名推导。"""
+    translated = S2SqlSemanticTranslator().translate(
+        release=sales_release,
+        dataset_id="sales_dataset",
+        corrected_s2sql=(
+            'SELECT DATE_TRUNC(\'month\', "下单日期"), RATIO_ROLL("净收入") '
+            'FROM "销售经营" GROUP BY DATE_TRUNC(\'month\', "下单日期")'
+        ),
+    )
+    columns = translated.physical_query.columns
+    assert [item.name for item in columns] == ["下单日期", "净收入环比"]
+    assert [item.kind for item in columns] == ["dimension", "ratio"]
+    assert columns[0].time_grain == "MONTH"
+    # 模型写了别名就用别名；同比 / 占比各有各的后缀。
+    aliased = S2SqlSemanticTranslator().translate(
+        release=sales_release,
+        dataset_id="sales_dataset",
+        corrected_s2sql=(
+            'SELECT DATE_TRUNC(\'year\', "下单日期") AS "_年份_", RATIO_OVER("净收入") '
+            'FROM "销售经营" GROUP BY DATE_TRUNC(\'year\', "下单日期")'
+        ),
+    )
+    assert [item.name for item in aliased.physical_query.columns] == ["_年份_", "净收入同比"]
+    share = S2SqlSemanticTranslator().translate(
+        release=sales_release,
+        dataset_id="sales_dataset",
+        corrected_s2sql='SELECT "区域", RATIO_TO_TOTAL("净收入") FROM "销售经营" GROUP BY "区域"',
+    )
+    assert [item.name for item in share.physical_query.columns] == ["区域", "净收入占比"]
+
+
 def test_the_governed_aggregate_written_out_is_the_same_as_a_bare_metric(sales_release) -> None:
     """实机「咖啡按月环比销售情况」：模型整条重试链都写 ``RATIO_ROLL(SUM("销售金额"))``，
     48 秒后拒答。销售金额的治理聚合就是 SUM，这和 ``RATIO_ROLL("销售金额")`` 是同一个

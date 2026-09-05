@@ -2009,7 +2009,25 @@ def _output_columns(statement: _QueryStatement) -> tuple[OutputColumn, ...]:
             results.append(
                 OutputColumn(
                     element_id=element_id,
-                    name=projection.alias or f"计算列{index + 1}",
+                    name=_derived_column_name(
+                        original_projection,
+                        translated_alias=projection.alias,
+                        index=index,
+                        ratio_call=next(
+                            (
+                                item
+                                for item in statement.ratio_calls
+                                if item.projection_index == index
+                            ),
+                            None,
+                        ),
+                        metric_names={key: item.name for key, item in metrics.items()},
+                        derived_dimension_name=(
+                            dimensions[semantic_ids[0][1]].name
+                            if derived_dimension and len(semantic_ids) == 1
+                            else None
+                        ),
+                    ),
                     kind=kind_value,
                     time_grain=(
                         _projection_time_grain(original_projection) if derived_dimension else None
@@ -2018,6 +2036,41 @@ def _output_columns(statement: _QueryStatement) -> tuple[OutputColumn, ...]:
             )
             used_ids.add(element_id)
     return tuple(results)
+
+
+_RATIO_COLUMN_SUFFIX = {"RATIO_ROLL": "环比", "RATIO_OVER": "同比", "RATIO_TO_TOTAL": "占比"}
+
+
+def _derived_column_name(
+    original_projection: exp.Expression,
+    *,
+    translated_alias: str,
+    index: int,
+    ratio_call: _RatioCall | None,
+    metric_names: Mapping[str, str],
+    derived_dimension_name: str | None,
+) -> str:
+    """计算列 / 派生列的展示名：模型写了别名就用别名，没写就按业务名推导。
+
+    期间比路径会给没有别名的投影注入 ``__kf_ratio_value_1`` 这类内部别名，此前它
+    直接成了结果列头和图表标题（实机「按月咖啡的环比销售情况」：模型这次没写
+    ``AS``，界面上就是一串物理名）。别名只认**原始** S2SQL 里模型写的那个；没有就
+    用「指标名 + 环比/同比/占比」或派生维度所属的维度名。
+    """
+
+    user_alias = original_projection.alias if isinstance(original_projection, exp.Alias) else ""
+    if user_alias:
+        return user_alias
+    if ratio_call is not None:
+        metric_name = metric_names.get(ratio_call.metric_id)
+        suffix = _RATIO_COLUMN_SUFFIX.get(ratio_call.operator.upper(), "")
+        if metric_name and suffix:
+            return f"{metric_name}{suffix}"
+    if derived_dimension_name:
+        return derived_dimension_name
+    if translated_alias and not translated_alias.startswith("__kf_"):
+        return translated_alias
+    return f"计算列{index + 1}"
 
 
 def _projection_time_grain(projection: exp.Expression) -> str | None:

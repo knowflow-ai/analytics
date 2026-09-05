@@ -477,6 +477,8 @@ def test_all_retry_runs_rule_on_all_mapping_when_all_llm_has_no_candidate(
         "llm_candidate",
         "llm_candidate_rejected",
         "all_mapping",
+        # 第一趟候选被拒的原因先带给模型，再跑 ALL 那趟。
+        "retry_feedback",
         "all_llm_parse_failed",
         "all_rule_fallback_candidate",
         "selected_candidate",

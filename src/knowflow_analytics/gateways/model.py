@@ -7,6 +7,7 @@ from typing import Any, Protocol
 import httpx
 
 from knowflow_analytics.errors import AnalyticsError
+from knowflow_analytics.gateways.calls import record_call
 
 LOGGER = logging.getLogger(__name__)
 
@@ -30,6 +31,17 @@ class StructuredModelGateway(Protocol):
 _TEMPERATURE_BY_ATTEMPT = {1: 0.0, 2: 0.3, 3: 0.6}
 _TRANSPORT_RETRIES = 3
 _BACKOFF_SECONDS = (0.5, 2.0, 5.0)
+# 问数链路上各用途的超时上限（秒）。实测正常 7–20s；全局 60s 加上传输层 3 次重试，
+# 一次挂住的调用最坏 60+60+60。超时不再在传输层重试同一个 prompt——那本来就该交给
+# 解析器的升温 / 反馈重试链去换一种生成。建模类用途不在这里，沿用全局（AI 补全要 240s）。
+_PURPOSE_TIMEOUT_CAPS: dict[str, float] = {
+    "analytics.s2sql": 30.0,
+    "analytics.s2sql.corrector": 30.0,
+    "analytics.physical_sql.corrector": 30.0,
+    "analytics.multi_turn_rewrite": 20.0,
+    "analytics.mapping_ambiguity": 20.0,
+    "analytics.result_interpretation": 20.0,
+}
 
 
 def _bounded_int(value: object, *, default: int, lo: int, hi: int) -> int:
@@ -57,6 +69,7 @@ class HttpModelGateway:
         )
         self._service_token = service_token
         self._llm_id = llm_id
+        self._timeout_seconds = timeout_seconds
 
     def _post_with_backoff(self, body: dict[str, Any], *, purpose: str) -> Any:
         """网络抖动和 5xx 退避重试；4xx 与信封里的业务拒绝不重试。
@@ -65,12 +78,16 @@ class HttpModelGateway:
         """
 
         last: Exception | None = None
+        timeout = min(
+            self._timeout_seconds, _PURPOSE_TIMEOUT_CAPS.get(purpose, self._timeout_seconds)
+        )
         for index in range(_TRANSPORT_RETRIES):
             try:
                 response = self._client.post(
                     "/v1/analytics/internal/model/generate",
                     headers={"X-KnowFlow-Agent-Token": self._service_token},
                     json=body,
+                    timeout=timeout,
                 )
                 if 500 <= response.status_code < 600:
                     raise httpx.HTTPStatusError(
@@ -84,6 +101,10 @@ class HttpModelGateway:
                 if exc.response is not None and 400 <= exc.response.status_code < 500:
                     raise ModelGatewayError("model gateway request failed") from exc
                 last = exc
+            except httpx.TimeoutException as exc:
+                # 超时不重试：同一个 prompt 再等一遍只是把尾巴拉长；解析器自己的
+                # 重试链会换温度 / 带上拒绝原因重新生成。
+                raise ModelGatewayError("model gateway timed out") from exc
             except (httpx.HTTPError, ValueError) as exc:
                 last = exc
             if index < _TRANSPORT_RETRIES - 1:
@@ -136,7 +157,29 @@ class HttpModelGateway:
             },
             "trace": trace,
         }
-        payload = self._post_with_backoff(body, purpose=purpose)
+        started = time.monotonic()
+        prompt_chars = sum(len(str(item.get("content", ""))) for item in messages)
+        try:
+            payload = self._post_with_backoff(body, purpose=purpose)
+        except Exception as exc:
+            record_call(
+                kind="model",
+                purpose=purpose,
+                attempt=attempt,
+                elapsed_ms=int((time.monotonic() - started) * 1000),
+                prompt_chars=prompt_chars,
+                ok=False,
+                error=type(exc).__name__,
+            )
+            raise
+        record_call(
+            kind="model",
+            purpose=purpose,
+            attempt=attempt,
+            elapsed_ms=int((time.monotonic() - started) * 1000),
+            prompt_chars=prompt_chars,
+            ok=isinstance(payload, dict) and payload.get("code") == 0,
+        )
         if not isinstance(payload, dict) or payload.get("code") != 0:
             upstream_message = (
                 str(payload.get("message") or "").strip()[:500]

@@ -226,6 +226,8 @@ def test_semantically_invalid_llm_s2sql_fails_in_translator_without_rule_resurre
         "llm_candidate",
         "llm_candidate_rejected",
         "all_mapping",
+        # 第一趟候选被拒的原因先带给模型，再跑 ALL 那趟。
+        "retry_feedback",
         "all_candidate",
         "all_candidate_rejected",
     ]

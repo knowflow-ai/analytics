@@ -2720,6 +2720,9 @@ def create_api(
         成员（只有类型与业务名）。detail 永远不进这里——那是诊断产物。"""
 
         event: dict[str, Any] = {"stage": step.stage.value, "status": step.status}
+        if step.elapsed_ms is not None:
+            # 服务端时钟：前端不必再按事件到达时刻估算，网络抖动也不会算进阶段耗时。
+            event["elapsed_ms"] = step.elapsed_ms
         if step.elements:
             event["elements"] = [{"kind": item.kind, "label": item.label} for item in step.elements]
         return event

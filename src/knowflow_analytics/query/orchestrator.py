@@ -427,6 +427,8 @@ class CandidateOrchestrator:
                 diagnostic_sink(event, detail)
 
         errors: list[AnalyticsError] = []
+        # 第一趟候选被拒的原因：ALL 那趟带给模型，不然它只会把同样的写法再写一遍。
+        rejection: dict[str, str] | None = None
         final_mapping = (
             self._mapper.project_evidence(
                 evidence=mapping_evidence,
@@ -505,6 +507,14 @@ class CandidateOrchestrator:
                     )
                     if exc.code in GOVERNANCE_BLOCKING_S2SQL_CODES:
                         raise
+                    rejection = {
+                        "code": exc.code,
+                        "message": str(exc),
+                        "s2sql": (
+                            getattr(candidate_under_review, "corrected_s2sql", "")
+                            or getattr(candidate_under_review, "parsed_s2sql", "")
+                        ),
+                    }
                     # Once LLMSqlParser has produced a candidate, upstream
                     # RuleSqlParser observes a non-empty candidate list and exits.
                     # A later Corrector failure must go to the ALL retry instead
@@ -559,6 +569,8 @@ class CandidateOrchestrator:
                 )
             )
             emit("all_mapping", all_mapping.model_dump(mode="json"))
+            if rejection is not None:
+                emit("retry_feedback", rejection)
             all_rule_fallback_allowed = False
             try:
                 all_candidate = self._llm_parser.parse(
@@ -570,6 +582,7 @@ class CandidateOrchestrator:
                     tenant_id=tenant_id,
                     visible_element_ids=allowed_element_ids,
                     options=options,
+                    rejection=rejection,
                 )
             except AnalyticsError as exc:
                 emit(

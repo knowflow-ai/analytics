@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import logging
 import math
+import time
 
 import httpx
 
 from knowflow_analytics.errors import AnalyticsError
+from knowflow_analytics.gateways.calls import record_call
 from knowflow_analytics.semantic.index import EmbeddingBatch
 
 _MAX_EMBEDDING_BATCH_SIZE = 256
@@ -73,6 +75,7 @@ class HttpEmbeddingGateway:
                 "embedding gateway requires at least one text",
                 code="EMBEDDING_REQUEST_INVALID",
             )
+        started = time.monotonic()
         model_id: str | None = None
         dimension: int | None = None
         vectors: list[tuple[float, ...]] = []
@@ -93,6 +96,13 @@ class HttpEmbeddingGateway:
                     code="EMBEDDING_RESPONSE_INVALID",
                 )
             vectors.extend(batch.vectors)
+        record_call(
+            kind="embedding",
+            purpose="embedding",
+            texts=len(texts),
+            elapsed_ms=int((time.monotonic() - started) * 1000),
+            ok=True,
+        )
         return EmbeddingBatch(
             model_id=model_id or self._embedding_id,
             dimension=dimension or 0,

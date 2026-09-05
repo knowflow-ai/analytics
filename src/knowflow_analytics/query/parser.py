@@ -4,6 +4,7 @@ import json
 import random
 import re
 from collections import OrderedDict
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, date, datetime, timedelta
 from threading import Lock
@@ -153,9 +154,7 @@ class _LlmS2SqlOutput(BaseModel):
     inferred_terms: tuple[InferredTerm, ...] = Field(default=(), max_length=10)
 
 
-def _verified_terms(
-    terms: tuple[InferredTerm, ...], question: str
-) -> tuple[tuple[str, str], ...]:
+def _verified_terms(terms: tuple[InferredTerm, ...], question: str) -> tuple[tuple[str, str], ...]:
     """只留模型确实从问句里摘出来的那些。
 
     ``phrase`` 不是问句的字面子串就丢掉——那是模型编的，拿它去预填术语表单会让用户
@@ -345,6 +344,7 @@ class LlmS2SqlParser:
         tenant_id: str = "",
         visible_element_ids: frozenset[str] | None = None,
         options: QueryOptions | None = None,
+        rejection: Mapping[str, str] | None = None,
     ) -> ParsedSemanticCandidate:
         dataset = _dataset(release, mapping.dataset_id)
         output: _LlmS2SqlOutput | None = None
@@ -364,6 +364,7 @@ class LlmS2SqlParser:
             exemplars=exemplars,
             now=now,
             visible_element_ids=visible_element_ids,
+            rejection=rejection,
         )
 
         def _infer(attempt: int, prompt: list[dict[str, str]]) -> _LlmS2SqlOutput:
@@ -461,8 +462,22 @@ class LlmS2SqlParser:
                 output = next(item for item in ballots if item.sql == winner)
         if output is None:
             for attempt in range(1, self._max_attempts + 1):
+                # 第二次起把上一次被拒的原因带上：只升温不说错在哪，模型多半把同样的
+                # 写法再写一遍（实机三次重试全灭，48 秒）。
+                prompt = messages
+                if attempt > 1 and last_error is not None:
+                    prompt = self._messages(
+                        question,
+                        release,
+                        dataset,
+                        mapping,
+                        exemplars=exemplars,
+                        now=now,
+                        visible_element_ids=visible_element_ids,
+                        rejection=_rejection_from_error(last_error),
+                    )
                 try:
-                    output = _infer(attempt, messages)
+                    output = _infer(attempt, prompt)
                     break
                 except AnalyticsError as exc:
                     if exc.code in GOVERNANCE_BLOCKING_S2SQL_CODES:
@@ -546,6 +561,7 @@ class LlmS2SqlParser:
         exemplars: tuple[ReviewedS2SqlExemplar, ...] = (),
         now: datetime | None,
         visible_element_ids: frozenset[str] | None = None,
+        rejection: Mapping[str, str] | None = None,
     ) -> list[dict[str, str]]:
         symbols = SemanticSymbolTable.from_release(release, dataset_id=dataset.id)
         dimensions_by_id = {item.id: item for item in release.dimensions}
@@ -581,6 +597,7 @@ class LlmS2SqlParser:
             if item.id in dataset.dimension_ids
             and (visible_element_ids is None or item.id in visible_element_ids)
         }
+
         # 最终 LLM 拿到选定 Scope 的全部成员，而不是 Mapper 命中的子集。
         # 过滤版让"召回失误"直接等于"模型表达不出来"：一次漏召回就是一个看起来
         # 正常的错误数字（丢 GROUP BY 返回总数），于是时间维度、分区时间、实体
@@ -775,7 +792,7 @@ class LlmS2SqlParser:
             if (model := models_by_id.get(model_id)) is not None and model.description.strip()
         ]
         entities_line = f"entities={entities}\n" if entities else ""
-        return [
+        messages = [
             {
                 "role": "system",
                 "content": (
@@ -848,6 +865,9 @@ class LlmS2SqlParser:
                 ),
             },
         ]
+        if rejection:
+            messages.append(_rejection_message(rejection))
+        return messages
 
 
 def _semantic_context_payload(
@@ -1245,6 +1265,32 @@ def _grounded_value_error(
             "rejected_s2sql": s2sql[:2_000],
         },
     )
+
+
+def _rejection_from_error(exc: Exception) -> dict[str, str]:
+    details = getattr(exc, "details", None) or {}
+    return {
+        "code": str(getattr(exc, "code", "") or type(exc).__name__),
+        "message": str(exc),
+        "s2sql": str(details.get("rejected_s2sql") or "") if isinstance(details, dict) else "",
+    }
+
+
+def _rejection_message(rejection: Mapping[str, str]) -> dict[str, str]:
+    """把上一次被拒的原因作为一条用户消息追加到 prompt 末尾。
+
+    只陈述事实（错误码、原话、被拒的 SQL），不替模型改写——改写是它的活，这里只是
+    让它知道错在哪。SQL 截到 2000 字符，与诊断里的 rejected_s2sql 同一上限。
+    """
+
+    code = rejection.get("code", "")
+    message = rejection.get("message", "")
+    s2sql = (rejection.get("s2sql") or "")[:2_000]
+    lines = [f"#Previous attempt was rejected by validation ({code}): {message}"]
+    if s2sql:
+        lines.append(f"#Rejected SQL: {s2sql}")
+    lines.append("Regenerate to satisfy the rule above. Do not repeat the same construct.")
+    return {"role": "user", "content": "\n".join(lines)}
 
 
 def _resolves_elsewhere(

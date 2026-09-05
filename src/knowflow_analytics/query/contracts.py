@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from contextlib import suppress
 from enum import StrEnum
 from typing import Any, Literal
@@ -324,6 +325,9 @@ class QueryTraceStep(FrozenModel):
     stage: QueryStage
     status: Literal["started", "completed", "failed", "clarification"]
     detail: dict[str, Any] = Field(default_factory=dict)
+    # 距本轮问数开始的毫秒数，由 ObservedTrace 在记录时盖章。此前阶段没有任何时间
+    # 信息，前端只能按事件到达时刻估算，服务端诊断里则完全看不出慢在哪。
+    elapsed_ms: int | None = None
     # 只有 CANDIDATE_DISCOVERY 完成那一步会带：精确命中的指标 / 维度 / 取值。
     # 不进 detail——detail 是诊断产物，这个是给前端边跑边出 chip 用的观察字段。
     elements: tuple[UnderstoodElement, ...] = ()
@@ -344,10 +348,20 @@ class ObservedTrace(list):
         *,
         observer: Any = None,
     ) -> None:
-        super().__init__(iterable)
+        self._started = time.monotonic()
+        super().__init__(self._stamp(item) for item in iterable)
         self._observer = observer
         for item in self:
             self._notify(item)
+
+    def _stamp(self, item: Any) -> Any:
+        """给没盖过章的阶段记上"距开始多少毫秒"。观察者与诊断都读得到。"""
+
+        if isinstance(item, QueryTraceStep) and item.elapsed_ms is None:
+            return item.model_copy(
+                update={"elapsed_ms": int((time.monotonic() - self._started) * 1000)}
+            )
+        return item
 
     def _notify(self, item: Any) -> None:
         if self._observer is None:
@@ -357,10 +371,13 @@ class ObservedTrace(list):
             self._observer(item)
 
     def append(self, item: Any) -> None:
+        item = self._stamp(item)
         super().append(item)
         self._notify(item)
 
     def __setitem__(self, index: Any, item: Any) -> None:
+        if not isinstance(index, slice):
+            item = self._stamp(item)
         super().__setitem__(index, item)
         if not isinstance(index, slice):
             self._notify(item)
@@ -409,9 +426,9 @@ class QueryFailureRecord(FrozenModel):
     三类都是同一个词汇缺口，只是这一轮怎么收场不同。
     """
 
-    kind: Literal[
-        "refused", "clarified", "inferred", "unknown_value", "disliked", "liked"
-    ] = "refused"
+    kind: Literal["refused", "clarified", "inferred", "unknown_value", "disliked", "liked"] = (
+        "refused"
+    )
     # 用户点踩时选的原因；只有 kind == "disliked" 有值。裸的一个「踩」无法行动。
     reason: Literal["", "scope", "metric", "value", "understanding", "other"] = ""
     comment: str = Field(default="", max_length=1_000)
@@ -677,9 +694,7 @@ class QueryRequest(FrozenModel):
 
     @field_validator("allowed_element_ids")
     @classmethod
-    def element_whitelist_is_bounded(
-        cls, values: tuple[str, ...] | None
-    ) -> tuple[str, ...] | None:
+    def element_whitelist_is_bounded(cls, values: tuple[str, ...] | None) -> tuple[str, ...] | None:
         if values is None:
             return None
         normalized = tuple(str(value or "").strip() for value in values)

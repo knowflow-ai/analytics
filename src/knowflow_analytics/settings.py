@@ -71,6 +71,11 @@ class AnalyticsSettings(BaseSettings):
             ("catalog_database_url", self.catalog_database_url.get_secret_value()),
             ("datasource_database_url", self.datasource_database_url.get_secret_value()),
         ):
+            # 默认业务库可以不配（数据源在页面里逐个添加，注册表没有"默认库"概念）：
+            # 空值放行。compose 里 `KEY=${VAR:-}` 传进来的是空串而不是缺省，此前
+            # 一样被拒，容器起不来。
+            if label == "datasource_database_url" and not value.strip():
+                continue
             if not value.startswith(("postgresql://", "postgresql+psycopg://")):
                 raise ValueError(f"{label} must use PostgreSQL")
         if not self.ragflow_base_url.startswith(("http://", "https://")):

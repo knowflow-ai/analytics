@@ -270,12 +270,15 @@ def test_prompt_uses_business_names_and_mapped_scope(sales_release, sales_index)
 
     assert "业务名称" in messages[0]["content"]
     assert "语义标识符" not in messages[0]["content"]
-    assert "'name': '净收入'" in messages[1]["content"]
+    member_names = {
+        line.split("|", 1)[0] for line in messages[1]["content"].splitlines() if "|" in line
+    }
+    assert "净收入" in member_names
     # 2026-08-28 合同修订：最终 LLM 拿到选定 Scope 的全部成员，而不是 Mapper
     # 命中的子集。过滤版让一次漏召回直接等于模型表达不出来——「各图书馆的藏品
     # 数量」召不回实体名维度就丢掉 GROUP BY 返回总数（城市/图书馆 r2 实测）。
     # 未命中的成员照样在 schema 里；「用户的话命中了什么」由 constraints 表达。
-    assert "'name': '退款金额'" in messages[1]["content"]
+    assert "退款金额" in member_names
     assert "净收入" in messages[1]["content"]
     assert "'id':" not in messages[1]["content"]
     assert "rule_seed" not in messages[1]["content"]
@@ -311,9 +314,9 @@ def test_prompt_passes_only_mapped_values_and_all_retry_fields(sales_release, sa
         all_mapping,
         now=datetime(2026, 8, 20, tzinfo=UTC),
     )[1]["content"]
-    assert "'name': '净收入'" in all_content
-    assert "'name': '退款金额'" in all_content
-    assert "'name': '下单日期'" in all_content
+    # 指标/维度以带表头的竖线表给出，每行第一格是业务名。
+    member_names = {line.split("|", 1)[0] for line in all_content.splitlines() if "|" in line}
+    assert {"净收入", "退款金额", "下单日期"} <= member_names
 
 
 def test_prompt_keeps_primary_key_partition_time_and_count_binding_outside_mapping(

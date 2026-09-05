@@ -4,7 +4,7 @@ import json
 import random
 import re
 from collections import OrderedDict
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, date, datetime, timedelta
 from threading import Lock
@@ -856,8 +856,8 @@ class LlmS2SqlParser:
                     f"partition_time={partition_time}\n"
                     f"primary_key={primary_key}\n"
                     f"default_count_metric={default_count_metric}\n"
-                    f"metrics={metrics}\n"
-                    f"dimensions={dimensions}\n"
+                    f"metrics={_render_member_table(metrics, _METRIC_COLUMNS)}\n"
+                    f"dimensions={_render_member_table(dimensions, _DIMENSION_COLUMNS)}\n"
                     f"{hierarchy_line}"
                     f"values={values}\n"
                     f"domain_terms={terms}\n"
@@ -968,6 +968,57 @@ def _hierarchy_payload(
             entry["description"] = hierarchy.description
         payload.append(entry)
     return payload
+
+
+#: 成员表的列序。name 永远在前；其余列只在本次 prompt 至少一个成员非空时出现。
+_METRIC_COLUMNS = (
+    "name",
+    "aggregation",
+    "unit",
+    "format",
+    "agg_time_dimension",
+    "aliases",
+    "description",
+)
+_DIMENSION_COLUMNS = (
+    "name",
+    "semantic_type",
+    "time_granularity",
+    "data_type",
+    "date_format",
+    "aliases",
+    "description",
+)
+
+
+def _render_member_table(entries: Sequence[Mapping[str, Any]], columns: Sequence[str]) -> str:
+    """把指标/维度成员渲染成带表头的竖线表，而不是逐条 dict 的 Python repr。
+
+    并集作用域把选定范围的全部成员一次交给模型，dict repr 让每个成员都重复一遍
+    键名，还把 ``'unit': None`` 这类空键原样带上：实测一个 6 指标 8 维度的作用域
+    光这两段就占用户消息一半以上。表头只声明一次列名，全空的列整列不出现，单元格
+    内容折叠空白并把竖线替换掉，保证一行就是一个成员。列名沿用原键名，系统提示里
+    对 ``semantic_type`` / ``time_granularity`` / ``agg_time_dimension`` 的引用不变。
+    """
+
+    if not entries:
+        return "[]"
+    present = tuple(
+        column
+        for column in columns
+        if column == "name" or any(_member_cell(entry.get(column)) for entry in entries)
+    )
+    header = "(" + "|".join(present) + ")"
+    rows = ["|".join(_member_cell(entry.get(column)) for column in present) for entry in entries]
+    return "\n".join([header, *rows])
+
+
+def _member_cell(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (tuple, list)):
+        return ";".join(_member_cell(item) for item in value if _member_cell(item))
+    return " ".join(str(value).split()).replace("|", "｜")
 
 
 def _metric_payload_entry(

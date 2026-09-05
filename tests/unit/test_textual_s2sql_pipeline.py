@@ -453,6 +453,27 @@ def test_query_type_uses_select_functions_not_where_functions() -> None:
     )
 
 
+def test_group_by_makes_the_query_aggregate_even_if_the_aggregate_only_orders(
+    sales_release,
+) -> None:
+    """带 GROUP BY 的语句按 SQL 定义就是聚合查询。
+
+    实机「卖得最好的产品是哪个」：模型写 ``SELECT 商品名称 … GROUP BY 商品名称
+    ORDER BY SUM(销售数量) DESC LIMIT 1``。SELECT 里没有聚合函数，按上游只看投影的
+    规则被判成明细，ORDER BY 里的 SUM 随即被当成"明细查询改写指标口径"拒掉。
+    """
+    s2sql = 'SELECT "区域" FROM "销售经营" GROUP BY "区域" ORDER BY SUM("净收入") DESC LIMIT 1'
+    assert textual_query_type(s2sql) is SemanticQueryType.AGGREGATE
+    translated = S2SqlSemanticTranslator().translate(
+        release=sales_release, dataset_id="sales_dataset", corrected_s2sql=s2sql
+    )
+    assert translated.query_type is SemanticQueryType.AGGREGATE
+    tree = parse_one(translated.physical_query.sql, read="postgres")
+    assert tree.find(exp.Group) is not None
+    order = tree.find(exp.Order)
+    assert order is not None and order.find(exp.Sum) is not None
+
+
 def _release_with_region_default(sales_release):
     return sales_release.model_copy(
         update={

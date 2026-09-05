@@ -16,6 +16,7 @@ from knowflow_analytics.contracts import (
 from knowflow_analytics.errors import SemanticValidationError
 from knowflow_analytics.modeling.analysis_topics import (
     AnalysisTopicProposer,
+    route_relation_ids_for_models,
     scope_canonical_names,
     validate_analysis_topic_route,
 )
@@ -316,6 +317,33 @@ def test_topic_route_rejects_metrics_outside_fact_root(sales_release):
         validate_analysis_topic_route(release, route)
 
     assert raised.value.code == "ANALYSIS_TOPIC_METRIC_OUTSIDE_ROOT"
+
+
+def test_query_time_routing_does_not_rerun_modeling_validation(sales_release):
+    """问数期路由只取冻结路径，不重跑建模不变量。
+
+    生成阶段的并集故意把多个事实根的指标放进同一个词汇表；若在这里校验它，
+    "问并集"这条兜底就永远以 ANALYSIS_TOPIC_METRIC_OUTSIDE_ROOT 收场，需要
+    JOIN 的查询不管真正的毛病是什么，用户拿到的都是这个建模码。
+    """
+    route = AnalysisTopicRouteSpec(
+        dataset_id="sales_dataset",
+        root_model_id="customers",
+        paths=(
+            AnalysisTopicPathSpec(
+                target_model_id="orders",
+                relation_ids=("orders_customer",),
+            ),
+            AnalysisTopicPathSpec(
+                target_model_id="order_items",
+                relation_ids=("orders_customer", "orders_items"),
+            ),
+        ),
+    )
+    release = sales_release.model_copy(update={"analysis_topic_routes": (route,)})
+    assert route_relation_ids_for_models(
+        release, dataset_id="sales_dataset", required_model_ids={"orders"}
+    ) == ("customers", ("orders_customer",))
 
 
 def test_primary_entities_retain_independent_count_scopes_when_reachable(sales_release):

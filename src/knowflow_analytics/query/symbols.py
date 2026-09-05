@@ -137,7 +137,10 @@ class SemanticSymbolTable:
                 preview += f" 等 {len(available)} 个"
             raise _invalid(
                 f"unknown semantic business name: {value}"
-                + (f"；可用名称：{preview}" if preview else "")
+                + (f"；可用名称：{preview}" if preview else ""),
+                # 结构化标记：并集反推时用它区分"这个作用域不拥有该成员"与
+                # "这条查询自己有毛病"，不靠解析报错文案。
+                details={"unknown_name": value},
             )
         if len(candidates) > 1:
             raise _invalid(
@@ -161,5 +164,6 @@ def _invalid(
     message: str,
     *,
     code: str = "LLM_S2SQL_AST_INVALID",
+    details: dict[str, object] | None = None,
 ) -> SemanticParsingError:
-    return SemanticParsingError(message, code=code)
+    return SemanticParsingError(message, code=code, details=details)

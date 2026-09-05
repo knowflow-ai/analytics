@@ -1025,31 +1025,43 @@ class AnalyticsQueryService:
                 # 判断更严也更少一处漂移。恰好一个成功即绑定；零个说明这条查询跨了
                 # 事实根（实测模型确实会写出来），多个按粒度收敛取最粗的那个。
                 bound: dict[str, tuple[object, str]] = {}
+                own_defects: dict[str, AnalyticsError] = {}
                 for dataset_id in dataset_ids:
                     try:
                         bound[dataset_id] = translate(dataset_id, retarget=True)
-                    except (AnalyticsError, ValueError):
+                    except (AnalyticsError, ValueError) as exc:
+                        if isinstance(exc, AnalyticsError) and not _is_membership_error(exc):
+                            own_defects[dataset_id] = exc
                         continue
                 if not bound:
-                    # 一个作用域都翻译不出来有两种原因，对用户完全不同：查询真的
-                    # 跨了事实根，或者这条 SQL 本身就有别的毛病（实测：模型用 CTE
-                    # 里自己定义的列别名，所有成员其实都在同一个作用域里）。
+                    # 一个作用域都翻译不出来有三种原因，对用户完全不同：这条 SQL
+                    # 自己有毛病、名字写错了、或者查询真的跨了事实根。
                     #
-                    # 不自己下诊断——问并集。它是模型当时看到的那份目录，翻译器对着
-                    # 它给出的错误就是诚实的答案：真跨根它自己就报
-                    # CROSS_FACT_METRICS_UNSUPPORTED，别的毛病它会说是哪个毛病。
-                    # 编一句"请拆开提问"送给一个根本不用拆的问题，是把用户支开。
-                    self._s2sql_translator.translate(
-                        release=generation_release,
-                        dataset_id=_UNION_DATASET_ID,
-                        corrected_s2sql=candidate.corrected_s2sql,
-                        visible_element_ids=allowed_element_ids,
-                        row_filters=row_filters,
-                        dialect=dialect,
-                        row_limits=request.options.row_limits(),
-                    )
-                    # 并集居然翻译得出来，那才是"成员各自合法、放一起不行"——
-                    # 这时候「拆开提问」是对的。
+                    # 某个作用域认得全部成员却仍翻不出，那是查询自己的毛病，原样
+                    # 说出来（实机「卖得最好的产品是哪个」：聚合只写在 ORDER BY
+                    # 里，每个作用域都拒；此前接着去"问并集"，并集的路由是拼出来
+                    # 的，需要 JOIN 的查询在它上面只会撞出与用户无关的建模码）。
+                    if own_defects:
+                        raise next(iter(own_defects.values()))
+                    # 每个作用域都说"有成员不是我的"：问并集分清写错名字与真跨根。
+                    # 它是模型当时看到的那份目录——名字在并集里也不认得，就是写错
+                    # 了，翻译器那句话就是诚实的答案；名字都认得却没有任何一个
+                    # 真实作用域拥有全部成员，那才是"成员各自合法、放一起不行"，
+                    # 「拆开提问」是对的。编一句"请拆开提问"送给一个根本不用拆的
+                    # 问题，是把用户支开。
+                    try:
+                        self._s2sql_translator.translate(
+                            release=generation_release,
+                            dataset_id=_UNION_DATASET_ID,
+                            corrected_s2sql=candidate.corrected_s2sql,
+                            visible_element_ids=allowed_element_ids,
+                            row_filters=row_filters,
+                            dialect=dialect,
+                            row_limits=request.options.row_limits(),
+                        )
+                    except AnalyticsError as exc:
+                        if _is_membership_error(exc):
+                            raise
                     raise MappingError(
                         "这个问题用到的业务对象不能放在同一次分析里；请拆开提问。",
                         code="CROSS_FACT_METRICS_UNSUPPORTED",
@@ -4301,6 +4313,17 @@ def _union_scope(
         _UNION_DATASET_ID,
         renames,
     )
+
+
+def _is_membership_error(error: AnalyticsError) -> bool:
+    """这个错误说的是"该成员不属于这个作用域"，而不是这条查询自己的毛病。
+
+    两种来源：符号表不认得这个业务名（带 ``unknown_name`` 结构化标记），或限定名
+    指向的成员不在该作用域（``UNION_MEMBER_OUTSIDE_SCOPE``）。只认结构化信号，
+    不解析报错文案。
+    """
+
+    return error.code == "UNION_MEMBER_OUTSIDE_SCOPE" or "unknown_name" in error.details
 
 
 def _restore_union_names(

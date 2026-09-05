@@ -34,7 +34,14 @@ def validate_textual_s2sql(s2sql: str) -> exp.Query:
 
 
 def textual_query_type(s2sql: str) -> SemanticQueryType:
-    """Port ``QueryTypeParser``: aggregate functions decide the query type."""
+    """Port ``QueryTypeParser``: aggregate functions in the projection decide the type.
+
+    上游只看 SELECT 项。带 GROUP BY 的语句按 SQL 定义就是聚合查询，即使聚合函数
+    只出现在 ORDER BY / HAVING 里（实机「卖得最好的产品是哪个」：模型写
+    ``SELECT 商品名称 … GROUP BY 商品名称 ORDER BY SUM(销售数量) DESC LIMIT 1``，
+    判成明细后 ORDER BY 里的聚合被当成"明细查询改写指标口径"拒掉，整条失败）。
+    这是 2026-08-27「已有 GROUP BY 不得留下过期的 DETAIL 判定」合同的同一条规则。
+    """
 
     tree = validate_textual_s2sql(s2sql)
     selects = list(tree.find_all(exp.Select))
@@ -45,7 +52,10 @@ def textual_query_type(s2sql: str) -> SemanticQueryType:
         for select in selects
         for projection in select.expressions
     )
-    return SemanticQueryType.AGGREGATE if has_select_function else SemanticQueryType.DETAIL
+    has_group_by = any(select.args.get("group") is not None for select in selects)
+    if has_select_function or has_group_by:
+        return SemanticQueryType.AGGREGATE
+    return SemanticQueryType.DETAIL
 
 
 def _invalid(message: str) -> SemanticParsingError:

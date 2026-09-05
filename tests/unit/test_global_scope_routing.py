@@ -2453,6 +2453,39 @@ class TestUnionSurvivesTheRetryPath:
         )
         assert executor.calls == 0
 
+    def test_a_join_query_broken_everywhere_reports_its_own_defect(
+        self, sales_release
+    ) -> None:
+        """一个认得全部成员的作用域仍翻不出，说出的必须是这条查询自己的毛病。
+
+        实机「卖得最好的产品是哪个」：模型把聚合只写在 ORDER BY 里，每个作用域都
+        拒掉；随后"问并集"撞上并集路由——它是把多个事实根的路径拼起来的，需要
+        JOIN 的查询在它上面只会撞出 ANALYSIS_TOPIC_METRIC_OUTSIDE_ROOT /
+        AMBIGUOUS_JOIN_PATH 这种与这条 SQL 无关、模型也改不了的码。这里用行数
+        上限复现同一形态：销售作用域认得全部成员、只是行数超限；退货作用域根本
+        没有「净收入」。
+        """
+        release = _two_facts_one_entity(sales_release)
+        gateway = _SequenceGateway(
+            'SELECT "客户分层", "净收入" FROM "销售经营" GROUP BY "客户分层" LIMIT 1000000'
+        )
+        service, _embedding, executor = _service(
+            release, llm_gateway=gateway, query_embedding=False
+        )
+        response = service.query(
+            QueryRequest(
+                project_id="sales",
+                question="各客户分层的退货单量",
+                dataset_ids=("sales_dataset", "returns_scope"),
+                include_diagnostics=True,
+            ),
+            actor_id="tenant-1",
+        )
+        assert response.state is QueryState.FAILED
+        assert "QUERY_SCOPE_DEFERRED_TO_GENERATION" in response.model_dump_json()
+        assert response.error.code == "QUERY_LIMIT_EXCEEDED", response.error.model_dump_json()
+        assert executor.calls == 0
+
     def test_a_genuinely_cross_root_query_still_says_so(self, sales_release) -> None:
         """反过来也要成立：真跨根时那句「请拆开提问」是对的，不能一起改没了。"""
 

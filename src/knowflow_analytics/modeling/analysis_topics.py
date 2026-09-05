@@ -348,7 +348,12 @@ def route_relation_ids_for_models(
     )
     if route is None:
         return None
-    validate_analysis_topic_route(release, route)
+    # 不在这里重跑 ``validate_analysis_topic_route``：路由在应用 Catalog 时已按同一
+    # 输入编译并校验，发布后冻结，不会漂移。问数期唯一会走到这里的"违规"路由是
+    # 生成阶段的并集——它把多个事实根的指标故意放进同一个词汇表，只用于让模型写出
+    # 业务名 S2SQL，再逐个真实作用域反推。在这里校验它，等于让"问并集"这条诚实
+    # 兜底永远以 ANALYSIS_TOPIC_METRIC_OUTSIDE_ROOT 收场：一个需要 JOIN 的查询
+    # 不管真正的毛病是什么，用户与重试链拿到的都是这个与他无关的建模码。
     paths = {item.target_model_id: item.relation_ids for item in route.paths}
     selected: list[str] = []
     for model_id in sorted(required_model_ids - {route.root_model_id}):

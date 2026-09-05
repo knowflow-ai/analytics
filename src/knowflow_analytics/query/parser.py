@@ -27,6 +27,9 @@ from knowflow_analytics.contracts import (
     SemanticQueryType,
     SemanticRelease,
     SortDirection,
+    TimeWindowOverride,
+    effective_time_default,
+    time_window_label,
 )
 from knowflow_analytics.errors import AnalyticsError
 from knowflow_analytics.gateways.model import StructuredModelGateway
@@ -184,6 +187,7 @@ class RuleS2SqlParser:
         mapping: MappingResult,
         now: datetime | None = None,
         selected_time_dimension_id: str | None = None,
+        time_override: TimeWindowOverride | None = None,
     ) -> ParsedSemanticCandidate | None:
         metrics = _element_ids(mapping, SemanticElementType.METRIC)
         dimensions = _element_ids(mapping, SemanticElementType.DIMENSION)
@@ -222,6 +226,7 @@ class RuleS2SqlParser:
             release=release,
             dataset=dataset,
             mapped_dimension_ids=dimensions,
+            time_override=time_override,
             selected_metric_ids=metrics,
             existing_filters=filters,
             now=now or datetime.now(UTC),
@@ -1510,6 +1515,7 @@ class StructuredQueryCorrector:
         query: SemanticQuery,
         release: SemanticRelease,
         now: datetime | None = None,
+        time_override: TimeWindowOverride | None = None,
     ) -> CorrectedStructuredQuery:
         dataset = _dataset(release, query.dataset_id)
         metric_ids = tuple(dict.fromkeys(query.metric_ids))
@@ -1553,6 +1559,7 @@ class StructuredQueryCorrector:
             now=now or datetime.now(UTC),
             selected_time_dimension_id=None,
             query_type=query_type,
+            time_override=time_override,
         )
         default_value_applied: list[str] = []
         # 逐个维度释放,不是全有全无。原先是 ``if not filters``,而 filters 已经
@@ -1737,6 +1744,7 @@ def _apply_time_filters(
     now: datetime,
     selected_time_dimension_id: str | None = None,
     query_type: SemanticQueryType = SemanticQueryType.AGGREGATE,
+    time_override: TimeWindowOverride | None = None,
 ) -> tuple[list[QueryFilter], tuple[str, ...]]:
     dimensions = {item.id: item for item in release.dimensions if item.id in dataset.dimension_ids}
     temporal_ids = [item_id for item_id, item in dimensions.items() if item.semantic_type == "time"]
@@ -1750,16 +1758,26 @@ def _apply_time_filters(
         return existing_filters, ()
     date_range = _parse_time_range(question, business_now)
     explicit = date_range is not None
+    # 底线：用户明确说了时间范围，下面的一切默认都不碰它。
+    window_label = ""
     time_default = (
-        dataset.detail_time_default
-        if query_type is SemanticQueryType.DETAIL
-        else dataset.aggregate_time_default
+        effective_time_default(
+            dataset, detail=query_type is SemanticQueryType.DETAIL, override=time_override
+        )
+        if date_range is None and time_override != "none"
+        else None
     )
     if date_range is None and time_default is not None:
         date_range = _default_time_range(time_default, business_now.date())
-    elif date_range is None and dataset.default_time_days is not None:
+        window_label = time_window_label(time_default)
+    elif (
+        date_range is None
+        and time_override in (None, "dataset")
+        and dataset.default_time_days is not None
+    ):
         end = business_now.date() + timedelta(days=1)
         date_range = (end - timedelta(days=dataset.default_time_days), end)
+        window_label = f"最近 {dataset.default_time_days} 天"
     if date_range is None:
         required = any(
             metric.requires_explicit_time
@@ -1850,9 +1868,11 @@ def _apply_time_filters(
         )
     if explicit:
         return existing_filters, ()
+    # 标记格式 time:<维度 id>:<起>:<止>:<窗口名>；服务层据此在回答里单独标出「默认」。
     return existing_filters, (
         f"time:{time_dimension_id}"
-        f":{start.isoformat() if start else ''}:{end.isoformat() if end else ''}",
+        f":{start.isoformat() if start else ''}:{end.isoformat() if end else ''}"
+        f":{window_label}",
     )
 
 

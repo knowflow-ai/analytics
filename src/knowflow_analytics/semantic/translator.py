@@ -23,9 +23,12 @@ from knowflow_analytics.contracts import (
     ModelSpec,
     OutputColumn,
     PhysicalQuery,
+    RowLimits,
     SemanticQuery,
     SemanticQueryType,
     SemanticRelease,
+    effective_row_limits,
+    limit_exceeded_message,
 )
 from knowflow_analytics.errors import TranslationError
 from knowflow_analytics.execution.dialect import SqlDialect, render_physical_sql
@@ -112,6 +115,7 @@ class SemanticTranslator:
         visible_element_ids: frozenset[str] | None = None,
         row_filters: Mapping[str, tuple[FixedFilter, ...]] | None = None,
         dialect: SqlDialect = SqlDialect.POSTGRES,
+        row_limits: RowLimits | None = None,
     ) -> PhysicalQuery:
         """把受治理语义查询翻译成物理 SQL。
 
@@ -441,21 +445,19 @@ class SemanticTranslator:
             )
 
         applied_defaults: list[str] = []
+        default_rows, max_rows = effective_row_limits(
+            dataset, detail=query.query_type is SemanticQueryType.DETAIL, limits=row_limits
+        )
         limit = query.limit
         # 用户自己给的 LIMIT 到顶是他要的，不是被截断；只有用默认上限时才多拉一行
         # 探测「还有没有」。否则「哪个卖得最好」的 LIMIT 1 会被当成截断提示（实机复现）。
         explicit_limit = limit is not None
         if limit is None:
-            limit = (
-                dataset.max_limit
-                if query.query_type is SemanticQueryType.DETAIL
-                else dataset.default_limit
-            )
+            limit = default_rows
             applied_defaults.append("limit")
-        if limit > dataset.max_limit:
+        if limit > max_rows:
             raise TranslationError(
-                f"limit exceeds dataset maximum {dataset.max_limit}",
-                code="QUERY_LIMIT_EXCEEDED",
+                limit_exceeded_message(limit, max_rows), code="QUERY_LIMIT_EXCEEDED"
             )
         sql_parts.append(f" LIMIT {limit if explicit_limit else limit + 1}")
         sql = "".join(sql_parts)

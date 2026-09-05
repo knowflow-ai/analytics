@@ -19,6 +19,7 @@ from sqlglot import exp
 
 from knowflow_analytics.catalog.store import PublishedRelease
 from knowflow_analytics.contracts import (
+    DimensionSpec,
     DimensionValueSpec,
     FilterOperator,
     FixedFilter,
@@ -28,6 +29,7 @@ from knowflow_analytics.contracts import (
     SemanticQuery,
     SemanticQueryType,
     SemanticRelease,
+    effective_time_default,
 )
 from knowflow_analytics.errors import AnalyticsError
 from knowflow_analytics.execution.dialect import SqlDialect
@@ -44,6 +46,7 @@ from knowflow_analytics.query.contracts import (
     ClarificationOption,
     ClarificationQueryResponse,
     CompletedQueryResponse,
+    DefaultTimeWindow,
     DrilldownOption,
     FailedQueryResponse,
     MapMode,
@@ -73,6 +76,10 @@ from knowflow_analytics.query.contracts import (
     UnderstoodElement,
 )
 from knowflow_analytics.query.corrector import LlmPhysicalSqlCorrector
+from knowflow_analytics.query.default_time_window import (
+    inject_default_time_window,
+    parse_time_window_marker,
+)
 from knowflow_analytics.query.errors import (
     ClarificationSignal,
     MappingError,
@@ -326,6 +333,7 @@ class AnalyticsQueryService:
         # 映射失败发生在多轮改写之前，那时 effective_question 还没赋值；失败记录
         # 要用到它，所以先按原问题初始化，改写成功后再覆盖。
         effective_question = request.question
+        multi_turn_gate: str | None = None
         try:
             published = self._releases.get_active_release(request.project_id)
             release = published.release
@@ -402,7 +410,7 @@ class AnalyticsQueryService:
             # .rewriteMultiTurn 同序——它也在 doParse 之前单独 map 一次只为拼
             # Prompt，dataset 取自上一轮记录。改写只产出问句文本，之后照常走完整
             # 链路（映射、作用域、冻结路由、各道 fail-closed 门），不获得任何事实权威。
-            effective_question = self._rewrite_follow_up(
+            effective_question, multi_turn_gate = self._rewrite_follow_up(
                 request=request,
                 release=release,
                 index=index,
@@ -992,6 +1000,7 @@ class AnalyticsQueryService:
                             visible_element_ids=allowed_element_ids,
                             row_filters=row_filters,
                             dialect=dialect,
+                            row_limits=request.options.row_limits(),
                         ),
                         s2sql,
                     )
@@ -1025,6 +1034,7 @@ class AnalyticsQueryService:
                         visible_element_ids=allowed_element_ids,
                         row_filters=row_filters,
                         dialect=dialect,
+                        row_limits=request.options.row_limits(),
                     )
                     # 并集居然翻译得出来，那才是"成员各自合法、放一起不行"——
                     # 这时候「拆开提问」是对的。
@@ -1152,7 +1162,61 @@ class AnalyticsQueryService:
                     corrected_s2sql=corrected.corrected_s2sql,
                     visible_element_ids=allowed_element_ids,
                     row_filters=row_filters,
+                    row_limits=request.options.row_limits(),
                 )
+            # 默认时间窗：问题没写时间范围时按助手设置补一个，补了就记进
+            # applied_defaults 让回答里标成「默认」并可一键撤掉。只在助手明确开了
+            # 开关时做（None 保持历史行为：自然语言问数不补窗）。
+            window_override = request.options.default_time_window
+            if window_override is not None and window_override != "none":
+                window_dataset = next(
+                    item for item in release.datasets if item.id == corrected.dataset_id
+                )
+                window_config = effective_time_default(
+                    window_dataset,
+                    detail=corrected.query_type is SemanticQueryType.DETAIL,
+                    override=window_override,
+                )
+                injected = (
+                    inject_default_time_window(
+                        s2sql=corrected.corrected_s2sql,
+                        release=release,
+                        dataset=window_dataset,
+                        config=window_config,
+                        now=now,
+                    )
+                    if window_config is not None
+                    else None
+                )
+                if injected is not None:
+                    try:
+                        windowed = self._s2sql_translator.translate(
+                            release=release,
+                            dataset_id=corrected.dataset_id,
+                            corrected_s2sql=injected.s2sql,
+                            visible_element_ids=allowed_element_ids,
+                            row_filters=row_filters,
+                            row_limits=request.options.row_limits(),
+                        )
+                    except AnalyticsError as exc:
+                        # 补窗后翻译不过（比如时间维不在这条查询的路由上）：按原样
+                        # 执行，不让一个默认值把整轮问数搞失败；诊断里说明跳过了。
+                        parse_events.append(
+                            {
+                                "event": "default_time_window_skipped",
+                                "detail": {"code": exc.code},
+                            }
+                        )
+                    else:
+                        corrected = corrected.model_copy(
+                            update={
+                                "corrected_s2sql": injected.s2sql,
+                                "applied_defaults": tuple(
+                                    dict.fromkeys((*corrected.applied_defaults, injected.marker))
+                                ),
+                            }
+                        )
+                        translation_holder["value"] = windowed
             # 异名歧义（生还人数 / 遇难人数）在发现阶段放行给了 LLM；这里按最终
             # 回绑出的 ID 复核：恰好用了一个才算裁决成功，0 个或 2 个都问人。放在
             # QueryRule 之后，明示的选择才和返回的 semantic_query 一致。
@@ -1222,6 +1286,8 @@ class AnalyticsQueryService:
                     "parser": corrected.parser,
                     "candidate_id": corrected.id,
                     "multi_turn_rewritten": effective_question != request.question,
+                    # 改写被哪道门拦下（own_metric / added_dimension），没拦为 None。
+                    "multi_turn_gate": multi_turn_gate,
                     **(
                         {
                             "original_question": request.question,
@@ -1668,6 +1734,7 @@ class AnalyticsQueryService:
                 query=request.semantic_query,
                 release=release,
                 now=now,
+                options=request.options,
             )
             trace[-1] = QueryTraceStep(
                 stage=QueryStage.S2SQL_CORRECTING,
@@ -1681,6 +1748,7 @@ class AnalyticsQueryService:
                 visible_element_ids=structured_visible,
                 row_filters=structured_row_filters,
                 dialect=self._targets.for_project(release.project_id).dialect,
+                row_limits=request.options.row_limits(),
             )
             trace[-1] = QueryTraceStep(
                 stage=QueryStage.ROUTE_BINDING,
@@ -2046,8 +2114,11 @@ class AnalyticsQueryService:
         dataset_ids: tuple[str, ...],
         tenant_id: str,
         allowed_element_ids: frozenset[str] | None = None,
-    ) -> str:
+    ) -> tuple[str, str | None]:
         """追问改写：把上一轮的口径补进这一轮的问句，失败一律回退原问句。
+
+        返回 (实际问句, 拦下改写的门)；门为 None 表示没有拦（可能改写了，也可能
+        根本没走到改写）。见 ``follow_up_rewrite_gate``。
 
         与上游同序，在映射之前执行。上一轮按会话取最近一次成功，**不以当前问句
         的作用域为前置条件**——那正是「那环比呢」走不到改写的原因。当前问句的
@@ -2059,15 +2130,15 @@ class AnalyticsQueryService:
         """
 
         if request.conversation_id is None:
-            return request.question
+            return request.question, None
         if not request.options.merged(
             "multi_turn_enabled", self._multi_turn_rewriter.enabled
             if self._multi_turn_rewriter is not None
             else False
         ):
-            return request.question
+            return request.question, None
         if self._query_history is None or self._multi_turn_rewriter is None:
-            return request.question
+            return request.question, None
         if not tenant_id:
             raise SemanticParsingError(
                 "多轮问数必须绑定当前用户",
@@ -2082,11 +2153,11 @@ class AnalyticsQueryService:
             index_snapshot_id=index.id,
         )
         if previous is None:
-            return request.question
+            return request.question, None
         # 上一轮的作用域必须仍在本次允许范围内：Prompt 会带上该作用域里的受治理
         # 成员名，超出授权范围就不是"补上下文"而是越权展示。
         if previous.dataset_id not in dataset_ids:
-            return request.question
+            return request.question, None
         evidence = self._orchestrator.collect_evidence(
             question=request.question,
             dataset_ids=(previous.dataset_id,),
@@ -2101,7 +2172,11 @@ class AnalyticsQueryService:
             mode=MapMode.STRICT,
         )
         if not projections:
-            return request.question
+            return request.question, None
+        # 第一道门：原话自己点了名要什么指标，就不用上一轮替它补问题。
+        gate = follow_up_rewrite_gate(projections[0], None)
+        if gate is not None:
+            return request.question, gate
         rewritten = self._multi_turn_rewriter.rewrite(
             MultiTurnContext(
                 tenant_id=tenant_id,
@@ -2112,7 +2187,28 @@ class AnalyticsQueryService:
                 previous_corrected_s2sql=previous.corrected_s2sql,
             )
         )
-        return rewritten or request.question
+        if not rewritten or rewritten == request.question:
+            return request.question, None
+        # 第二道门：改写后的问句只做词表匹配（不调向量模型），新增了分组维度就作废。
+        rewritten_evidence = self._orchestrator.collect_evidence(
+            question=rewritten,
+            dataset_ids=(previous.dataset_id,),
+            index=index,
+            tenant_id=tenant_id,
+            allowed_element_ids=allowed_element_ids,
+            include_embeddings=False,
+        )
+        rewritten_projections = self._orchestrator.project_scope_evidence(
+            evidence=rewritten_evidence,
+            dataset_ids=(previous.dataset_id,),
+            mode=MapMode.STRICT,
+        )
+        gate = follow_up_rewrite_gate(
+            projections[0], rewritten_projections[0] if rewritten_projections else None
+        )
+        if gate is not None:
+            return request.question, gate
+        return rewritten, None
 
     @staticmethod
     def _supports_global_scope_routing(
@@ -2647,6 +2743,7 @@ class AnalyticsQueryService:
         now: datetime | None = None,
         allowed_element_ids: tuple[str, ...] | None = None,
         row_filters: tuple[QueryRowFilter, ...] | None = None,
+        options: QueryOptions | None = None,
     ) -> QueryResponse:
         """Continue a completed answer by one signed drilldown option.
 
@@ -2695,6 +2792,12 @@ class AnalyticsQueryService:
                 self._DRILLDOWN_TIME_WINDOWS[element_id][1],
                 now=now,
             )
+            if self._DRILLDOWN_TIME_WINDOWS[element_id][1] is None:
+                # 用户点了「不限时间」：结构化路径不能再按发布配置把默认窗补回去，
+                # 否则这一下等于没点。
+                options = (options or QueryOptions()).model_copy(
+                    update={"default_time_window": "none"}
+                )
         else:
             new_query = _apply_drilldown(base_query, action, element_id)
         request = StructuredQueryRequest(
@@ -2704,6 +2807,7 @@ class AnalyticsQueryService:
             # 调用方本次请求重算出的范围。
             allowed_element_ids=allowed_element_ids,
             row_filters=row_filters,
+            options=options or QueryOptions(),
         )
         return self.query_structured(request, now=now, actor_id=actor_id)
 
@@ -3608,15 +3712,47 @@ class AnalyticsQueryService:
     ) -> QueryInterpretation:
         metrics = {item.id: item.name for item in release.metrics}
         dimensions = {item.id: item.name for item in release.dimensions}
+        # 系统补的时间窗单独给一块：它不是用户说的，混进 filters 用户分不出哪条是
+        # 自己的。窗对应的两条过滤从 filters 里摘掉，chip 只出一颗「默认」。
+        window_marker = next(
+            (
+                parsed
+                for marker in defaults
+                if (parsed := parse_time_window_marker(marker)) is not None
+            ),
+            None,
+        )
+        # 维度 id 认不出就不出窗：宁可少一颗 chip，也不把内部 id 当名字给用户看。
+        default_window = (
+            DefaultTimeWindow(
+                dimension=dimensions[window_marker.dimension_id],
+                start=window_marker.start,
+                end=window_marker.end,
+                label=window_marker.label,
+            )
+            if window_marker is not None and window_marker.dimension_id in dimensions
+            else None
+        )
+
+        def is_window_bound(item: QueryFilter) -> bool:
+            if window_marker is None or item.dimension_id != window_marker.dimension_id:
+                return False
+            value = str(item.value)
+            return (item.operator is FilterOperator.GTE and value == window_marker.start) or (
+                item.operator is FilterOperator.LT and value == window_marker.end
+            )
+
         return QueryInterpretation(
             dataset_id=query.dataset_id,
             query_type=query.query_type,
             metrics=tuple(metrics[item] for item in query.metric_ids),
             dimensions=tuple(dimensions[item] for item in query.dimension_ids),
+            default_time_window=default_window,
             filters=tuple(
                 f"{dimensions[item.dimension_id]} "
                 f"{_filter_operator_label(item.operator.value)} {item.value}"
                 for item in query.filters
+                if not is_window_bound(item)
             )
             + tuple(
                 f"{metrics[item.metric_id]} "
@@ -3700,6 +3836,12 @@ class AnalyticsQueryService:
                     and dimensions[x_column.element_id].semantic_type == "time"
                 )
             )
+            # 横轴粒度：DATE_TRUNC 的粒度优先，其次是时间维声明的真实粒度。前端据此
+            # 把缺失的桶补成空点，折线在没数据的地方断开，而不是跨过去连成一条。
+            x_grain = _time_axis_grain(
+                x_column.time_grain if x_column is not None else None,
+                dimensions.get(x_id) if x_is_time and x_id is not None else None,
+            )
             y_ids = [item.element_id for item in value_columns]
             y_units = [units.get(item.element_id) for item in value_columns]
             # 只有比率列按百分比展示。与它并列的 SUM(指标) 也是 calculation，
@@ -3715,6 +3857,7 @@ class AnalyticsQueryService:
         else:
             x_id = query.dimension_ids[0] if query.dimension_ids else None
             x_is_time = bool(x_id in dimensions and dimensions[x_id].semantic_type == "time")
+            x_grain = _time_axis_grain(None, dimensions[x_id] if x_is_time else None)
             series_id = None
             y_ids = list(query.metric_ids)
             y_units = [units.get(metric_id) for metric_id in query.metric_ids]
@@ -3727,6 +3870,8 @@ class AnalyticsQueryService:
             # 横轴是否时间：前端据此用时间刻度，让一年的空档显示成一年，
             # 而不是与相邻一天等宽（类目轴等距会歪曲时距）。
             "x_time": x_is_time,
+            # 横轴时间粒度（DAY/WEEK/MONTH/QUARTER/YEAR），不是时间或不知道粒度时为 None。
+            "x_grain": x_grain,
             "y": tuple(y_ids),
             # 与 y 逐位对齐的展示单位（「元」「件」…），无单位为 None。
             "y_units": y_units,
@@ -3939,6 +4084,58 @@ def _mark_failed(
         trace[-1] = failed
     else:
         trace.append(failed)
+
+
+def _exact_element_ids(mapping: MappingResult, element_type: SemanticElementType) -> set[str]:
+    return {
+        match.element_id
+        for match in mapping.matches
+        if match.element_type is element_type and match.method is MatchMethod.EXACT
+    }
+
+
+def follow_up_rewrite_gate(current: MappingResult, rewritten: MappingResult | None) -> str | None:
+    """多轮改写的两道确定性门：改写只能补口径，不能加问题。
+
+    实机回放（2026-09-05，24 个非首轮）：13 轮改写后多出了语义元素，其中 5 轮是把
+    上一轮的目标塞进一个本来完整的问题——「各门店上个月销售额是多少」被续上
+    「其中太古里店的销售额占比」，「2024 年开业的门店有多少家」被续上「各城市」。
+    改写发生在理解之前，改写后的文本是下游唯一看得见的问题，六道治理关相对于它
+    全对，所以只能在这里拦。
+
+    - ``own_metric``：原话自己精确点名了指标，它就是在问自己的问题，不改写。
+      「那环比呢」「按渠道拆分」没有指标，照常改写。
+    - ``added_dimension``：改写新增了原话没有的分组维度——那是改问题的形状，不是
+      补口径。取值和时间范围可以补，那正是「华东呢」要的东西。
+
+    纯指代型追问（「那环比呢」，原话一个精确成员都没有）不设第二道门：它本来就要
+    把上一轮的指标和分组整个继承过来。
+
+    只消费 Mapper 的精确证据，不读问题文本，不比较分数。``rewritten`` 为 None 表示
+    改写尚未发生，只判第一道。
+    """
+
+    if _exact_element_ids(current, SemanticElementType.METRIC):
+        return "own_metric"
+    if rewritten is None:
+        return None
+    partially_formed = any(match.method is MatchMethod.EXACT for match in current.matches)
+    if not partially_formed:
+        return None
+    added = _exact_element_ids(rewritten, SemanticElementType.DIMENSION) - _exact_element_ids(
+        current, SemanticElementType.DIMENSION
+    )
+    return "added_dimension" if added else None
+
+
+def _time_axis_grain(truncated_grain: str | None, dimension: DimensionSpec | None) -> str | None:
+    """横轴时间粒度：DATE_TRUNC 的粒度优先，其次是时间维声明的粒度；都没有就不猜。"""
+
+    if truncated_grain is not None:
+        return truncated_grain
+    if dimension is not None and dimension.time_granularity is not None:
+        return dimension.time_granularity.value.upper()
+    return None
 
 
 def _filter_operator_label(value: str) -> str:
@@ -4450,6 +4647,17 @@ def _error_diagnosis(exc: AnalyticsError) -> QueryDiagnosis:
             severity="error",
             summary="该项目的数据范围引用了当前版本里不存在的维度",
             recommendation="发布改名或删除维度后，需要同步更新受影响主体的数据范围配置。",
+            user_hint=str(exc),
+        )
+    if exc.code == "QUERY_LIMIT_EXCEEDED":
+        # 用户点名要的行数超过了上限。套翻译阶段的通用文案会变成「计算方式不支持」，
+        # 与真实原因无关；翻译器的原话已经说清要了多少、最多多少、怎么办。
+        return QueryDiagnosis(
+            category=QueryDiagnosticCategory.TRANSLATION,
+            stage=QueryStage.TRANSLATING.value,
+            severity="warning",
+            summary="问题要求的行数超过一次最多返回的行数",
+            recommendation="让用户加条件缩小范围，或在助手 / 数据集配置里调高 max_rows。",
             user_hint=str(exc),
         )
     if exc.code == "QUERY_SCOPE_DUPLICATE_ROOTS":

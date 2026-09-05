@@ -24,10 +24,13 @@ from knowflow_analytics.contracts import (
     QueryMeasureFilter,
     QueryMetricFilter,
     QueryOrder,
+    RowLimits,
     SemanticQuery,
     SemanticQueryType,
     SemanticRelease,
     SortDirection,
+    effective_row_limits,
+    limit_exceeded_message,
 )
 from knowflow_analytics.errors import TranslationError
 from knowflow_analytics.execution.dialect import SqlDialect, render_physical_sql
@@ -95,6 +98,8 @@ class _QueryStatement:
     # 漏掉任何一个都是一条绕过权限的路径（RATIO 的自连接 CTE 就在其中之一）。
     visible_element_ids: frozenset[str] | None = None
     row_filters: Mapping[str, tuple[FixedFilter, ...]] = field(default_factory=dict)
+    # 助手级的返回行数覆盖；None = 跟随数据集发布配置。
+    row_limits: RowLimits | None = None
     # 数据源的执行方言。整条链路上只有最后落成物理 SQL 的两处会读它——中间所有
     # sqlglot 调用处理的都是内部 S2SQL，那层必须固定在 postgres 记法上。
     dialect: SqlDialect = SqlDialect.POSTGRES
@@ -778,7 +783,9 @@ class _OntologyQueryParser:
                 )
             )
 
-        result_limit = _result_limit(statement.tree, statement.dataset, statement.query_type)
+        result_limit = _result_limit(
+            statement.tree, statement.dataset, statement.query_type, statement.row_limits
+        )
         physical_limit = _physical_limit(statement.tree, result_limit)
         _parameterize_literals(statement.tree, parameters)
         statement.tree.set("limit", exp.Limit(expression=exp.Literal.number(physical_limit)))
@@ -909,7 +916,9 @@ class _OntologyQueryParser:
             )
             relation_ids.extend(branch_relations)
 
-        result_limit = _result_limit(statement.tree, statement.dataset, statement.query_type)
+        result_limit = _result_limit(
+            statement.tree, statement.dataset, statement.query_type, statement.row_limits
+        )
         physical_limit = _physical_limit(statement.tree, result_limit)
         _parameterize_literals(statement.tree, parameters)
         statement.tree.set("limit", exp.Limit(expression=exp.Literal.number(physical_limit)))
@@ -1072,6 +1081,7 @@ class S2SqlSemanticTranslator:
         visible_element_ids: frozenset[str] | None = None,
         row_filters: Mapping[str, tuple[FixedFilter, ...]] | None = None,
         dialect: SqlDialect = SqlDialect.POSTGRES,
+        row_limits: RowLimits | None = None,
     ) -> S2SqlTranslation:
         try:
             dataset = next(item for item in release.datasets if item.id == dataset_id)
@@ -1085,6 +1095,7 @@ class S2SqlSemanticTranslator:
             visible_element_ids=visible_element_ids,
             row_filters=dict(row_filters or {}),
             dialect=dialect,
+            row_limits=row_limits,
         )
         _reject_contradictory_predicates(statement.corrected_s2sql)
         trace: list[str] = []
@@ -1784,7 +1795,11 @@ def _result_limit(
     tree: exp.Query,
     dataset: DatasetSpec,
     query_type: SemanticQueryType,
+    row_limits: RowLimits | None = None,
 ) -> int:
+    default_rows, max_rows = effective_row_limits(
+        dataset, detail=query_type is SemanticQueryType.DETAIL, limits=row_limits
+    )
     limit = tree.args.get("limit")
     if isinstance(limit, exp.Fetch):
         value = limit.args.get("count")
@@ -1793,9 +1808,7 @@ def _result_limit(
     else:
         value = None
     if value is None:
-        result = (
-            dataset.max_limit if query_type is SemanticQueryType.DETAIL else dataset.default_limit
-        )
+        result = default_rows
     elif isinstance(value, exp.Literal) and value.is_int:
         result = int(value.this)
     elif isinstance(value, exp.Neg) and isinstance(value.this, exp.Literal) and value.this.is_int:
@@ -1805,10 +1818,12 @@ def _result_limit(
             "limit must be a positive integer",
             code="QUERY_LIMIT_EXCEEDED",
         )
-    if result < 1 or result > dataset.max_limit:
+    if result < 1:
+        raise TranslationError("limit must be a positive integer", code="QUERY_LIMIT_EXCEEDED")
+    if result > max_rows:
+        # 用户自己要的行数超过上限：文案要说清要了多少、最多多少、怎么办。
         raise TranslationError(
-            f"limit exceeds dataset maximum {dataset.max_limit}",
-            code="QUERY_LIMIT_EXCEEDED",
+            limit_exceeded_message(result, max_rows), code="QUERY_LIMIT_EXCEEDED"
         )
     return result
 

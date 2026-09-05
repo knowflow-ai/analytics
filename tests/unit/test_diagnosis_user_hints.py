@@ -121,3 +121,22 @@ class TestEmptyResultCausedByAnUnpublishedFilterValue:
         )
 
         assert plain == same
+
+
+class TestRowLimitExceeded:
+    def test_the_translators_sentence_survives_instead_of_the_generic_translation_hint(
+        self,
+    ) -> None:
+        # 用户点名要 3000 行、上限 2000：套翻译阶段通用文案会说「计算方式不支持」。
+        exc = AnalyticsError(
+            "这个问题要返回 3000 行，超过了一次最多返回的 2000 行。"
+            "请加条件缩小范围，或调高「最多返回行数」的设置。",
+            code="QUERY_LIMIT_EXCEEDED",
+            stage=QueryStage.TRANSLATING.value,
+        )
+
+        diagnosis = _error_diagnosis(exc)
+
+        assert diagnosis.user_hint == str(exc)
+        assert "计算方式" not in diagnosis.user_hint
+        assert diagnosis.stage == QueryStage.TRANSLATING.value

@@ -9,8 +9,10 @@ from pydantic import Field, field_validator, model_validator
 from knowflow_analytics.contracts import (
     FrozenModel,
     QueryResult,
+    RowLimits,
     SemanticQuery,
     SemanticQueryType,
+    TimeWindowOverride,
 )
 from knowflow_analytics.semantic.index import SemanticElementType
 
@@ -430,6 +432,15 @@ class QueryFailureRecord(FrozenModel):
     details: dict[str, Any] = Field(default_factory=dict)
 
 
+class DefaultTimeWindow(FrozenModel):
+    """系统替用户补的时间窗：显示出来、能一键撤掉。``end`` 是开区间上界。"""
+
+    dimension: str
+    start: str
+    end: str
+    label: str
+
+
 class QueryInterpretation(FrozenModel):
     dataset_id: str
     query_type: SemanticQueryType = SemanticQueryType.AGGREGATE
@@ -437,6 +448,8 @@ class QueryInterpretation(FrozenModel):
     dimensions: tuple[str, ...]
     filters: tuple[str, ...]
     applied_defaults: tuple[str, ...] = ()
+    # 用户没说时间范围、系统补了窗：不混进 filters，单独给一块，前端才能标成「默认」。
+    default_time_window: DefaultTimeWindow | None = None
 
 
 class QueryResponseBase(FrozenModel):
@@ -586,12 +599,43 @@ class QueryOptions(FrozenModel):
     # 会让"失败后跳出重复无效输出"的递进失效。
     temperature: float | None = Field(default=None, ge=0.0, le=1.0)
     max_tokens: int | None = Field(default=None, ge=1, le=8_192)
+    # 一次问数返回多少行。空 = 跟随数据集发布配置；允许高于发布值（见 RowLimits）。
+    default_rows: int | None = Field(default=None, ge=1, le=100_000)
+    max_rows: int | None = Field(default=None, ge=1, le=100_000)
+    # 问题没写时间范围时补哪个窗。None = 历史行为（自然语言问数不补）；
+    # "dataset" = 按发布配置；"none" = 不补；N = 最近 N 天。补了的窗必须显示、可撤。
+    default_time_window: TimeWindowOverride | None = None
+
+    # before：pydantic 会把 True 松散转成 1，转完就认不出它本来是个 bool 了。
+    @field_validator("default_time_window", mode="before")
+    @classmethod
+    def time_window_days_are_bounded(cls, value: object) -> object:
+        if isinstance(value, bool):
+            raise ValueError("default_time_window must be 'dataset', 'none' or a day count")
+        if isinstance(value, int) and not 1 <= value <= 3_650:
+            raise ValueError("default_time_window days must be between 1 and 3650")
+        return value
+
+    @model_validator(mode="after")
+    def default_rows_within_max(self) -> QueryOptions:
+        if (
+            self.default_rows is not None
+            and self.max_rows is not None
+            and self.default_rows > self.max_rows
+        ):
+            raise ValueError("default_rows cannot exceed max_rows")
+        return self
 
     def merged(self, field: str, fallback):
         """助手填了就用助手的，没填就用全局的。"""
 
         value = getattr(self, field)
         return fallback if value is None else value
+
+    def row_limits(self) -> RowLimits:
+        """翻译器要的那两项；两条翻译路径都吃它。"""
+
+        return RowLimits(default_rows=self.default_rows, max_rows=self.max_rows)
 
 
 class QueryRequest(FrozenModel):
@@ -665,3 +709,5 @@ class StructuredQueryRequest(FrozenModel):
     # 后传进来，而不是从 token 里恢复。
     allowed_element_ids: tuple[str, ...] | None = Field(default=None, max_length=5_000)
     row_filters: tuple[QueryRowFilter, ...] | None = Field(default=None, max_length=100)
+    # 报表卡片与下钻也要吃助手的返回行数设置；结构化路径不用 LLM，其余项无副作用。
+    options: QueryOptions = Field(default_factory=QueryOptions)

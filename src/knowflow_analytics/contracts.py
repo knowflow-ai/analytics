@@ -994,6 +994,100 @@ class OutputColumn(FrozenModel):
     time_grain: Literal["DAY", "WEEK", "MONTH", "QUARTER", "YEAR"] | None = None
 
 
+class RowLimits(FrozenModel):
+    """一次问数可返回多少行的覆盖值：填了盖过数据集发布配置，没填跟随。
+
+    ``default_rows`` 是问题没说数量时给多少行，``max_rows`` 是一次最多多少行。
+    允许高于发布配置：建模侧本来就没有改这两个值的入口，助手 owner 才是真正在
+    决定「给同事看多少行」的人；硬顶由字段上限和执行器超时兜底。
+    """
+
+    default_rows: int | None = Field(default=None, ge=1, le=100_000)
+    max_rows: int | None = Field(default=None, ge=1, le=100_000)
+
+    @model_validator(mode="after")
+    def default_within_max(self) -> RowLimits:
+        if (
+            self.default_rows is not None
+            and self.max_rows is not None
+            and self.default_rows > self.max_rows
+        ):
+            raise ValueError("default_rows cannot exceed max_rows")
+        return self
+
+
+def effective_row_limits(
+    dataset: DatasetSpec, *, detail: bool, limits: RowLimits | None = None
+) -> tuple[int, int]:
+    """(没写 LIMIT 时给多少行, 一次最多多少行)。覆盖值优先；默认永远不高于上限。"""
+
+    max_rows = dataset.max_limit if limits is None or limits.max_rows is None else limits.max_rows
+    if limits is not None and limits.default_rows is not None:
+        default_rows = limits.default_rows
+    else:
+        default_rows = dataset.max_limit if detail else dataset.default_limit
+    return min(default_rows, max_rows), max_rows
+
+
+def limit_exceeded_message(requested: int, max_rows: int) -> str:
+    """超限时给用户看的原话：要了多少、最多多少、怎么办。不是技术错误码。"""
+
+    return (
+        f"这个问题要返回 {requested} 行，超过了一次最多返回的 {max_rows} 行。"
+        "请加条件缩小范围，或调高「最多返回行数」的设置。"
+    )
+
+
+# 默认时间窗的开关。None = 保持历史行为（自然语言问数不补窗；规则兜底与结构化
+# 查询按发布配置）；"dataset" = 三条路径都按发布配置；"none" = 一律不补；
+# N = 最近 N 天。写进 QueryOptions，助手级可配。
+TimeWindowOverride = Literal["dataset", "none"] | int
+
+
+def effective_time_default(
+    dataset: DatasetSpec,
+    *,
+    detail: bool,
+    override: TimeWindowOverride | None,
+) -> DatasetTimeDefaultConfig | None:
+    """这次问数没写时间范围时该补哪个窗；None 表示不补。"""
+
+    if override == "none":
+        return None
+    if isinstance(override, int) and not isinstance(override, bool):
+        return DatasetTimeDefaultConfig(unit=override, period="DAY", time_mode="RECENT")
+    return dataset.detail_time_default if detail else dataset.aggregate_time_default
+
+
+_PERIOD_LABEL = {"DAY": "天", "WEEK": "周", "MONTH": "个月", "QUARTER": "个季度", "YEAR": "年"}
+_CURRENT_LABEL = {
+    "DAY": "今天",
+    "WEEK": "本周",
+    "MONTH": "本月",
+    "QUARTER": "本季度",
+    "YEAR": "今年",
+}
+_LAST_ONE_LABEL = {
+    "DAY": "昨天",
+    "WEEK": "上周",
+    "MONTH": "上个月",
+    "QUARTER": "上季度",
+    "YEAR": "去年",
+}
+
+
+def time_window_label(config: DatasetTimeDefaultConfig) -> str:
+    """给用户看的窗口名：「最近 7 天」「本月」「昨天」。规则和文本两条路径共用一处。"""
+
+    if config.time_mode == "CURRENT":
+        return _CURRENT_LABEL[config.period]
+    if config.time_mode == "LAST":
+        if config.unit == 1:
+            return _LAST_ONE_LABEL[config.period]
+        return f"{config.unit} {_PERIOD_LABEL[config.period]}前那一天"
+    return f"最近 {config.unit} {_PERIOD_LABEL[config.period]}"
+
+
 class PhysicalQuery(FrozenModel):
     release_id: str
     dataset_id: str

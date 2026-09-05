@@ -55,6 +55,7 @@ from knowflow_analytics.query.contracts import (
     ClarificationQueryResponse,
     CompletedQueryResponse,
     FailedQueryResponse,
+    QueryOptions,
     QueryRequest,
     QueryResponse,
     QueryRowFilter,
@@ -178,7 +179,14 @@ def _ordinary_query_projection(response: QueryResponse) -> dict[str, Any]:
                 "metrics": response.interpretation.metrics,
                 "dimensions": response.interpretation.dimensions,
                 "filters": response.interpretation.filters,
+                # 标记原文带语义 ID（query_rule:… / time:<维度 id>…），普通 wire 不出；
+                # 系统补的时间窗以业务名单独投影在下面。
                 "applied_defaults": (),
+                "default_time_window": (
+                    response.interpretation.default_time_window.model_dump(mode="json")
+                    if response.interpretation.default_time_window is not None
+                    else None
+                ),
             },
             "data": {
                 **response.data.model_copy(update={"rows": tuple(map(tuple, rows))}).model_dump(
@@ -266,6 +274,7 @@ def _ordinary_visualization(
             label_by_source_column.get(series_id) if isinstance(series_id, str) else None
         ),
         "x_time": bool(source.get("x_time")),
+        "x_grain": source.get("x_grain") if isinstance(source.get("x_grain"), str) else None,
         "y": [label_by_source_column[item] for item in kept],
         # 与 y 逐位对齐的展示单位；非字符串一律置 None。
         "y_units": [
@@ -2591,6 +2600,8 @@ def create_api(
         # 权限开了一扇后门。内部下钻路径走的是同一个 query_structured，早已带上。
         allowed_element_ids: tuple[str, ...] | None = Field(default=None, max_length=5_000)
         row_filters: tuple[QueryRowFilter, ...] | None = Field(default=None, max_length=100)
+        # 助手级返回行数设置：报表卡片与下钻都要和首轮一致。
+        options: QueryOptions = Field(default_factory=QueryOptions)
         # 滚动时间窗：概览卡片要"每次打开跟着今天走"。
         #
         # 为什么必须由调用方显式给：语义查询里的时间过滤是**绝对下界**——解析阶段
@@ -2621,6 +2632,7 @@ def create_api(
                 include_debug_sql=payload.include_debug_sql and allow_debug_sql,
                 allowed_element_ids=payload.allowed_element_ids,
                 row_filters=payload.row_filters,
+                options=payload.options,
             ),
             actor_id=request_context.actor_id,
             permission_scope_hash=request_context.permission_scope_hash,
@@ -2636,6 +2648,8 @@ def create_api(
         # 撤销，从 token 恢复权限等于让旧令牌继续放行。
         allowed_element_ids: tuple[str, ...] | None = Field(default=None, max_length=5_000)
         row_filters: tuple[QueryRowFilter, ...] | None = Field(default=None, max_length=100)
+        # 助手级返回行数设置：报表卡片与下钻都要和首轮一致。
+        options: QueryOptions = Field(default_factory=QueryOptions)
 
     @app.post("/v1/analytics/query:drilldown")
     def drilldown_query(payload: DrilldownRequest, request_context: Context):
@@ -2653,6 +2667,7 @@ def create_api(
                 value=payload.value,
                 allowed_element_ids=payload.allowed_element_ids,
                 row_filters=payload.row_filters,
+                options=payload.options,
             )
         )
 

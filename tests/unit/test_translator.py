@@ -775,3 +775,49 @@ def test_cyclic_derived_formula_is_refused(sales_release) -> None:
             query=SemanticQuery(dataset_id="sales_dataset", metric_ids=("gross_after_refund",)),
         )
     assert excinfo.value.code == "INVALID_METRIC_FORMULA"
+
+
+def test_assistant_row_limits_override_the_published_default(sales_release):
+    from knowflow_analytics.contracts import RowLimits
+
+    physical = SemanticTranslator().translate(
+        release=sales_release,
+        query=SemanticQuery(dataset_id="sales_dataset", dimension_ids=("region",)),
+        row_limits=RowLimits(default_rows=20, max_rows=5_000),
+    )
+
+    assert physical.result_limit == 20
+    assert physical.sql.rstrip().endswith("LIMIT 21")
+
+
+def test_assistant_max_rows_may_exceed_the_published_maximum(sales_release):
+    from knowflow_analytics.contracts import RowLimits
+    from knowflow_analytics.errors import TranslationError
+
+    query = SemanticQuery(dataset_id="sales_dataset", dimension_ids=("region",), limit=3_000)
+    # 前提：3000 行超过数据集发布的上限，本来会被拒。
+    with pytest.raises(TranslationError):
+        SemanticTranslator().translate(release=sales_release, query=query)
+
+    physical = SemanticTranslator().translate(
+        release=sales_release, query=query, row_limits=RowLimits(max_rows=5_000)
+    )
+
+    assert physical.result_limit == 3_000
+    assert physical.sql.rstrip().endswith("LIMIT 3000")
+
+
+def test_exceeding_the_assistant_max_says_how_many_and_how_much(sales_release):
+    from knowflow_analytics.contracts import RowLimits
+    from knowflow_analytics.errors import TranslationError
+
+    with pytest.raises(TranslationError) as raised:
+        SemanticTranslator().translate(
+            release=sales_release,
+            query=SemanticQuery(dataset_id="sales_dataset", dimension_ids=("region",), limit=3_000),
+            row_limits=RowLimits(max_rows=2_000),
+        )
+
+    assert getattr(raised.value, "code", None) == "QUERY_LIMIT_EXCEEDED"
+    assert "3000 行" in str(raised.value)
+    assert "2000 行" in str(raised.value)

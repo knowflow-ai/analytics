@@ -197,6 +197,7 @@ from knowflow_analytics.modeling.rule_modeller import RuleSemanticModeller
 from knowflow_analytics.modeling.sql_model import validate_sql_model
 from knowflow_analytics.query.contracts import (
     CompletedQueryResponse,
+    QueryOptions,
     QueryRequest,
     QueryResponse,
     QueryRowFilter,
@@ -3830,6 +3831,7 @@ class AnalyticsApplication:
         value: str | None = None,
         allowed_element_ids: tuple[str, ...] | None = None,
         row_filters: tuple[QueryRowFilter, ...] | None = None,
+        options: QueryOptions | None = None,
     ) -> QueryResponse:
         """Continue a completed answer by one signed drilldown option.
 
@@ -3874,6 +3876,7 @@ class AnalyticsApplication:
             value=value,
             allowed_element_ids=allowed_element_ids,
             row_filters=row_filters,
+            options=options,
         )
         # 诊断里的 request 记实际执行的 continuation；链式下钻的语义恢复
         # 走 artifact.response.semantic_query，不依赖这里。

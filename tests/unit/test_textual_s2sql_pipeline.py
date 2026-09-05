@@ -1699,3 +1699,56 @@ class TestExplicitLimitIsNotTruncation:
         physical = translated.physical_query
         # 多出来的那一行只用来判断「还有没有」，执行器会把它切掉并标 truncated。
         assert physical.sql.rstrip().endswith(f"LIMIT {physical.result_limit + 1}")
+
+
+class TestAssistantRowLimits:
+    """助手级返回行数覆盖数据集发布配置：允许调高；超出时的原话要说清要了多少、最多多少。"""
+
+    def test_max_rows_override_allows_more_than_the_published_maximum(self, sales_release) -> None:
+        from knowflow_analytics.contracts import RowLimits
+
+        s2sql = 'SELECT "区域", SUM("净收入") FROM "销售经营" GROUP BY "区域" LIMIT 3000'
+        with pytest.raises(TranslationError):
+            S2SqlSemanticTranslator().translate(
+                release=sales_release, dataset_id="sales_dataset", corrected_s2sql=s2sql
+            )
+
+        translated = S2SqlSemanticTranslator().translate(
+            release=sales_release,
+            dataset_id="sales_dataset",
+            corrected_s2sql=s2sql,
+            row_limits=RowLimits(max_rows=5_000),
+        )
+
+        assert translated.physical_query.result_limit == 3_000
+
+    def test_exceeding_max_rows_says_how_many_and_how_much(self, sales_release) -> None:
+        from knowflow_analytics.contracts import RowLimits
+
+        with pytest.raises(TranslationError) as raised:
+            S2SqlSemanticTranslator().translate(
+                release=sales_release,
+                dataset_id="sales_dataset",
+                corrected_s2sql=(
+                    'SELECT "区域", SUM("净收入") FROM "销售经营" GROUP BY "区域" LIMIT 3000'
+                ),
+                row_limits=RowLimits(max_rows=2_000),
+            )
+
+        assert getattr(raised.value, "code", None) == "QUERY_LIMIT_EXCEEDED"
+        assert "3000 行" in str(raised.value)
+        assert "2000 行" in str(raised.value)
+
+    def test_default_rows_override_applies_when_the_query_has_no_limit(self, sales_release) -> None:
+        from knowflow_analytics.contracts import RowLimits
+
+        translated = S2SqlSemanticTranslator().translate(
+            release=sales_release,
+            dataset_id="sales_dataset",
+            corrected_s2sql='SELECT "区域", SUM("净收入") FROM "销售经营" GROUP BY "区域"',
+            row_limits=RowLimits(default_rows=30),
+        )
+
+        physical = translated.physical_query
+        assert physical.result_limit == 30
+        assert physical.sql.rstrip().endswith("LIMIT 31")

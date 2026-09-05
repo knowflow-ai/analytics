@@ -393,6 +393,125 @@ def test_purely_referential_follow_up_is_rewritten_instead_of_failing_to_map(
     assert history.saved[0].effective_question == "华东地区的净收入是多少？"
 
 
+class _DimensionAddingGateway:
+    """改写把上一轮的分组维度塞进了一个只带过滤值的追问。"""
+
+    def __init__(self) -> None:
+        self.purposes: list[str] = []
+        self.s2sql_questions: list[str] = []
+
+    def generate_json(self, **kwargs):
+        purpose = kwargs["purpose"]
+        self.purposes.append(purpose)
+        if purpose == "analytics.multi_turn_rewrite":
+            return {"rewritten_question": "华东各渠道的净收入是多少？"}
+        self.s2sql_questions.append(kwargs["messages"][-1]["content"])
+        return {
+            "thought": "华东的净收入",
+            "sql": 'SELECT SUM("净收入") FROM "销售经营" WHERE "区域" = \'华东\'',
+        }
+
+
+def _previous_turn(sales_index) -> QueryHistoryTurn:
+    return QueryHistoryTurn(
+        question="各区域净收入是多少？",
+        effective_question="各区域净收入是多少？",
+        corrected_s2sql='SELECT "区域", SUM("净收入") FROM "销售经营" GROUP BY "区域"',
+        mapping=SemanticMapper().map(
+            question="各区域净收入是多少？",
+            dataset_id="sales_dataset",
+            index=sales_index,
+            mode=MapMode.STRICT,
+        ),
+        dataset_id="sales_dataset",
+        release_id="release_sales_v1",
+        spec_hash="fixture-v1",
+        index_snapshot_id=sales_index.id,
+    )
+
+
+def _final_parsing_detail(response) -> dict:
+    return next(step for step in response.trace if step.stage.value == "FINAL_PARSING").detail
+
+
+def test_a_complete_question_is_not_rewritten_even_with_history(
+    sales_release,
+    sales_index,
+) -> None:
+    """原话自带指标 → 不改写（实机：「各门店上个月销售额是多少」被续上了「其中太古里店
+    的销售额占比」，一个完整的问题被上一轮的目标改写）。"""
+
+    gateway = _RecordingGateway()
+    history = _QueryHistory(_previous_turn(sales_index))
+    service = AnalyticsQueryService(
+        releases=_ReleaseProvider(sales_release, sales_index),
+        orchestrator=CandidateOrchestrator(
+            mapper=SemanticMapper(), llm_parser=LlmS2SqlParser(gateway)
+        ),
+        translator=SemanticTranslator(),
+        executor=_CapturingExecutor(),
+        multi_turn_rewriter=MultiTurnRewriter(gateway, enabled=True),
+        query_history=history,
+    )
+
+    response = service.query(
+        QueryRequest(
+            project_id="sales",
+            question="各区域净收入是多少？",
+            dataset_ids=("sales_dataset",),
+            conversation_id="conversation-1",
+            include_diagnostics=True,
+        ),
+        actor_id="user-1",
+    )
+
+    assert response.state is QueryState.COMPLETED
+    # 改写模型根本没被调用。
+    assert gateway.purposes == ["analytics.s2sql"]
+    assert history.saved[0].effective_question == "各区域净收入是多少？"
+    assert _final_parsing_detail(response)["multi_turn_gate"] == "own_metric"
+
+
+def test_a_rewrite_that_adds_a_grouping_dimension_falls_back_to_the_raw_question(
+    sales_release,
+    sales_index,
+) -> None:
+    """改写新增了原话没有的分组维度 → 作废，按原话继续（实机：「2024 年开业的门店
+    有多少家」被续上「各城市」）。第二道门只做词表匹配，不调向量模型。"""
+
+    gateway = _DimensionAddingGateway()
+    history = _QueryHistory(_previous_turn(sales_index))
+    service = AnalyticsQueryService(
+        releases=_ReleaseProvider(sales_release, sales_index),
+        orchestrator=CandidateOrchestrator(
+            mapper=SemanticMapper(), llm_parser=LlmS2SqlParser(gateway)
+        ),
+        translator=SemanticTranslator(),
+        executor=_CapturingExecutor(),
+        multi_turn_rewriter=MultiTurnRewriter(gateway, enabled=True),
+        query_history=history,
+    )
+
+    response = service.query(
+        QueryRequest(
+            project_id="sales",
+            question="华东呢？",
+            dataset_ids=("sales_dataset",),
+            conversation_id="conversation-1",
+            include_diagnostics=True,
+        ),
+        actor_id="user-1",
+    )
+
+    assert response.state is QueryState.COMPLETED
+    assert gateway.purposes == ["analytics.multi_turn_rewrite", "analytics.s2sql"]
+    # 生成 S2SQL 时看到的是原话，不是带「各渠道」的改写。
+    assert "华东呢？" in gateway.s2sql_questions[-1]
+    assert "各渠道" not in gateway.s2sql_questions[-1]
+    assert history.saved[0].effective_question == "华东呢？"
+    assert _final_parsing_detail(response)["multi_turn_gate"] == "added_dimension"
+
+
 def test_follow_up_rewrite_skips_a_previous_scope_outside_the_allowed_range(
     sales_release,
     sales_index,
@@ -922,6 +1041,7 @@ def test_detail_measure_filter_is_explained_with_business_names(
         "x": None,
         "series": None,
         "x_time": False,
+        "x_grain": None,
         "y": ("refund_amount",),
         "y_units": [None],
         "y_formats": ["number"],

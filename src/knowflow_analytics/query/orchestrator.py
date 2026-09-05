@@ -176,14 +176,19 @@ class CandidateOrchestrator:
         index: SemanticIndexSnapshot,
         tenant_id: str = "",
         allowed_element_ids: frozenset[str] | None = None,
+        include_embeddings: bool = True,
     ) -> MappingEvidence:
-        """Run the request's expensive semantic retrieval once across all Scopes."""
+        """Run the request's expensive semantic retrieval once across all Scopes.
+
+        ``include_embeddings=False`` 只做词表精确/关键词匹配，不调向量模型——给只需要
+        精确证据的确定性判定用（多轮改写的门）。
+        """
 
         return self._mapper.collect_evidence(
             question=question,
             dataset_ids=dataset_ids,
             index=index,
-            include_embeddings=True,
+            include_embeddings=include_embeddings,
             tenant_id=tenant_id,
             allowed_element_ids=allowed_element_ids,
         )
@@ -390,6 +395,7 @@ class CandidateOrchestrator:
                     mapping=effective,
                     now=now,
                     selected_time_dimension_id=selected_time_dimension_id,
+                    time_override=options.default_time_window if options is not None else None,
                 ),
                 effective,
                 None,
@@ -612,6 +618,9 @@ class CandidateOrchestrator:
                         mapping=all_mapping,
                         now=now,
                         selected_time_dimension_id=selected_time_dimension_id,
+                        time_override=(
+                            options.default_time_window if options is not None else None
+                        ),
                     )
                     if all_rule_candidate is None:
                         emit(
@@ -659,6 +668,7 @@ class CandidateOrchestrator:
         query: SemanticQuery,
         release: SemanticRelease,
         now: datetime | None = None,
+        options: QueryOptions | None = None,
     ) -> CorrectedStructuredQuery:
         """Validate one structured semantic query."""
 
@@ -666,6 +676,7 @@ class CandidateOrchestrator:
             query=query,
             release=release,
             now=now,
+            time_override=options.default_time_window if options is not None else None,
         )
 
     @staticmethod

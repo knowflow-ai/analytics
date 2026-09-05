@@ -35,9 +35,10 @@ class TestBlankMeansFollowTheDeployment:
         用 ``or`` 写这段就会踩这个坑：False or True == True。
         """
 
-        assert QueryOptions(s2sql_corrector_enabled=False).merged(
-            "s2sql_corrector_enabled", True
-        ) is False
+        assert (
+            QueryOptions(s2sql_corrector_enabled=False).merged("s2sql_corrector_enabled", True)
+            is False
+        )
 
     def test_one_vote_is_a_choice_too(self) -> None:
         """把投票次数明确设成 1（关闭）不能回落成全局的 5。"""
@@ -153,3 +154,38 @@ class TestTheValueActuallyReachesTheReadSite:
         assert _correct(None) == 0, "全局关着且没覆盖时不该调模型"
         assert _correct(QueryOptions()) == 0, "空 options 等同于跟随全局"
         assert _correct(QueryOptions(s2sql_corrector_enabled=True)) == 1, "助手打开就该跑"
+
+
+class TestRowLimits:
+    """助手级返回行数：空跟随数据集发布配置，填了盖过它；默认不得高于上限。"""
+
+    def test_blank_follows_the_dataset(self) -> None:
+        limits = QueryOptions().row_limits()
+
+        assert limits.default_rows is None
+        assert limits.max_rows is None
+
+    def test_values_reach_the_translator_shape(self) -> None:
+        limits = QueryOptions(default_rows=50, max_rows=5_000).row_limits()
+
+        assert (limits.default_rows, limits.max_rows) == (50, 5_000)
+
+    def test_default_rows_above_max_rows_is_rejected(self) -> None:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            QueryOptions(default_rows=300, max_rows=200)
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            pytest.param({"max_rows": 0}, id="上限不能为 0"),
+            pytest.param({"max_rows": 100_001}, id="上限硬顶 10 万"),
+            pytest.param({"default_rows": 0}, id="默认行数不能为 0"),
+        ],
+    )
+    def test_bounds(self, payload: dict[str, int]) -> None:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            QueryOptions(**payload)

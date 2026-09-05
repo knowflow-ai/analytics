@@ -1669,3 +1669,33 @@ class TestNamesDefinedInsideTheQuery:
         )
 
         assert translated.physical_query.sql
+
+
+class TestExplicitLimitIsNotTruncation:
+    """「芝士蛋糕哪个超市卖的最好」→ LIMIT 1：物理 SQL 曾一律写成上限 + 1 探测「还有没有」，
+    于是数据库多回一行、执行器判成截断，答案对了却顶着「结果超出上限」的横幅（实机复现）。"""
+
+    def test_explicit_limit_is_written_as_is(self, sales_release) -> None:
+        translated = S2SqlSemanticTranslator().translate(
+            release=sales_release,
+            dataset_id="sales_dataset",
+            corrected_s2sql=(
+                'SELECT "区域", SUM("净收入") FROM "销售经营" '
+                'GROUP BY "区域" ORDER BY SUM("净收入") DESC LIMIT 1'
+            ),
+        )
+
+        physical = translated.physical_query
+        assert physical.result_limit == 1
+        assert physical.sql.rstrip().endswith("LIMIT 1")
+
+    def test_default_limit_still_probes_one_extra_row(self, sales_release) -> None:
+        translated = S2SqlSemanticTranslator().translate(
+            release=sales_release,
+            dataset_id="sales_dataset",
+            corrected_s2sql='SELECT "区域", SUM("净收入") FROM "销售经营" GROUP BY "区域"',
+        )
+
+        physical = translated.physical_query
+        # 多出来的那一行只用来判断「还有没有」，执行器会把它切掉并标 truncated。
+        assert physical.sql.rstrip().endswith(f"LIMIT {physical.result_limit + 1}")

@@ -238,7 +238,8 @@ def test_translates_single_model_topn_with_bound_filters(sales_release):
 
     assert 'SUM("m0"."net_amount") AS "net_revenue"' in physical.sql
     assert 'GROUP BY "m0"."region"' in physical.sql
-    assert 'ORDER BY "net_revenue" DESC LIMIT 11' in physical.sql
+    # 用户给的 LIMIT 10 就取 10 行：多拉一行会让恰好 10 行被判成「截断」。
+    assert 'ORDER BY "net_revenue" DESC LIMIT 10' in physical.sql
     assert physical.result_limit == 10
     assert physical.parameters == {"p0": "直营", "p1": "电商"}
     assert physical.relation_ids == ()
@@ -378,7 +379,10 @@ def test_dimension_only_query_is_distinct_and_deterministic(sales_release):
     )
 
     assert physical.sql.startswith('SELECT DISTINCT "m0"."region" AS "region"')
+    # 没给 LIMIT 时按默认上限多拉一行，多出来的那行只用来判断「还有没有」。
     assert 'ORDER BY "region" ASC LIMIT 101' in physical.sql
+    assert physical.result_limit == 100
+    assert "limit" in physical.applied_defaults
 
 
 def test_metrics_with_different_fixed_filter_scopes_share_one_query(sales_release):

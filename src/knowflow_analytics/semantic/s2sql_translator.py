@@ -779,8 +779,9 @@ class _OntologyQueryParser:
             )
 
         result_limit = _result_limit(statement.tree, statement.dataset, statement.query_type)
+        physical_limit = _physical_limit(statement.tree, result_limit)
         _parameterize_literals(statement.tree, parameters)
-        statement.tree.set("limit", exp.Limit(expression=exp.Literal.number(result_limit + 1)))
+        statement.tree.set("limit", exp.Limit(expression=exp.Literal.number(physical_limit)))
         columns = _output_columns(statement)
 
         inner_table = "__kf_dataset"
@@ -909,8 +910,9 @@ class _OntologyQueryParser:
             relation_ids.extend(branch_relations)
 
         result_limit = _result_limit(statement.tree, statement.dataset, statement.query_type)
+        physical_limit = _physical_limit(statement.tree, result_limit)
         _parameterize_literals(statement.tree, parameters)
-        statement.tree.set("limit", exp.Limit(expression=exp.Literal.number(result_limit + 1)))
+        statement.tree.set("limit", exp.Limit(expression=exp.Literal.number(physical_limit)))
         columns = _output_columns(statement)
         with_clause = statement.tree.args.get("with_")
         if with_clause is None:
@@ -1809,6 +1811,18 @@ def _result_limit(
             code="QUERY_LIMIT_EXCEEDED",
         )
     return result
+
+
+def _physical_limit(tree: exp.Query, result_limit: int) -> int:
+    """物理 SQL 上真正写的 LIMIT。
+
+    没写 LIMIT 时按默认上限多拉一行：多出来的那行只用来判断「还有没有」，执行器据此
+    标 ``truncated`` 并把它切掉。用户自己写了 ``LIMIT n``（「哪个卖得最好」→ LIMIT 1）
+    就取恰好 n 行——到顶是他要的，不是被截断；多拉一行会让「前 1 行」被当成截断提示。
+    必须在 ``_parameterize_literals`` 之前判断，否则 LIMIT 字面量已经换成占位符。
+    """
+
+    return result_limit if _explicit_limit(tree) is not None else result_limit + 1
 
 
 def _explicit_limit(tree: exp.Query) -> int | None:

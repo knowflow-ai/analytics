@@ -442,6 +442,9 @@ class SemanticTranslator:
 
         applied_defaults: list[str] = []
         limit = query.limit
+        # 用户自己给的 LIMIT 到顶是他要的，不是被截断；只有用默认上限时才多拉一行
+        # 探测「还有没有」。否则「哪个卖得最好」的 LIMIT 1 会被当成截断提示（实机复现）。
+        explicit_limit = limit is not None
         if limit is None:
             limit = (
                 dataset.max_limit
@@ -454,7 +457,7 @@ class SemanticTranslator:
                 f"limit exceeds dataset maximum {dataset.max_limit}",
                 code="QUERY_LIMIT_EXCEEDED",
             )
-        sql_parts.append(f" LIMIT {limit + 1}")
+        sql_parts.append(f" LIMIT {limit if explicit_limit else limit + 1}")
         sql = "".join(sql_parts)
         try:
             tree = sqlglot.parse_one(sql, read="postgres")

@@ -24,10 +24,6 @@ services:
         condition: service_healthy
     environment:
       KNOWFLOW_OSS_CATALOG_DATABASE_URL: postgresql+psycopg://analytics:${CATALOG_DB_PASSWORD:-analytics}@catalog-db:5432/analytics_catalog
-      KNOWFLOW_OSS_WEAK_METRIC_ADJUDICATION_MODE: ${KNOWFLOW_OSS_WEAK_METRIC_ADJUDICATION_MODE:-shadow}
-      KNOWFLOW_OSS_SEMANTIC_INTENT_ADJUDICATION_MODE: ${KNOWFLOW_OSS_SEMANTIC_INTENT_ADJUDICATION_MODE:-shadow}
-      KNOWFLOW_OSS_ANALYSIS_OBJECT_ADJUDICATION_MODE: ${KNOWFLOW_OSS_ANALYSIS_OBJECT_ADJUDICATION_MODE:-shadow}
-      KNOWFLOW_OSS_CONFIRMATION_MEMORY_TTL_SECONDS: ${KNOWFLOW_OSS_CONFIRMATION_MEMORY_TTL_SECONDS:-2592000}
       # Optional shared password for the web UI. Leave empty for no login screen.
       KNOWFLOW_OSS_ACCESS_PASSWORD: ${KNOWFLOW_OSS_ACCESS_PASSWORD:-}
     # Docker Desktop provides this name automatically. The explicit host-gateway

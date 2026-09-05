@@ -74,7 +74,7 @@ export function DataSourcesDialog({ open, onClose }: { open: boolean; onClose: (
     <>
       <Dialog
         open={open}
-        title="数据源"
+        title="数据库连接"
         onClose={onClose}
         footer={<Button onClick={onClose}>关闭</Button>}
       >

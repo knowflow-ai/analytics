@@ -224,7 +224,7 @@ export function ProjectsPage({ ready }: { ready: boolean }) {
     <div>
       <div className="mb-5 flex items-center justify-between">
         <div>
-          <h1 className="text-lg font-semibold text-slate-900">项目</h1>
+          <h1 className="text-lg font-semibold text-slate-900">数据源</h1>
           <p className="mt-0.5 text-xs text-slate-400">
             一个项目对应一套语义模型：导入表、建关系、AI 建模、发布，然后用自然语言提问。
           </p>
@@ -242,7 +242,7 @@ export function ProjectsPage({ ready }: { ready: boolean }) {
                 icon={<Database className="h-4 w-4" />}
                 onClick={() => setManagingSources(true)}
               >
-                数据源
+                数据库连接
               </Button>
             </>
           )}

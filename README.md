@@ -241,18 +241,8 @@ postgresql://user:password@host.docker.internal:5432/your_database
 |---|---|---|
 | `KNOWFLOW_OSS_CATALOG_DATABASE_URL` | 必填 | 服务自己的 catalog 库 |
 | `KNOWFLOW_OSS_DATA_DIR` | `./data` | 独立版设置目录 |
-| `KNOWFLOW_OSS_MODELING_MAX_CONCURRENCY` | `3` | AI 建模并发数 |
-| `KNOWFLOW_OSS_MODEL_TIMEOUT_SECONDS` | `120` | 单次模型调用超时 |
-| `KNOWFLOW_OSS_MODELING_SAMPLE_VALUES` | `true` | 是否采样低基数维度值 |
-| `KNOWFLOW_OSS_MULTI_TURN_ENABLED` | `false` | 是否启用追问改写 |
-| `KNOWFLOW_OSS_SELF_CONSISTENCY_NUMBER` | `1` | S2SQL 多次生成投票，`1` 表示关闭 |
-| `KNOWFLOW_OSS_WEAK_METRIC_ADJUDICATION_MODE` | `shadow` | 单弱指标 AI 裁决模式 |
-| `KNOWFLOW_OSS_SEMANTIC_INTENT_ADJUDICATION_MODE` | `shadow` | 跨类型/多短语裁决模式 |
-| `KNOWFLOW_OSS_ANALYSIS_OBJECT_ADJUDICATION_MODE` | `shadow` | 多业务粒度裁决模式 |
-| `KNOWFLOW_OSS_CONFIRMATION_MEMORY_TTL_SECONDS` | `2592000` | 人工确认记忆 TTL |
+| `KNOWFLOW_OSS_ACCESS_PASSWORD` | 空 | 界面前的共享口令 |
 | `KNOWFLOW_OSS_ALLOW_DEBUG_SQL` | `true` | 是否允许授权诊断返回物理 SQL |
-
-三个 AI 裁决开关默认均为 `shadow`：系统记录判断，但仍由用户确认。请用自己的真实问题完成校准后再考虑 `auto`。
 
 </details>
 
@@ -281,7 +271,7 @@ cd web && npm run dev
 自己构建独立镜像：
 
 ```bash
-docker build -f Dockerfile.oss -t knowflowai/analytics:local .
+docker build -t knowflowai/analytics:local .
 KNOWFLOW_ANALYTICS_IMAGE=knowflowai/analytics:local \
 docker compose -f docker-compose.oss.yml up -d
 ```

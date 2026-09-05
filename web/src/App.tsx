@@ -28,7 +28,7 @@ function TopNav() {
         </NavLink>
         <nav className="flex items-center gap-1">
           <NavLink to="/" end className={link}>
-            项目
+            数据源
           </NavLink>
           {EDITION !== 'embedded' && (
             <NavLink to="/settings" className={link}>

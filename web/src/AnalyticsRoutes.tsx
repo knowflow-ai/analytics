@@ -15,7 +15,6 @@ import { ProjectsPage } from './pages/projects';
 const WorkbenchPage = lazy(() =>
   import('./pages/workbench').then((m) => ({ default: m.WorkbenchPage })),
 );
-const AskPage = lazy(() => import('./pages/ask').then((m) => ({ default: m.AskPage })));
 const SettingsPage = lazy(() =>
   import('./pages/settings').then((m) => ({ default: m.SettingsPage })),
 );
@@ -48,7 +47,6 @@ export function AnalyticsRoutes() {
       ? [{ path: '/settings', element: lazily(<SettingsPage />) }]
       : []),
     { path: '/projects/:projectId', element: lazily(<WorkbenchPage />) },
-    { path: '/projects/:projectId/ask', element: lazily(<AskPage />) },
     { path: '*', element: <ProjectsPage ready={ready} /> },
   ]);
   if (status.isPending) return <Spinner />;

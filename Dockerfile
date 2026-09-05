@@ -1,4 +1,8 @@
-# Open-source edition: the shared analytics core + bundled web UI, no RAGFlow.
+# 唯一镜像，两种运行方式：
+#   开源独立版（默认 CMD）：核心 + 内置 Web UI + 开源壳，`knowflow-analytics-oss`
+#   商业版（嵌入 RAGFlow）：只跑核心 API，由 compose 覆盖 command：
+#     uvicorn knowflow_analytics.server:create_app --factory --host 0.0.0.0 --port 9395
+#   两者装的是同一个 Python 包，各读各的环境变量前缀（KNOWFLOW_OSS_* / KNOWFLOW_ANALYTICS_*）。
 FROM node:20-slim AS web
 WORKDIR /web
 COPY web/package.json web/package-lock.json ./

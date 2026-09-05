@@ -241,18 +241,8 @@ postgresql://user:password@host.docker.internal:5432/your_database
 |---|---|---|
 | `KNOWFLOW_OSS_CATALOG_DATABASE_URL` | required | Service-owned catalog database |
 | `KNOWFLOW_OSS_DATA_DIR` | `./data` | Standalone settings directory |
-| `KNOWFLOW_OSS_MODELING_MAX_CONCURRENCY` | `3` | Parallel AI modelling calls |
-| `KNOWFLOW_OSS_MODEL_TIMEOUT_SECONDS` | `120` | Per-model-call timeout |
-| `KNOWFLOW_OSS_MODELING_SAMPLE_VALUES` | `true` | Sample low-cardinality dimension values |
-| `KNOWFLOW_OSS_MULTI_TURN_ENABLED` | `false` | Enable follow-up rewriting |
-| `KNOWFLOW_OSS_SELF_CONSISTENCY_NUMBER` | `1` | S2SQL majority-vote count; `1` disables it |
-| `KNOWFLOW_OSS_WEAK_METRIC_ADJUDICATION_MODE` | `shadow` | Single weak-metric AI adjudication |
-| `KNOWFLOW_OSS_SEMANTIC_INTENT_ADJUDICATION_MODE` | `shadow` | Cross-type/multi-phrase adjudication |
-| `KNOWFLOW_OSS_ANALYSIS_OBJECT_ADJUDICATION_MODE` | `shadow` | Multi-business-grain adjudication |
-| `KNOWFLOW_OSS_CONFIRMATION_MEMORY_TTL_SECONDS` | `2592000` | Human confirmation memory TTL |
+| `KNOWFLOW_OSS_ACCESS_PASSWORD` | empty | Shared password in front of the UI |
 | `KNOWFLOW_OSS_ALLOW_DEBUG_SQL` | `true` | Allow physical SQL in authorized diagnostics |
-
-All three AI adjudication gates default to `shadow`: the system records the decision but still asks the user. Calibrate on your own real questions before considering `auto`.
 
 </details>
 
@@ -281,7 +271,7 @@ cd web && npm run dev
 Build the standalone image locally:
 
 ```bash
-docker build -f Dockerfile.oss -t knowflowai/analytics:local .
+docker build -t knowflowai/analytics:local .
 KNOWFLOW_ANALYTICS_IMAGE=knowflowai/analytics:local \
 docker compose -f docker-compose.oss.yml up -d
 ```

@@ -10,7 +10,6 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { Link } from '@analytics/lib/router';
 import {
   createQualityReport,
   getCurrentEvaluation,
@@ -66,7 +65,6 @@ import {
 } from './publish-checks';
 import { QualityReportCard } from './quality-report-card';
 import { StructuredTrial } from './structured-trial';
-import { appPath } from '@analytics/api/edition';
 import { ANALYTICS_TASK_PANEL_CLASS, scrollableAncestor } from '@analytics/lib/layout';
 
 const CHECK_BOX: Record<CheckState, string> = {
@@ -354,13 +352,9 @@ export function PublishPanel({
                   重跑
                 </Button>
               )}
-              {revision.state === 'published' ? (
-                <Link to={appPath(`/projects/${projectId}/ask`)}>
-                  <Button size="sm" variant="primary">
-                    开始问数
-                  </Button>
-                </Link>
-              ) : (
+              {/* 问数入口不在建模工作台里：开源版只做语义建模与发布前验证，
+                  问数助手与报表是商业版的产品面。 */}
+              {revision.state !== 'published' && (
                 <Button
                   size="sm"
                   variant={ready ? 'primary' : 'default'}

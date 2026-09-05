@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Check, MessageSquareText } from 'lucide-react';
+import { ArrowLeft, Check } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from '@analytics/lib/router';
 import {
@@ -232,17 +232,6 @@ export function WorkbenchPage() {
             <Button size="sm" loading={derive.isPending} onClick={() => derive.mutate()}>
               基于此版本继续编辑
             </Button>
-          )}
-          {summary.data.active_release_id && (
-            <Link to={appPath(`/projects/${projectId}/ask`)}>
-              <Button
-                size="sm"
-                variant="primary"
-                icon={<MessageSquareText className="h-3.5 w-3.5" />}
-              >
-                开始问数
-              </Button>
-            </Link>
           )}
         </div>
       </div>

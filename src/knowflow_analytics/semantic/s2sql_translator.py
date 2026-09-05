@@ -595,12 +595,19 @@ class _MetricRatioParser:
                 continue
             expression = projection.this if isinstance(projection, exp.Alias) else projection
             if not any(expression.sql() == item.sql() for item in group_expressions):
+                # 裸的受治理指标列（``"销售金额"`` 不带 SUM）在普通路径里本来就合法——
+                # 列解析阶段已把它记进 bare_metric_ids，展开时会套上治理聚合。期间比
+                # 这条路不能比普通路径更严：实机「咖啡按月环比销售情况」模型写
+                # ``"销售金额", RATIO_ROLL("销售金额")``，被这里当成非聚合列拒掉。
                 if expression.find(exp.AggFunc) is None:
-                    raise _invalid(
-                        "period ratio projections must be grouped dimensions, "
-                        "aggregates, or ratio metrics",
-                        code="S2SQL_RATIO_SHAPE_INVALID",
-                    )
+                    wrapped = _wrap_bare_governed_metric(statement, expression)
+                    if wrapped is None:
+                        raise _invalid(
+                            "period ratio projections must be grouped dimensions, "
+                            "aggregates, or ratio metrics",
+                            code="S2SQL_RATIO_SHAPE_INVALID",
+                        )
+                    expression = wrapped
                 aggregate_projections.add(index)
             alias = projection.alias or f"__kf_ratio_group_{index}"
             base.expressions[index].replace(exp.alias_(expression.copy(), alias, quoted=True))
@@ -1318,12 +1325,21 @@ def _ratio_metric_aggregate(
 ) -> exp.Expression:
     metric = next(item for item in statement.release.metrics if item.id == call.metric_id)
     argument = function.expressions[0].copy()
+    # 模型把治理聚合自己写了一遍——``RATIO_ROLL(SUM("销售金额"))``，而销售金额的治理
+    # 聚合就是 SUM。这和裸引用是同一个意思，剥掉外层按裸引用处理；不这么做的话
+    # 实机「咖啡按月环比销售情况」整条重试链 48 秒每次都写成这个形状，最后拒答。
+    # 只剥"与治理聚合完全一致、且里面就是一个裸列"的那一层；聚合不同（AVG 对 SUM）
+    # 或再套一层的仍然拒绝——那才是会展开成 SUM(SUM(…)) 的形状。
+    if metric.aggregation is not None:
+        unwrapped = _strip_matching_governed_aggregate(argument, metric.aggregation)
+        if unwrapped is not None:
+            argument = unwrapped
     pre_aggregated = isinstance(argument, exp.AggFunc) or argument.find(exp.AggFunc) is not None
     if metric.aggregation is not None:
         # The metric position stays a bare governed reference: the governed
         # aggregation is applied here.  An argument that already aggregates
-        # (``RATIO_TO_TOTAL(SUM("净收入"), …)``) would be wrapped a second time
-        # into ``SUM(SUM(…))``, which every governed stage accepts and only
+        # (``RATIO_TO_TOTAL(AVG("净收入"), …)``) would be wrapped a second time
+        # into ``SUM(AVG(…))``, which every governed stage accepts and only
         # PostgreSQL rejects - at execution time, past the parser retry that can
         # still produce a correct candidate.
         if pre_aggregated:
@@ -1460,8 +1476,8 @@ def _metric_scoped_expression(
         return expression
     translator = SemanticTranslator()
     indexes = _ReleaseIndexes(
-            statement.release, statement.visible_element_ids, statement.row_filters
-        )
+        statement.release, statement.visible_element_ids, statement.row_filters
+    )
     literals = _InlineLiteralBuilder({})
     conditions = [
         translator._fixed_filter_sql(
@@ -1602,6 +1618,69 @@ def _metric_expression(
     # 与结构化路径同一防护:0 分母出 NULL,不让客户问数直接吃数据库报错。
     _guard_divisions(tree)
     return tree
+
+
+def _wrap_bare_governed_metric(
+    statement: _QueryStatement, expression: exp.Expression
+) -> exp.Expression | None:
+    """裸指标列（token）套上治理聚合；不是受治理指标返回 None。
+
+    同一个指标既裸写在投影里又出现在 RATIO_* 里时（``"销售金额", RATIO_ROLL("销售金额")``），
+    _MetricExpressionParser 为保护比率参数不把它登记成裸指标（否则 token 整体展开会翻出
+    SUM(SUM(…))），于是裸的那一列一直没人给它加聚合。这里就地包一层，与
+    _ratio_metric_aggregate 对比率参数做的事完全对称。
+    """
+
+    if not isinstance(expression, exp.Column):
+        return None
+    metric = None
+    resolved = statement.semantic_tokens.get(expression.name)
+    if resolved is not None and getattr(resolved.kind, "value", resolved.kind) == "metric":
+        metric = next((item for item in statement.release.metrics if item.id == resolved.id), None)
+    else:
+        # 走到期间比这一步时，_MetricExpressionParser 已把语义 token 展开成物理字段
+        # token（比率指标不登记为裸指标，展开出来就是裸列 __kf_field_N）。按字段反查
+        # 这条语句里的比率指标——裸的那一列就是它自己。
+        field_id = statement.field_tokens.get(expression.name)
+        if field_id is not None:
+            ratio_ids = {call.metric_id for call in statement.ratio_calls}
+            metric = next(
+                (
+                    item
+                    for item in statement.release.metrics
+                    if item.id in ratio_ids and item.field_id == field_id
+                ),
+                None,
+            )
+    if metric is None or metric.aggregation is None:
+        return None
+    statement.aggregation_overrides.setdefault(metric.id, metric.aggregation)
+    return _aggregate_expression(expression.copy(), metric.aggregation)
+
+
+def _strip_matching_governed_aggregate(
+    argument: exp.Expression, aggregation: Aggregation
+) -> exp.Expression | None:
+    """``SUM("x")`` 在治理聚合为 SUM 时返回 ``"x"``；形状不完全一致返回 None。"""
+
+    if aggregation is Aggregation.COUNT_DISTINCT:
+        inner = argument.this if isinstance(argument, exp.Count) else None
+        if isinstance(inner, exp.Distinct) and len(inner.expressions) == 1:
+            column = inner.expressions[0]
+            return column.copy() if isinstance(column, exp.Column) else None
+        return None
+    constructors: dict[Aggregation, type[exp.AggFunc]] = {
+        Aggregation.SUM: exp.Sum,
+        Aggregation.COUNT: exp.Count,
+        Aggregation.AVG: exp.Avg,
+        Aggregation.MIN: exp.Min,
+        Aggregation.MAX: exp.Max,
+    }
+    expected = constructors.get(aggregation)
+    if expected is None or type(argument) is not expected:
+        return None
+    column = argument.this
+    return column.copy() if isinstance(column, exp.Column) else None
 
 
 def _aggregate_expression(
@@ -1933,9 +2012,7 @@ def _output_columns(statement: _QueryStatement) -> tuple[OutputColumn, ...]:
                     name=projection.alias or f"计算列{index + 1}",
                     kind=kind_value,
                     time_grain=(
-                        _projection_time_grain(original_projection)
-                        if derived_dimension
-                        else None
+                        _projection_time_grain(original_projection) if derived_dimension else None
                     ),
                 )
             )
@@ -2109,7 +2186,6 @@ def _exported_names(select: exp.Select, seen: frozenset[int] = frozenset()) -> s
         for source in _derived_source_selects(select):
             names.update(_exported_names(source, seen))
     return names
-
 
 
 def _feeds_an_outer_scope(select: exp.Select) -> bool:

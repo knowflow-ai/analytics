@@ -448,14 +448,29 @@ def _failure_group_expressions():
     phrase = func.coalesce(func.nullif(term, ""), func.nullif(span, ""), "")
     kind = func.coalesce(payload["kind"].as_string(), "refused")
     resolution = func.coalesce(payload["resolution"].as_string(), "")
-    question = func.coalesce(payload["question"].as_string(), "")
+    # 自足问句优先：追问和下钻的原话（「那环比呢」「时间范围改为『近 90 天』」）
+    # 单独拎出来毫无意义——建模者读不懂，拿去试问也跑不出同一件事。改写后的
+    # 完整问题才是这条记录真正问的东西；没有改写才退回原话。
+    question = func.coalesce(
+        func.nullif(payload["effective_question"].as_string(), ""),
+        payload["question"].as_string(),
+        "",
+    )
     # 有说法就按说法聚合，没有才退回按问句——一个说法是一件事，同一句话问两次也是。
     group_question = func.coalesce(func.nullif(phrase, ""), question)
     return kind, phrase, resolution, question, group_question
 
 
 # 带正解的排前面（照着补别名即可），拒答排后面（还得先诊断）。次数在同档内比。
-_KIND_ORDER = {"clarified": 0, "inferred": 1, "unknown_value": 2, "refused": 3}
+# 排序：系统自己察觉的四类在前（可直接补词典），人给的两类在后。
+_KIND_ORDER = {
+    "clarified": 0,
+    "inferred": 1,
+    "unknown_value": 2,
+    "refused": 3,
+    "disliked": 4,
+    "liked": 5,
+}
 
 
 def _schema_snapshot_storage_id(project_id: str, snapshot_id: str) -> str:
@@ -2290,6 +2305,7 @@ class CatalogStore:
         limit: int = 50,
         offset: int = 0,
         status: str | None = "open",
+        exclude_kinds: tuple[str, ...] = (),
     ) -> tuple[tuple[QueryFailureGroup, ...], int]:
         """问数反馈列表：**先按说法聚合，再分页**，返回 (这一页, 总种数)。
 
@@ -2309,6 +2325,10 @@ class CatalogStore:
             condition = and_(condition, query_failures.c.status == status)
 
         kind, phrase, resolution, question, group_question = _failure_group_expressions()
+        # 发布页那条提醒说的是「系统没直接听懂」，点赞不是缺口，不该被算进去。
+        # 过滤必须在聚合之前：total 是 SQL 数出来的真实种数，前端筛只会让数字对不上。
+        if exclude_kinds:
+            condition = and_(condition, kind.notin_(exclude_kinds))
         message = func.coalesce(query_failures.c.payload["message"].as_string(), "")
         grouped = (
             select(

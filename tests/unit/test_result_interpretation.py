@@ -153,3 +153,33 @@ class TestAssistantSwitch:
             )
             is True
         )
+
+
+class TestNumbersAreFormattedBeforeTheModelSeesThem:
+    """实机：同比列是 0.3588429146832662 这种裸浮点，模型原样抄进解读。"""
+
+    def test_delta_and_percent_columns_become_percentages(self) -> None:
+        text = format_result_data(
+            ["月份", "销售金额", "同比增长率", "占比"],
+            [["2026-01", 3138, 0.3588429146832662, 0.2591], ["2026-02", 2470.5, -0.041, 0]],
+            formats={"同比增长率": "delta", "占比": "percent"},
+        )
+        assert "+35.88%" in text and "-4.10%" in text
+        assert "25.91%" in text and "0.00%" in text
+        assert "0.3588429146832662" not in text
+
+    def test_plain_decimals_are_rounded_to_two_places_and_ints_untouched(self) -> None:
+        text = format_result_data(["a", "b", "c"], [[3138, 2470.5, 1 / 3]])
+        assert "3138" in text and "2470.5" in text and "0.33" in text
+        assert "0.333333" not in text
+
+    def test_numeric_strings_from_the_driver_are_formatted_too(self) -> None:
+        # 结果行常是字符串（'3546'、'0.35884…'），同样要收敛。
+        text = format_result_data(
+            ["x", "r"], [["3546", "0.3588429146832662"]], formats={"r": "delta"}
+        )
+        assert "3546" in text and "+35.88%" in text
+
+    def test_null_and_text_cells_pass_through(self) -> None:
+        text = format_result_data(["门店", "备注"], [[None, "上海"]])
+        assert "上海" in text

@@ -127,6 +127,10 @@ export function WorkbenchPage() {
   // 打开对应编辑器后立刻清空。存在这里而不是 URL 里,是因为它只在这一次跳转里
   // 有意义——刷新后重新打开一个空的术语弹窗只会让人困惑。
   const [dictionaryTarget, setDictionaryTarget] = useState<FeedbackFixTarget | null>(null);
+  // 「问数反馈」里点「加入评测集」时带过来的问题：与 dictionaryTarget 同一套机制。
+  // 评测用例的期望有二十多个字段，不能凭一句话空填——必须先在试问里真跑一次，
+  // 由建模者确认答对了再存。所以这里传的是"去试问这句话"，不是"已加入评测集"。
+  const [trialQuestion, setTrialQuestion] = useState<string | null>(null);
   useEffect(() => {
     if (revisionQuery.data) setRevision(revisionQuery.data);
   }, [revisionQuery.data]);
@@ -299,13 +303,23 @@ export function WorkbenchPage() {
               onDictionaryTargetHandled={() => setDictionaryTarget(null)}
             />
           )}
-          {context && step === 'publish' && <PublishPanel {...context} />}
+          {context && step === 'publish' && (
+            <PublishPanel
+              {...context}
+              trialQuestion={trialQuestion}
+              onTrialQuestionHandled={() => setTrialQuestion(null)}
+            />
+          )}
           {context && step === 'feedback' && (
             <AskFeedbackPanel
               {...context}
               onFixInDictionary={(target) => {
                 setDictionaryTarget(target);
                 goTo('catalog');
+              }}
+              onAddToEvaluation={(question) => {
+                setTrialQuestion(question);
+                goTo('publish');
               }}
             />
           )}

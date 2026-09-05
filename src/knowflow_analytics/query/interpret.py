@@ -60,8 +60,41 @@ class _InterpretOutput(BaseModel):
     interpretation: str = Field(min_length=1, max_length=2_000)
 
 
+def _format_cell(value: Any, fmt: str | None) -> str:
+    """给模型看的单元格：占比/同比按百分比，小数最多两位——它只会照抄。
+
+    实机：同比列是 0.3588429146832662 这种裸浮点，模型原样写进解读，一行十几个
+    十六位小数没人读得了。数字只是格式化，不改值。
+    """
+
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, int | float) or (isinstance(value, str) and _looks_numeric(value)):
+        number = float(value)
+        if fmt in {"percent", "delta"}:
+            text = f"{number * 100:.2f}%"
+            return f"+{text}" if fmt == "delta" and number > 0 else text
+        if number.is_integer() and not isinstance(value, float):
+            return str(int(number))
+        return f"{number:.2f}".rstrip("0").rstrip(".") if abs(number) < 1e15 else str(value)
+    return str(value)
+
+
+def _looks_numeric(text: str) -> bool:
+    try:
+        float(text)
+    except ValueError:
+        return False
+    return True
+
+
 def format_result_data(
-    columns: list[str], rows: list[list[Any]], units: dict[str, str] | None = None
+    columns: list[str],
+    rows: list[list[Any]],
+    units: dict[str, str] | None = None,
+    formats: dict[str, str] | None = None,
 ) -> str:
     """把投影后的结果拼成给模型看的表格文本；超出上限就截断并写明。
 
@@ -74,8 +107,14 @@ def format_result_data(
         f"{item}（{units[item]}）" if units and units.get(item) else str(item) for item in columns
     )
     lines = [header]
+    column_formats = [(formats or {}).get(item) for item in columns]
     for row in rows[:MAX_INTERPRETED_ROWS]:
-        lines.append(" | ".join("" if value is None else str(value) for value in row))
+        lines.append(
+            " | ".join(
+                _format_cell(value, column_formats[index] if index < len(column_formats) else None)
+                for index, value in enumerate(row)
+            )
+        )
     if len(rows) > MAX_INTERPRETED_ROWS:
         lines.append(f"(共 {len(rows)} 行，以上只列出前 {MAX_INTERPRETED_ROWS} 行)")
     text = "\n".join(lines)
@@ -128,6 +167,7 @@ class ResultInterpreter:
         rows: list[list[Any]],
         tenant_id: str,
         units: dict[str, str] | None = None,
+        formats: dict[str, str] | None = None,
         filters: list[str] | None = None,
         default_time_window: dict[str, Any] | None = None,
         llm_id: str | None = None,
@@ -146,7 +186,7 @@ class ResultInterpreter:
                         "content": _INTERPRET_USER.format(
                             question=question,
                             context=format_context(filters, default_time_window),
-                            data=format_result_data(columns, rows, units),
+                            data=format_result_data(columns, rows, units, formats),
                         ),
                     },
                 ],

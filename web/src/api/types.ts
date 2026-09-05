@@ -1291,7 +1291,15 @@ export type AnalyticsFeedbackStatus = 'open' | 'resolved' | 'ignored';
  * 页头也报不出真实种数。
  */
 export interface AnalyticsQueryFailure {
-  kind?: 'refused' | 'clarified' | 'inferred' | 'unknown_value';
+  kind?:
+    | 'refused'
+    | 'clarified'
+    | 'inferred'
+    | 'unknown_value'
+    /** 用户点了踩：查询成功、治理关全绿，只有他知道不对。 */
+    | 'disliked'
+    /** 用户点了赞：一条被人确认过的问答。 */
+    | 'liked';
   /** 用户那个说法。空串表示这条没能提出说法，此时按问句聚合。 */
   phrase: string;
   /** 这次的正解：用户选中的成员名，或近似取值建议。没有就是空串。 */

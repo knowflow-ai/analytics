@@ -59,7 +59,7 @@ interface RequestOptions {
    */
   file?: Blob;
   projectId?: string;
-  query?: Record<string, string | number | boolean | undefined>;
+  query?: Record<string, string | number | boolean | string[] | undefined>;
 }
 
 function errorFromPayload(status: number, payload: unknown): ApiError {
@@ -102,7 +102,14 @@ function errorFromPayload(status: number, payload: unknown): ApiError {
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const url = new URL(rewritePath(path), window.location.origin);
   Object.entries(options.query ?? {}).forEach(([key, value]) => {
-    if (value !== undefined) url.searchParams.set(key, String(value));
+    if (value === undefined) return;
+    // 数组要展开成重复参数（FastAPI 的 list[str] 就是这么收的）。用 set 的话
+    // String(['a','b']) 会变成一个 "a,b"，多一个值就静默失效。
+    if (Array.isArray(value)) {
+      value.forEach((item) => url.searchParams.append(key, String(item)));
+      return;
+    }
+    url.searchParams.set(key, String(value));
   });
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (EDITION === 'embedded') {

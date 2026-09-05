@@ -41,6 +41,7 @@ from knowflow_analytics.query.ambiguity import (
     same_name_ambiguities,
     same_name_ambiguity,
     settle_after_parse,
+    structural_member_ids,
 )
 from knowflow_analytics.query.contracts import (
     ClarificationOption,
@@ -704,8 +705,7 @@ class AnalyticsQueryService:
                             # 有多个内部作用域是编译产物重复（用户答不了，要重新发布）；
                             # 否则就是候选范围里没有可问的业务指标（说法没被覆盖）。
                             else (
-                                "当前发布版本存在无法区分的内部分析路径，"
-                                "请联系建模管理员重新发布。"
+                                "当前发布版本存在无法区分的内部分析路径，请联系建模管理员重新发布。"
                             )
                             if self._scope_metric_choice_is_fake(
                                 release,
@@ -912,18 +912,14 @@ class AnalyticsQueryService:
                         severity="warning",
                         summary="问题没有确定到唯一指标，多个事实范围都可行",
                         recommendation=(
-                            "确认指标后重新执行；反复出现同一说法时，"
-                            "把它补进业务词典的别名。"
+                            "确认指标后重新执行；反复出现同一说法时，把它补进业务词典的别名。"
                         ),
                         user_hint="请选择你要分析的内容。",
                     ),
                     question=(
                         "这个问题可以从几个角度分析，请确认你要看什么。"
                         if scope_options
-                        else (
-                            "当前发布版本存在无法区分的内部分析路径，"
-                            "请联系建模管理员重新发布。"
-                        )
+                        else ("当前发布版本存在无法区分的内部分析路径，请联系建模管理员重新发布。")
                         if self._scope_metric_choice_is_fake(
                             release, offered_scope_ids, allowed_element_ids
                         )
@@ -1058,7 +1054,7 @@ class AnalyticsQueryService:
                     # 拥有它的那个范围。作用域本身不出现在选项里。
                     # 卡必须和路由器那条走同一种：选项自带所属作用域，用户点下去
                     # 才有东西可续跑。只带成员 ID 的普通语义卡在续跑时会走另一条
-                    # 校验分支，重算不出"当时展示过什么"，于是点了就是 
+                    # 校验分支，重算不出"当时展示过什么"，于是点了就是
                     # CANDIDATE_NOT_FOUND——一张答不了的卡比拒答更糟。
                     scope_choice_holder["value"] = tuple(bound)
                     raise ClarificationSignal(
@@ -1233,6 +1229,8 @@ class AnalyticsQueryService:
                     allowed_dataset_ids=(corrected.dataset_id,),
                 ),
                 obligations=tuple(decision_obligations),
+                # 时间维是结构不是读法：「按月」必须用销售日期，不能算作对「销售」的对冲。
+                structural_ids=structural_member_ids(release),
             )
             if settlement.unmet_obligation is not None:
                 obligation = settlement.unmet_obligation
@@ -1549,9 +1547,7 @@ class AnalyticsQueryService:
             # 并集反推出的作用域歧义要的是作用域选择卡，不是普通语义卡：选项必须
             # 记住自己属于哪个作用域，续跑才能把事实根定下来。
             scope_choice_ids = (
-                scope_choice_holder.get("value")
-                if signal.code == "AMBIGUOUS_QUERY_SCOPE"
-                else None
+                scope_choice_holder.get("value") if signal.code == "AMBIGUOUS_QUERY_SCOPE" else None
             )
             if scope_choice_ids:
                 options = self._scope_choice_options(
@@ -1769,9 +1765,7 @@ class AnalyticsQueryService:
                     detail={"guard": "executor_preflight"},
                 )
             )
-            self._dry_run(
-                physical=physical, release=release, trace=trace, options=QueryOptions()
-            )
+            self._dry_run(physical=physical, release=release, trace=trace, options=QueryOptions())
             trace.append(QueryTraceStep(stage=QueryStage.EXECUTING, status="started"))
             result = self._targets.for_project(release.project_id).executor.execute(
                 query=physical, release=release
@@ -1885,6 +1879,8 @@ class AnalyticsQueryService:
                 for item in options
                 if item.element_type in {"metric", "dimension", "dimension_value"}
                 and item.element_id is not None
+                # 时间维不是候选读法（见 structural_member_ids）。
+                and item.element_id not in structural_member_ids(release)
             }.values()
         )
         selected = next(
@@ -1899,13 +1895,15 @@ class AnalyticsQueryService:
         if selected is None:
             return None
         values = {item.id: item for item in release.dimension_values if item.enabled}
+        structural = structural_member_ids(release)
         return SemanticDecisionObligation(
             detected_text=detected_text or chosen.label,
             source=source,
             selected=selected,
             candidates=typed,
             chosen_option=chosen,
-            options=options,
+            # 备选里也不留时间维：否则回答卡的「自动理解」chip 会把它列成可切换项。
+            options=tuple(item for item in options if item.element_id not in structural),
             value_bindings=tuple(
                 SemanticValueBinding(
                     element_id=member.element_id,
@@ -2132,9 +2130,8 @@ class AnalyticsQueryService:
         if request.conversation_id is None:
             return request.question, None
         if not request.options.merged(
-            "multi_turn_enabled", self._multi_turn_rewriter.enabled
-            if self._multi_turn_rewriter is not None
-            else False
+            "multi_turn_enabled",
+            self._multi_turn_rewriter.enabled if self._multi_turn_rewriter is not None else False,
         ):
             return request.question, None
         if self._query_history is None or self._multi_turn_rewriter is None:
@@ -3287,9 +3284,7 @@ class AnalyticsQueryService:
                 project_id=request.project_id,
             )
         except Exception:
-            LOGGER.exception(
-                "Failed to record vocabulary gap project_id=%s", request.project_id
-            )
+            LOGGER.exception("Failed to record vocabulary gap project_id=%s", request.project_id)
 
     def _record_failure(
         self,
@@ -4204,8 +4199,7 @@ def _union_scope(
         element
         for element in (*release.metrics, *release.dimensions)
         if any(
-            element.id in scope.metric_ids or element.id in scope.dimension_ids
-            for scope in scopes
+            element.id in scope.metric_ids or element.id in scope.dimension_ids for scope in scopes
         )
     )
     qualified = _qualified_union_names(release, members, scopes)
@@ -4222,9 +4216,7 @@ def _union_scope(
     # 并集内部把重名成员改成限定名：模型因此能用名字表达选择。还原表用于生成之后、
     # 按真实作用域翻译之前把名字换回规范名——限定名只活在生成阶段。
     canonical = {item.id: item.name for item in members}
-    renames = {
-        name: (element_id, canonical[element_id]) for name, element_id in qualified.items()
-    }
+    renames = {name: (element_id, canonical[element_id]) for name, element_id in qualified.items()}
     by_id = {element_id: name for name, element_id in qualified.items()}
 
     def relabel(items: tuple, kind: str) -> tuple:
@@ -4419,7 +4411,6 @@ def _union_evidence(evidence: MappingEvidence, union_id: str) -> MappingEvidence
     )
 
 
-
 def _unmatched_phrases(question: str, evidence: MappingEvidence | None) -> tuple[str, ...]:
     """问句里没有被任何精确证据覆盖的片段——也就是"用户说了、系统没听懂"的那些词。
 
@@ -4577,8 +4568,7 @@ def _success_diagnosis(
             severity="warning",
             summary="过滤条件里的取值不在该维度的已发布取值里",
             recommendation=(
-                "确认拼写，或把这个说法补成维度值别名；"
-                "若该维度取值只是抽样发布，本提示可以忽略。"
+                "确认拼写，或把这个说法补成维度值别名；若该维度取值只是抽样发布，本提示可以忽略。"
             ),
             user_hint=f"没有查到数据。{unknown}不在已发布的取值里，可能是这个原因。",
         )

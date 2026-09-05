@@ -672,9 +672,16 @@ def test_ratio_metric_argument_rejects_a_pre_aggregated_expression(sales_release
     correct candidate.
     """
 
+    # 净收入的治理聚合是 SUM：写成 SUM("净收入") 与裸引用同义，2026-09-05 起按裸引用
+    # 处理（见下一个测试）；这里用 AVG——和治理聚合不同，才是会变成 SUM(AVG(…)) 的
+    # 形状。
     for s2sql in (
-        'SELECT RATIO_TO_TOTAL(SUM("净收入"), "区域", \'华东\') AS "华东占比" FROM "销售经营"',
-        'SELECT "区域", RATIO_TO_TOTAL(SUM("净收入")) AS "占比" FROM "销售经营" GROUP BY "区域"',
+        'SELECT RATIO_TO_TOTAL(AVG("净收入"), "区域", \'华东\') AS "华东占比" FROM "销售经营"',
+        'SELECT "区域", RATIO_TO_TOTAL(AVG("净收入")) AS "占比" FROM "销售经营" GROUP BY "区域"',
+        (
+            'SELECT "区域", RATIO_TO_TOTAL(SUM(SUM("净收入"))) AS "占比" '
+            'FROM "销售经营" GROUP BY "区域"'
+        ),
     ):
         with pytest.raises(SemanticParsingError) as raised:
             S2SqlSemanticTranslator().translate(
@@ -684,6 +691,39 @@ def test_ratio_metric_argument_rejects_a_pre_aggregated_expression(sales_release
             )
 
         assert raised.value.code == "S2SQL_RATIO_METRIC_PRE_AGGREGATED"
+
+
+def test_the_governed_aggregate_written_out_is_the_same_as_a_bare_metric(sales_release) -> None:
+    """实机「咖啡按月环比销售情况」：模型整条重试链都写 ``RATIO_ROLL(SUM("销售金额"))``，
+    48 秒后拒答。销售金额的治理聚合就是 SUM，这和 ``RATIO_ROLL("销售金额")`` 是同一个
+    意思——剥掉那一层按裸引用处理，翻出来的 SQL 必须和裸写法完全一致。"""
+
+    bare = (
+        'SELECT DATE_TRUNC(\'month\', "下单日期") AS "月份", RATIO_ROLL("净收入") AS "环比" '
+        'FROM "销售经营" GROUP BY DATE_TRUNC(\'month\', "下单日期")'
+    )
+    spelled = bare.replace('RATIO_ROLL("净收入")', 'RATIO_ROLL(SUM("净收入"))')
+
+    translate = lambda text: S2SqlSemanticTranslator().translate(  # noqa: E731
+        release=sales_release, dataset_id="sales_dataset", corrected_s2sql=text
+    )
+    assert translate(spelled).physical_query.sql == translate(bare).physical_query.sql
+
+    # 与比率并列的裸指标列（不带 SUM）同样按治理聚合处理——普通路径本来就允许，
+    # 期间比不能更严。实机第二次重放模型正是这么写的。
+    bare_column = bare.replace(
+        'RATIO_ROLL("净收入") AS "环比"', '"净收入" AS "净收入", RATIO_ROLL("净收入") AS "环比"'
+    )
+    summed_column = bare.replace(
+        'RATIO_ROLL("净收入") AS "环比"',
+        'SUM("净收入") AS "净收入", RATIO_ROLL("净收入") AS "环比"',
+    )
+    assert translate(bare_column).physical_query.sql == translate(summed_column).physical_query.sql
+
+    # 聚合不同仍然拒绝：AVG 对 SUM 不是同一个意思。
+    with pytest.raises(SemanticParsingError) as raised:
+        translate(bare.replace('RATIO_ROLL("净收入")', 'RATIO_ROLL(AVG("净收入"))'))
+    assert raised.value.code == "S2SQL_RATIO_METRIC_PRE_AGGREGATED"
 
 
 def test_period_ratio_requires_one_governed_time_group(sales_release) -> None:
@@ -1470,9 +1510,7 @@ class TestModelGivingUpIsNotAnEmptyResult:
 
             assert raised.value.code == "S2SQL_CONTRADICTORY_FILTER", s2sql
 
-    def test_a_contradiction_inside_a_subquery_is_also_giving_up(
-        self, sales_release
-    ) -> None:
+    def test_a_contradiction_inside_a_subquery_is_also_giving_up(self, sales_release) -> None:
         """子查询里的矛盾同样是放弃，只是藏得深一点。"""
 
         with pytest.raises(SemanticParsingError) as raised:
@@ -1495,23 +1533,20 @@ class TestModelGivingUpIsNotAnEmptyResult:
             dataset_id="sales_dataset",
             corrected_s2sql=(
                 'SELECT "区域", SUM("净收入") FROM "销售经营" '
-                "WHERE 1=1 AND \"区域\" = '华东' GROUP BY \"区域\""
+                'WHERE 1=1 AND "区域" = \'华东\' GROUP BY "区域"'
             ),
         )
 
         assert "华东" in translated.physical_query.parameters.values()
 
-    def test_ordinary_filters_including_or_branches_still_translate(
-        self, sales_release
-    ) -> None:
+    def test_ordinary_filters_including_or_branches_still_translate(self, sales_release) -> None:
         """OR 分支投影不出结构化过滤项，但它不是矛盾，必须照常执行。"""
 
         translated = S2SqlSemanticTranslator().translate(
             release=sales_release,
             dataset_id="sales_dataset",
             corrected_s2sql=(
-                'SELECT "区域" FROM "销售经营" '
-                "WHERE \"区域\" = '华东' OR \"区域\" = '华南'"
+                'SELECT "区域" FROM "销售经营" WHERE "区域" = \'华东\' OR "区域" = \'华南\''
             ),
         )
 
@@ -1539,7 +1574,7 @@ class TestNamesDefinedInsideTheQuery:
         translated = self._translate(
             sales_release,
             'WITH agg AS (SELECT "区域", SUM("净收入") AS x FROM "销售经营" GROUP BY "区域"),'
-            ' ranked AS (SELECT * FROM agg)'
+            " ranked AS (SELECT * FROM agg)"
             ' SELECT "区域", x FROM ranked',
         )
 
@@ -1560,10 +1595,10 @@ class TestNamesDefinedInsideTheQuery:
 
         translated = self._translate(
             sales_release,
-            'WITH agg AS ('
+            "WITH agg AS ("
             ' SELECT "区域", "渠道", SUM("净收入") AS _总额_ FROM "销售经营"'
             ' GROUP BY "区域", "渠道"'
-            '), ranked AS ('
+            "), ranked AS ("
             ' SELECT *, RANK() OVER (PARTITION BY "区域" ORDER BY _总额_ DESC) AS rn FROM agg'
             ') SELECT "区域", "渠道", _总额_ FROM ranked WHERE rn = 1',
         )
@@ -1585,12 +1620,8 @@ class TestNamesDefinedInsideTheQuery:
 
         # CTE 必须真的把「区域」这个名字导出去，外层的 p."区域" 才有东西可指。
         physical = parse_one(translated.physical_query.sql, read="postgres")
-        agg = next(
-            item for item in physical.find_all(exp.CTE) if item.alias_or_name == "agg"
-        )
-        exported = {
-            projection.alias_or_name for projection in agg.this.expressions
-        }
+        agg = next(item for item in physical.find_all(exp.CTE) if item.alias_or_name == "agg")
+        exported = {projection.alias_or_name for projection in agg.this.expressions}
         assert "区域" in exported, translated.physical_query.sql
 
     def test_a_pass_through_still_counts_as_the_governed_member(self, sales_release) -> None:
@@ -1612,7 +1643,7 @@ class TestNamesDefinedInsideTheQuery:
 
         translated = self._translate(
             sales_release,
-            'WITH agg AS ('
+            "WITH agg AS ("
             ' SELECT "区域", SUM("净收入") AS "订单数" FROM "销售经营" GROUP BY "区域"'
             ') SELECT "区域", "订单数" FROM agg',
         )

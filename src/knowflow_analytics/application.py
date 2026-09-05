@@ -488,6 +488,15 @@ def _with_frozen_dimension_values(
     )
 
 
+_DISLIKE_REASON_LABELS = {
+    "understanding": "没懂我的问题",
+    "metric": "指标口径不对",
+    "scope": "范围不对",
+    "value": "数字不对",
+    "other": "其它",
+}
+
+
 class AnalyticsApplication:
     """Authoritative modeling/query use cases shared by every API client.
 
@@ -3496,6 +3505,93 @@ class AnalyticsApplication:
     def publish_gate(self) -> dict[str, int | float]:
         return self._publisher.gate_thresholds
 
+    def _effective_question_of(
+        self,
+        *,
+        query_id: str,
+        project_id: str,
+        actor_id: str,
+        permission_scope_hash: str,
+    ) -> str:
+        """这一轮真正问的那句话。取不到就返回空串，由调用方回退原话。"""
+
+        if not query_id or not permission_scope_hash:
+            return ""
+        try:
+            artifact = self.catalog.get_query_diagnostic(
+                actor_id=actor_id,
+                project_id=project_id,
+                permission_scope_hash=permission_scope_hash,
+                query_id=query_id,
+            )
+        except Exception:  # noqa: BLE001 - 产物过期不该让反馈落不下去
+            return ""
+        for step in artifact.trace:
+            detail = step.detail or {}
+            candidate = detail.get("effective_question")
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+        return ""
+
+    def record_answer_feedback(
+        self,
+        *,
+        project_id: str,
+        actor_id: str,
+        question: str,
+        liked: bool,
+        reason: str = "",
+        comment: str = "",
+        release_id: str,
+        spec_hash: str,
+        index_snapshot_id: str,
+        dataset_ids: tuple[str, ...] = (),
+        query_id: str = "",
+        permission_scope_hash: str = "",
+    ) -> None:
+        """用户对一次**成功**的回答点了赞或踩。
+
+        两者进同一张待处理列表：前四类是系统自己察觉的异常，这两类是人告诉我们的，
+        而它们都需要建模者看一眼——踩要补词典或改口径（静默错答没有任何系统信号，
+        这是唯一的入口），赞是一条被确认过的问答，正是评测集要的样本。
+        """
+
+        from knowflow_analytics.query.contracts import QueryFailureRecord
+
+        # 自足问句：BFF 只有用户原话，而下钻和追问的原话（「时间范围改为『近 90 天』」）
+        # 单独看没有意义。改写后的完整问题只在核心自己的诊断产物里，按 query_id 取；
+        # 取不到（产物过期、结构化查询）就用原话，不让反馈丢掉。
+        # 只取改写后的问句。没有改写就留空，列表退回用户原话——用户自己那句话是
+        # 对的，不该被任何机器拼出来的描述顶掉。
+        effective_question = self._effective_question_of(
+            query_id=query_id,
+            project_id=project_id,
+            actor_id=actor_id,
+            permission_scope_hash=permission_scope_hash,
+        )
+        # 原因和补充说明写进 message：列表按说法聚合后只带
+        # kind/phrase/resolution/question/message/code，其余字段到不了建模者眼前。
+        detail = _DISLIKE_REASON_LABELS.get(reason, "") if not liked else ""
+        note = "；".join(item for item in (detail, comment.strip()) if item)
+        self.catalog.save_failure(
+            QueryFailureRecord(
+                kind="liked" if liked else "disliked",
+                message=note,
+                reason=reason,  # type: ignore[arg-type]
+                comment=comment,
+                question=question,
+                effective_question=effective_question,
+                stage="FINISHED",
+                code="USER_LIKED_ANSWER" if liked else "USER_DISLIKED_ANSWER",
+                release_id=release_id,
+                spec_hash=spec_hash,
+                index_snapshot_id=index_snapshot_id,
+                dataset_ids=dataset_ids,
+            ),
+            actor_id=actor_id,
+            project_id=project_id,
+        )
+
     def list_query_failures(
         self,
         project_id: str,
@@ -3503,11 +3599,16 @@ class AnalyticsApplication:
         limit: int = 100,
         offset: int = 0,
         status: str | None = "open",
+        exclude_kinds: tuple[str, ...] = (),
     ):
         """问数反馈。默认只看待处理——处理过的收起来，否则页面永远是一堆。"""
 
         items, total = self.catalog.list_failure_groups(
-            project_id=project_id, limit=limit, offset=offset, status=status
+            project_id=project_id,
+            limit=limit,
+            offset=offset,
+            status=status,
+            exclude_kinds=exclude_kinds,
         )
         return {
             "items": [item.model_dump(mode="json") for item in items],
@@ -3787,6 +3888,7 @@ class AnalyticsApplication:
         actor_id: str,
         options: QueryOptions,
         units: dict[str, str] | None = None,
+        formats: dict[str, str] | None = None,
         filters: list[str] | None = None,
         default_time_window: dict[str, object] | None = None,
     ) -> str | None:
@@ -3803,6 +3905,7 @@ class AnalyticsApplication:
             rows=rows,
             tenant_id=actor_id,
             units=units,
+            formats=formats,
             filters=filters,
             default_time_window=default_time_window,
             llm_id=options.llm_id,

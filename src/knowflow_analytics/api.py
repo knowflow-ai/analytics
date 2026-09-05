@@ -828,6 +828,32 @@ def _upload_plan(raw: str) -> tuple[tuple[str, str], ...]:
     return tuple(plan)
 
 
+class AnswerFeedbackRequest(BaseModel):
+    """用户对一次成功的回答点了赞或踩。
+
+    点踩必须带原因——裸的一个「踩」建模者拿到也不知道改什么；点赞不需要。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    question: str = Field(min_length=1, max_length=4_000)
+    liked: bool = False
+    reason: Literal["", "scope", "metric", "value", "understanding", "other"] = ""
+    comment: str = Field(default="", max_length=1_000)
+    release_id: str = Field(min_length=1, max_length=128)
+    spec_hash: str = Field(min_length=1, max_length=128)
+    index_snapshot_id: str = Field(min_length=1, max_length=128)
+    dataset_ids: list[str] = Field(default_factory=list, max_length=64)
+    # 用来取回这一轮的自足问句（下钻和追问的原话单独看没有意义）。
+    query_id: str = Field(default="", max_length=128)
+
+    @model_validator(mode="after")
+    def dislike_requires_a_reason(self) -> "AnswerFeedbackRequest":
+        if not self.liked and not self.reason:
+            raise ValueError("a disliked answer must carry a reason")
+        return self
+
+
 class FeedbackStatusRequest(BaseModel):
     """把反馈列表上的一行标成已处理/忽略。
 
@@ -2385,6 +2411,7 @@ def create_api(
         status: Annotated[
             Literal["open", "resolved", "ignored", "archived", "all"], Query()
         ] = "open",
+        exclude_kinds: Annotated[list[str] | None, Query()] = None,
     ):
         """问数反馈：系统听不懂什么。
 
@@ -2398,7 +2425,38 @@ def create_api(
             limit=limit,
             offset=offset,
             status=None if status == "all" else status,
+            exclude_kinds=tuple(exclude_kinds or ()),
         )
+
+    @app.post("/v1/analytics/projects/{project_id}/query-failures:answer-feedback")
+    def record_answer_feedback(
+        project_id: str,
+        payload: AnswerFeedbackRequest,
+        request_context: Context,
+    ):
+        """点赞点踩进同一张待处理列表。
+
+        查询成功、治理关全绿、数字也出来了——这类静默错答没有任何系统信号，用户
+        点的这一下是唯一的入口；赞则是一条被人确认过的问答，评测集要的正是它。
+        两者都和「系统听不懂」进同一个工作队列，由建模者处理。
+        """
+
+        require_project(project_id, request_context)
+        application.record_answer_feedback(
+            project_id=project_id,
+            actor_id=request_context.actor_id,
+            question=payload.question,
+            liked=payload.liked,
+            reason=payload.reason,
+            comment=payload.comment,
+            release_id=payload.release_id,
+            spec_hash=payload.spec_hash,
+            index_snapshot_id=payload.index_snapshot_id,
+            dataset_ids=tuple(payload.dataset_ids),
+            query_id=payload.query_id,
+            permission_scope_hash=request_context.permission_scope_hash,
+        )
+        return {"recorded": True}
 
     @app.post("/v1/analytics/projects/{project_id}/query-failures:status")
     def update_query_failure_status(
@@ -2692,6 +2750,15 @@ def create_api(
             )
             if isinstance(label, str) and isinstance(unit, str)
         }
+        # 数值形态（占比/同比）同样来自图表提示：同比列给模型看的是 +35.88%，
+        # 不是 0.3588429146832662——它只会照抄。
+        formats = {
+            label: fmt
+            for label, fmt in zip(
+                visualization.get("y") or (), visualization.get("y_formats") or (), strict=False
+            )
+            if isinstance(label, str) and isinstance(fmt, str)
+        }
         try:
             text = application.interpret_result(
                 question=payload.question,
@@ -2700,6 +2767,7 @@ def create_api(
                 actor_id=request_context.actor_id,
                 options=payload.options,
                 units=units,
+                formats=formats,
                 filters=[
                     item for item in (interpretation.get("filters") or []) if isinstance(item, str)
                 ],

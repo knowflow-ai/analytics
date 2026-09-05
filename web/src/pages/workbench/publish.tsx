@@ -108,7 +108,19 @@ const HEAD_ICON = {
  * 评测集不自动跑：重放会把每条用例跑一遍完整问数链路（含模型调用），进一次页面就
  * 花掉一次预算，不该是默认行为。
  */
-export function PublishPanel({ projectId, revision, acceptRevision, readOnly, goTo }: WorkbenchContext) {
+export function PublishPanel({
+  projectId,
+  revision,
+  acceptRevision,
+  readOnly,
+  goTo,
+  trialQuestion,
+  onTrialQuestionHandled,
+}: WorkbenchContext & {
+  /** 从「问数反馈」的点赞行跳过来时要试问的那句话。 */
+  trialQuestion?: string | null;
+  onTrialQuestionHandled?: () => void;
+}) {
   const toast = useToast();
   const queryClient = useQueryClient();
   const diagnostics = useQuery({
@@ -466,7 +478,12 @@ export function PublishPanel({ projectId, revision, acceptRevision, readOnly, go
           )}
         </div>
 
-        <TrialQuestions projectId={projectId} revision={revision} />
+        <TrialQuestions
+          projectId={projectId}
+          revision={revision}
+          trialQuestion={trialQuestion}
+          onTrialQuestionHandled={onTrialQuestionHandled}
+        />
         <div ref={evaluationRef}>
           <GoldenSuiteCard projectId={projectId} revision={revision} readOnly={readOnly} />
         </div>
@@ -612,7 +629,15 @@ function QueueRow({
  * except it binds to this revision, so a wrong answer here is a modeling
  * problem, not a release problem.
  */
-function TrialQuestions({ projectId, revision }: Pick<WorkbenchContext, 'projectId' | 'revision'>) {
+function TrialQuestions({
+  projectId,
+  revision,
+  trialQuestion,
+  onTrialQuestionHandled,
+}: Pick<WorkbenchContext, 'projectId' | 'revision'> & {
+  trialQuestion?: string | null;
+  onTrialQuestionHandled?: () => void;
+}) {
   const spec = revision.semantic_spec;
   const names = useMemo(() => {
     const map = new Map<string, string>();
@@ -721,6 +746,24 @@ function TrialQuestions({ projectId, revision }: Pick<WorkbenchContext, 'project
     setQuestion('');
     ask.mutate({ turnId, input });
   };
+  // 从反馈页带过来的那句话：自动跑一次，跑完由人确认「答对了」再存为用例。
+  //
+  // 必须挡住重复触发：试问是一次真实的模型调用，而 StrictMode 下 effect 会连跑
+  // 两遍（挂载 → 清理 → 再挂载），父级清空 trialQuestion 的 setState 那时还没
+  // 刷新，两次看到的都是同一句话。清空后把标记复位，同一句话再点一次仍然有效。
+  const submitRef = useRef(submit);
+  submitRef.current = submit;
+  const handledRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!trialQuestion) {
+      handledRef.current = null;
+      return;
+    }
+    if (handledRef.current === trialQuestion) return;
+    handledRef.current = trialQuestion;
+    submitRef.current(trialQuestion);
+    onTrialQuestionHandled?.();
+  }, [trialQuestion, onTrialQuestionHandled]);
   const choose = (option: AnalyticsClarificationOption, response: AnalyticsQueryResponse) => {
     const origin = turns.find((t) => t.response === response);
     if (!origin?.input) return;
@@ -824,9 +867,15 @@ function QueryFailuresCard({
   onGo: () => void;
 }) {
   const failures = useQuery({
-    queryKey: ['query-failures', projectId],
-    // 发布页只看待处理的：已经处理掉的不该再提醒一遍。
-    queryFn: () => listQueryFailures(projectId, { limit: 50, status: 'open' }),
+    queryKey: ['query-failures', projectId, 'without-liked'],
+    // 发布页只看待处理的：已经处理掉的不该再提醒一遍。点赞也排掉——它是一条被人
+    // 确认过的问答，不是发布前要清的缺口，算进来只会让这个数字越用越大。
+    queryFn: () =>
+      listQueryFailures(projectId, {
+        limit: 50,
+        status: 'open',
+        excludeKinds: ['liked'],
+      }),
   });
   const rows = feedbackRows(failures.data?.items ?? []);
   if (failures.isPending || rows.length === 0) return null;
@@ -842,7 +891,7 @@ function QueryFailuresCard({
         仍是"收场类型优先"，所以例子还是只说例子。
       */}
       <div className="text-xs text-slate-700">
-        有 <b className="font-semibold">{failures.data?.total ?? rows.length}</b> 种说法系统没直接听懂
+        有 <b className="font-semibold">{failures.data?.total ?? rows.length}</b> 条待处理的问数反馈
       </div>
       <div className="mt-1.5 text-[11px] leading-relaxed text-slate-400">
         比如「{rows[0].question}」。多数补个别名就能答上。

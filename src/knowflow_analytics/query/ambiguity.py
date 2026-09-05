@@ -61,6 +61,24 @@ class Settlement(FrozenModel):
     unmet_obligation: SemanticDecisionObligation | None = None
 
 
+def structural_member_ids(release: SemanticRelease) -> frozenset[str]:
+    """歧义结算里不算"读法"的成员：时间维。
+
+    实机（2026-09-05，demo_cafe「按月咖啡同比销售情况」）：关键词通道把「销售」撞到
+    销售渠道 / 销售日期 / 销售明细数量 / 销售金额 / 销售数量 五个成员，成了一个跨
+    指标与维度的组。模型写出 SUM(销售金额) + DATE_TRUNC('MONTH', 销售日期)，结算把
+    「用了两个成员」判成对冲 → 弹卡；用户选了销售金额之后，「按月」照样必须用
+    销售日期 → 义务 `used == {selected}` 永远不成立 → 无限澄清。
+
+    销售日期进这张查询不是因为它读作「销售」，是因为「按月」「同比」和默认时间窗
+    都必须落在时间轴上——时间轴是**结构**，不是某个名词的候选读法。所以时间维
+    一律不进歧义组：不会被当成对冲，也不会被当成澄清选项摆给用户（把「销售」读成
+    「销售日期」本来就是个荒唐的选项）。
+    """
+
+    return frozenset(item.id for item in release.dimensions if item.semantic_type == "time")
+
+
 def semantic_ambiguity_groups(
     mapping: MappingResult,
 ) -> tuple[tuple[tuple[str, ...], str], ...]:
@@ -87,6 +105,7 @@ def _typed_semantic_ambiguity_groups(
     mapping: MappingResult,
     *,
     include_values: bool = True,
+    structural_ids: frozenset[str] = frozenset(),
 ) -> tuple[SemanticAmbiguityGroup, ...]:
     """Return Mapper-authored groups without reconstructing them from bare IDs.
 
@@ -102,6 +121,7 @@ def _typed_semantic_ambiguity_groups(
             member
             for member in group.members
             if member.element_type in {SemanticElementType.METRIC, SemanticElementType.DIMENSION}
+            and member.element_id not in structural_ids
         )
         # 值成员只在**混合**组里算数。纯值碰撞是另一回事：同一维度的多个取值共用一个
         # 说法（「大区」→ 华东/华南/…）本来就该合成 IN 过滤，不是对冲，归 grounding
@@ -154,7 +174,9 @@ def same_name_ambiguities(
         },
     }
     groups = []
-    for group in _typed_semantic_ambiguity_groups(mapping, include_values=False):
+    for group in _typed_semantic_ambiguity_groups(
+        mapping, include_values=False, structural_ids=structural_member_ids(release)
+    ):
         labels = [names.get((member.element_type, member.element_id)) for member in group.members]
         if None in labels or len(labels) != len(set(labels)):
             groups.append(group)
@@ -206,6 +228,7 @@ def settle_after_parse(
     options_for: Callable[[SemanticAmbiguityGroup], tuple[ClarificationOption, ...]],
     *,
     obligations: tuple[SemanticDecisionObligation, ...] = (),
+    structural_ids: frozenset[str] = frozenset(),
 ) -> Settlement:
     """Decide, per group, whether the LLM settled it on exactly one member.
 
@@ -229,6 +252,15 @@ def settle_after_parse(
     decisions: list[SemanticDecision] = []
     obligated_groups: set[frozenset[tuple[SemanticElementType, str]]] = set()
     for obligation in obligations:
+        if obligation.selected.element_id in structural_ids:
+            # 用户把一个名词读成了时间轴——那不是对冲能管的事，查询用不用它都由
+            # 「按月」这类结构决定；不设义务。
+            continue
+        candidates = tuple(
+            member for member in obligation.candidates if member.element_id not in structural_ids
+        )
+        if candidates != obligation.candidates:
+            obligation = obligation.model_copy(update={"candidates": candidates})
         group = (
             SemanticAmbiguityGroup(
                 detected_text=obligation.detected_text,
@@ -279,7 +311,7 @@ def settle_after_parse(
             )
         )
     mapping_bindings = _value_bindings(mapping)
-    for group in _typed_semantic_ambiguity_groups(mapping):
+    for group in _typed_semantic_ambiguity_groups(mapping, structural_ids=structural_ids):
         typed_group = {(member.element_type, member.element_id) for member in group.members}
         if frozenset(typed_group) in obligated_groups:
             continue

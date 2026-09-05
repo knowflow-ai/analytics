@@ -397,13 +397,24 @@ class QueryFailureRecord(FrozenModel):
       猜的**，可能对也可能错，但同一说法被猜过很多次本身就是该补词典的信号。
     - ``unknown_value``：过滤值不在该维度的已发布取值里，查询返回 0 行。正解可能
       是近似建议（「卡布奇洛」→「卡布奇诺」），也可能确实没有。
+    - ``disliked``：**查询成功、六道治理关全绿、数字也出来了，但用户点了踩。**
+      前四类都有系统自己察觉到的异常，这一类没有——它是静默错答唯一的外部信号，
+      也是唯一必须由人告诉我们的。
+    - ``liked``：用户点了赞。它不是缺口，是**一条被人确认过的问答**——评测集要的正是
+      这种样本。放进同一张列表让建模者一眼看到并决定是否收进 GoldenSuite；不自动收，
+      因为评测集直接决定发布门禁，一个观众的赞不该悄悄改变发布条件。
 
     ``resolution`` 是这次的正解（用户选中的成员名，或近似建议值），没有就留空。
     历史原因保留 ``QueryFailureRecord`` 这个名字与 ``query-failures`` 路由；
     三类都是同一个词汇缺口，只是这一轮怎么收场不同。
     """
 
-    kind: Literal["refused", "clarified", "inferred", "unknown_value"] = "refused"
+    kind: Literal[
+        "refused", "clarified", "inferred", "unknown_value", "disliked", "liked"
+    ] = "refused"
+    # 用户点踩时选的原因；只有 kind == "disliked" 有值。裸的一个「踩」无法行动。
+    reason: Literal["", "scope", "metric", "value", "understanding", "other"] = ""
+    comment: str = Field(default="", max_length=1_000)
     # 这次的正解：用户在澄清卡上选中的成员名，或未发布取值的近似建议。
     resolution: str = Field(default="", max_length=256)
     question: str = Field(min_length=1, max_length=4_000)

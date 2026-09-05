@@ -425,6 +425,8 @@ export const listQueryFailures = (
     offset?: number;
     /** `archived` = resolved + ignored，界面上不区分这两者。 */
     status?: AnalyticsFeedbackStatus | 'archived' | 'all';
+    /** 不看哪几类。发布页那条提醒排掉 `liked`——赞不是缺口。 */
+    excludeKinds?: string[];
   } = {},
 ) =>
   request<QueryFailurePage>(`${base(projectId)}/query-failures`, {
@@ -433,6 +435,9 @@ export const listQueryFailures = (
       limit: options.limit ?? 50,
       offset: options.offset ?? 0,
       status: options.status ?? 'open',
+      ...(options.excludeKinds?.length
+        ? { exclude_kinds: options.excludeKinds }
+        : {}),
     },
   });
 

@@ -45,7 +45,13 @@ export function failureReason(code: string): {
   );
 }
 
-export type FeedbackKind = 'clarified' | 'inferred' | 'unknown_value' | 'refused';
+export type FeedbackKind =
+  | 'clarified'
+  | 'inferred'
+  | 'unknown_value'
+  | 'refused'
+  | 'disliked'
+  | 'liked';
 
 /**
  * 一条「系统没直接听懂的说法」。
@@ -98,6 +104,11 @@ function describe(item: AnalyticsQueryFailure): {
   // 折成三行。留空，由界面用标签和落点表达。
   if (kind === 'clarified' || kind === 'inferred') {
     return { what: '', fixableByAlias: true };
+  }
+  if (kind === 'disliked' || kind === 'liked') {
+    // 点赞点踩带的是用户自己的话（原因 + 补充说明），不是错误码；也没有可直接
+    // 采纳的正解，所以不给「补进词典」的快捷入口。
+    return { what: item.message ?? '', fixableByAlias: false };
   }
   if (kind === 'unknown_value') {
     return {

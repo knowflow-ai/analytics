@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import type { AnalyticsQueryFailure } from '../../api/types';
 import {
   feedbackEmptyCopy,
   failureReason,
@@ -243,5 +244,45 @@ describe('列表 key', () => {
     ]);
 
     expect(new Set(rows.map((row) => row.key)).size).toBe(2);
+  });
+});
+
+describe('点赞点踩进同一张待处理列表', () => {
+  /**
+   * 前四类是系统自己察觉到的异常；这两类只有用户知道——查询成功、六道治理关
+   * 全绿、数字也出来了，答得对不对系统看不出来。所以它们必须在这张列表上出现，
+   * 而且带着用户自己写的那句话。
+   */
+  const row = (overrides: Partial<AnalyticsQueryFailure> = {}) =>
+    ({
+      kind: 'disliked',
+      phrase: '',
+      resolution: '',
+      question: '各门店销售额是多少',
+      stage: 'FINISHED',
+      code: 'USER_DISLIKED_ANSWER',
+      message: '指标口径不对；应该扣掉退款',
+      count: 1,
+      last_seen: '2026-09-05T00:00:00Z',
+      ...overrides,
+    }) as AnalyticsQueryFailure;
+
+  it('点踩显示用户填的原因和补充说明', () => {
+    const [item] = feedbackRows([row()]);
+
+    expect(item.kind).toBe('disliked');
+    expect(item.what).toBe('指标口径不对；应该扣掉退款');
+    // 没有可直接采纳的正解，不给「补进词典」的快捷入口。
+    expect(item.fixableByAlias).toBe(false);
+  });
+
+  it('点赞也在列表里，但不是缺口', () => {
+    const [item] = feedbackRows([
+      row({ kind: 'liked', code: 'USER_LIKED_ANSWER', message: '' }),
+    ]);
+
+    expect(item.kind).toBe('liked');
+    expect(item.what).toBe('');
+    expect(item.fixableByAlias).toBe(false);
   });
 });

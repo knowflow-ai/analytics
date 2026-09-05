@@ -6,7 +6,9 @@ from knowflow_analytics.contracts import FilterOperator, QueryFilter, SemanticQu
 from knowflow_analytics.query.ambiguity import (
     SemanticDecisionObligation,
     SemanticValueBinding,
+    same_name_ambiguities,
     settle_after_parse,
+    structural_member_ids,
 )
 from knowflow_analytics.query.contracts import (
     ClarificationOption,
@@ -608,3 +610,185 @@ def test_explicit_dimension_value_choice_must_survive_as_the_grounded_filter(
     )
 
     assert (settlement.unmet_obligation is None) is is_resolved
+
+
+# ── 时间维是结构，不是读法（2026-09-05 实机无限澄清）──────────────────────────
+#
+# 「按月咖啡同比销售情况」：关键词通道把「销售」撞到 销售渠道/销售日期/销售明细数量/
+# 销售金额/销售数量 五个成员。模型写 SUM(销售金额) + DATE_TRUNC('MONTH', 销售日期)，
+# 结算把"用了两个成员"判成对冲 → 弹卡；用户选了销售金额之后「按月」照样必须用销售日期
+# → 义务 used == {selected} 永远不成立 → 无限澄清。销售日期进查询是因为「按月」，
+# 不是因为它读作「销售」。
+
+
+def _sales_group() -> SemanticAmbiguityGroup:
+    return SemanticAmbiguityGroup(
+        detected_text="销售",
+        members=(
+            SemanticAmbiguityMember(
+                element_type=SemanticElementType.METRIC, element_id="net_revenue"
+            ),
+            SemanticAmbiguityMember(
+                element_type=SemanticElementType.METRIC, element_id="order_count"
+            ),
+            SemanticAmbiguityMember(
+                element_type=SemanticElementType.DIMENSION, element_id="order_date"
+            ),
+            SemanticAmbiguityMember(
+                element_type=SemanticElementType.DIMENSION, element_id="channel"
+            ),
+        ),
+    )
+
+
+def _sales_mapping() -> MappingResult:
+    return MappingResult(
+        dataset_id="sales_dataset",
+        mode=MapMode.MODERATE,
+        normalized_question="按月同比销售情况",
+        matches=(),
+        semantic_ambiguity_groups=(_sales_group(),),
+        config_version="test",
+    )
+
+
+def _sales_options(group: SemanticAmbiguityGroup):
+    # 与生产一致：选项按传进来的（已剔除结构成员的）组生成，不是按原始组。
+    return tuple(
+        ClarificationOption(
+            candidate_id=f"sel-{member.element_id}",
+            label=member.element_id,
+            description="",
+            dataset_id="sales_dataset",
+            element_type=member.element_type.value,
+            element_id=member.element_id,
+        )
+        for member in group.members
+    )
+
+
+def test_time_dimensions_are_structure_not_a_reading(sales_release):
+    assert structural_member_ids(sales_release) == frozenset({"order_date"})
+
+
+def test_using_the_time_axis_next_to_the_chosen_metric_is_not_a_hedge(sales_release):
+    """第一次澄清：模型用 销售金额 + 销售日期(按月) 不是对冲，直接裁决为销售金额。"""
+
+    settlement = settle_after_parse(
+        _sales_mapping(),
+        SemanticQuery(
+            dataset_id="sales_dataset",
+            metric_ids=("net_revenue",),
+            dimension_ids=("order_date",),
+        ),
+        _sales_options,
+        structural_ids=structural_member_ids(sales_release),
+    )
+
+    assert settlement.unresolved is None
+    assert settlement.resolved[0].chosen.element_id == "net_revenue"
+    # 时间维不出现在备选里：把「销售」读成「销售日期」本来就是个荒唐的选项。
+    assert {item.element_id for item in settlement.resolved[0].alternatives} == {
+        "order_count",
+        "channel",
+    }
+
+
+def test_the_obligation_is_met_when_only_the_time_axis_is_also_used(sales_release):
+    """第二次澄清（无限循环的那一步）：选了销售金额之后，「按月」仍要用销售日期。"""
+
+    options = _sales_options(_sales_group())
+    obligation = SemanticDecisionObligation(
+        detected_text="销售",
+        source="human",
+        selected=_sales_group().members[0],
+        candidates=_sales_group().members,
+        chosen_option=options[0],
+        options=options,
+    )
+    settlement = settle_after_parse(
+        _sales_mapping(),
+        SemanticQuery(
+            dataset_id="sales_dataset",
+            metric_ids=("net_revenue",),
+            dimension_ids=("order_date",),
+        ),
+        _sales_options,
+        obligations=(obligation,),
+        structural_ids=structural_member_ids(sales_release),
+    )
+
+    assert settlement.unmet_obligation is None
+    assert settlement.decisions[0].chosen.element_id == "net_revenue"
+
+
+def test_a_non_time_dimension_from_the_group_is_still_a_hedge(sales_release):
+    """合同没有放松：同一个词被读成 销售金额 又读成 销售渠道 仍是对冲。"""
+
+    query = SemanticQuery(
+        dataset_id="sales_dataset",
+        metric_ids=("net_revenue",),
+        dimension_ids=("channel",),
+    )
+    structural = structural_member_ids(sales_release)
+
+    assert (
+        settle_after_parse(
+            _sales_mapping(), query, _sales_options, structural_ids=structural
+        ).unresolved
+        is not None
+    )
+
+    options = _sales_options(_sales_group())
+    obligation = SemanticDecisionObligation(
+        detected_text="销售",
+        source="human",
+        selected=_sales_group().members[0],
+        candidates=_sales_group().members,
+        chosen_option=options[0],
+        options=options,
+    )
+    assert (
+        settle_after_parse(
+            _sales_mapping(),
+            query,
+            _sales_options,
+            obligations=(obligation,),
+            structural_ids=structural,
+        ).unmet_obligation
+        is not None
+    )
+
+
+def test_the_same_name_gate_never_offers_a_time_dimension_as_a_reading(sales_release):
+    # 让 order_date 和 net_revenue 撞成同名，本该在模型前弹卡；剔掉时间维后组只剩一个成员。
+    release = sales_release.model_copy(
+        update={
+            "dimensions": tuple(
+                d.model_copy(update={"name": "净收入"}) if d.id == "order_date" else d
+                for d in sales_release.dimensions
+            )
+        }
+    )
+    mapping = MappingResult(
+        dataset_id="sales_dataset",
+        mode=MapMode.STRICT,
+        normalized_question="净收入",
+        matches=(),
+        semantic_ambiguity_groups=(
+            SemanticAmbiguityGroup(
+                detected_text="净收入",
+                members=(
+                    SemanticAmbiguityMember(
+                        element_type=SemanticElementType.METRIC, element_id="net_revenue"
+                    ),
+                    SemanticAmbiguityMember(
+                        element_type=SemanticElementType.DIMENSION, element_id="order_date"
+                    ),
+                ),
+            ),
+        ),
+        config_version="test",
+    )
+
+    assert same_name_ambiguities(mapping, release) == ()

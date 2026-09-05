@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookOpenText, MessageSquareText, X } from "lucide-react";
+import { BookOpenText, ClipboardCheck, MessageSquareText, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
   listQueryFailures,
@@ -27,13 +27,19 @@ const KIND_LABEL: Record<FeedbackKind, string> = {
   inferred: "模型自己猜的",
   unknown_value: "说了系统不认识的词",
   refused: "没答上来",
+  // 前四类是系统自己察觉到的异常；这两类只有用户知道——查询成功、治理关全绿，
+  // 数字也出来了，答得对不对系统看不出来。
+  disliked: "用户说答错了",
+  liked: "用户说答得对",
 };
 
-const KIND_TONE: Record<FeedbackKind, "green" | "violet" | "amber" | "blue"> = {
+const KIND_TONE: Record<FeedbackKind, "green" | "violet" | "amber" | "blue" | "red"> = {
   clarified: "green",
   inferred: "violet",
   unknown_value: "amber",
   refused: "blue",
+  disliked: "red",
+  liked: "green",
 };
 
 const TARGET_LABEL: Record<FeedbackFixTarget["kind"], string> = {
@@ -62,7 +68,12 @@ export function AskFeedbackPanel({
   revision,
   readOnly,
   onFixInDictionary,
-}: Context & { onFixInDictionary: (target: FeedbackFixTarget) => void }) {
+  onAddToEvaluation,
+}: Context & {
+  onFixInDictionary: (target: FeedbackFixTarget) => void;
+  /** 点赞行：拿这句话去试问，答对了再存为评测用例。 */
+  onAddToEvaluation: (question: string) => void;
+}) {
   const queryClient = useQueryClient();
   /**
    * 收件箱：列表就是待办，处理一条少一条。
@@ -214,6 +225,22 @@ export function AskFeedbackPanel({
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-1.5 pt-0.5">
+                {/*
+                  点赞行的落点是评测集，不是词典：它不缺词，是一条被人确认过的
+                  问答。但评测用例的期望有二十多个字段，凭一句话空填必然是假用例，
+                  所以这里只把问题带去「问数验证」自动试问一次，由建模者看过结果
+                  再按「答对了？存为评测用例」——期望取的是那次真实解析。
+                */}
+                {row.kind === "liked" ? (
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    icon={<ClipboardCheck className="h-3.5 w-3.5" />}
+                    onClick={() => onAddToEvaluation(row.question)}
+                  >
+                    加入评测集
+                  </Button>
+                ) : null}
                 {fix ? (
                   /*
                     title 挂在外面这层 span 上，不是按钮上：原生 disabled 的

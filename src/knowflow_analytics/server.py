@@ -15,6 +15,7 @@ from knowflow_analytics.modeling.ai_modeller import AiSemanticModeller
 from knowflow_analytics.modeling.dimension_aliases import DimensionValueAliasSuggester
 from knowflow_analytics.query.corrector import LlmPhysicalSqlCorrector, LlmSqlCorrector
 from knowflow_analytics.query.exemplars import GoldenSuiteExemplarProvider
+from knowflow_analytics.query.interpret import ResultInterpreter
 from knowflow_analytics.query.multi_turn import MultiTurnRewriter
 from knowflow_analytics.query.parser import LlmS2SqlParser, TextualS2SqlCorrector
 from knowflow_analytics.settings import AnalyticsSettings
@@ -95,6 +96,10 @@ def create_app() -> FastAPI:
         multi_turn_rewriter=MultiTurnRewriter(
             model_gateway,
             enabled=settings.multi_turn_enabled,
+        ),
+        result_interpreter=ResultInterpreter(
+            model_gateway,
+            enabled=settings.result_interpretation_enabled,
         ),
         minimum_evaluation_cases=settings.minimum_evaluation_cases,
         minimum_accuracy=settings.minimum_accuracy,

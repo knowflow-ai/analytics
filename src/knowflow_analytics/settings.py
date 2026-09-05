@@ -38,6 +38,9 @@ class AnalyticsSettings(BaseSettings):
     # 「上海」带进「哪些门店售卖卡布奇诺」，5 行变 2 行，而 `所在城市 = 上海` 在卡上
     # 看得见），所以它不会悄悄改变答案。
     multi_turn_enabled: bool = True
+    # 结果解读默认关闭，与上游 DataInterpretProcessor 的 enable(false) 一致：
+    # 它是每次问数多一次模型调用，且解读文本本身可能出错，交给助手 owner 显式打开。
+    result_interpretation_enabled: bool = False
     auto_create_schema: bool = False
     allow_debug_sql: bool = False
     dry_run_before_execute: bool = False

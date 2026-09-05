@@ -59,6 +59,7 @@ from knowflow_analytics.query.contracts import (
     QueryRequest,
     QueryResponse,
     QueryRowFilter,
+    QueryState,
     QueryTraceStep,
     StructuredQueryRequest,
 )
@@ -155,15 +156,11 @@ def _ordinary_query_projection(response: QueryResponse) -> dict[str, Any]:
     }
     # 服务端按结果列逐位给出的展示名优先：textual 路径的结果列是 SQL 别名
     # （RATIO_OVER("净收入") AS "同比"），只按语义 ID 查会整列退化成「结果列 N」。
-    served_labels = dict(
-        zip(response.data.columns, response.column_labels, strict=False)
-    )
+    served_labels = dict(zip(response.data.columns, response.column_labels, strict=False))
     columns = []
     seen: dict[str, int] = {}
     for index, column in enumerate(response.data.columns, start=1):
-        label = (
-            column_labels.get(column) or served_labels.get(column) or f"结果列 {index}"
-        )
+        label = column_labels.get(column) or served_labels.get(column) or f"结果列 {index}"
         seen[label] = seen.get(label, 0) + 1
         columns.append(label if seen[label] == 1 else f"{label} ({seen[label]})")
     grains = dict(zip(response.data.columns, response.column_grains, strict=False))
@@ -257,29 +254,25 @@ def _ordinary_visualization(
     x_id = source.get("x")
     raw_y = source.get("y")
     y_ids = raw_y if isinstance(raw_y, (list, tuple)) else ()
+
     def aligned(key: str) -> dict[str, Any]:
         raw = source.get(key)
         return dict(zip(y_ids, raw, strict=False)) if isinstance(raw, (list, tuple)) else {}
 
     y_units_by_id = aligned("y_units")
     y_formats_by_id = aligned("y_formats")
-    kept = [
-        item for item in y_ids if isinstance(item, str) and item in label_by_source_column
-    ]
+    kept = [item for item in y_ids if isinstance(item, str) and item in label_by_source_column]
     series_id = source.get("series")
     return {
         "type": chart_type if isinstance(chart_type, str) else "table",
         "x": label_by_source_column.get(x_id) if isinstance(x_id, str) else None,
-        "series": (
-            label_by_source_column.get(series_id) if isinstance(series_id, str) else None
-        ),
+        "series": (label_by_source_column.get(series_id) if isinstance(series_id, str) else None),
         "x_time": bool(source.get("x_time")),
         "x_grain": source.get("x_grain") if isinstance(source.get("x_grain"), str) else None,
         "y": [label_by_source_column[item] for item in kept],
         # 与 y 逐位对齐的展示单位；非字符串一律置 None。
         "y_units": [
-            unit if isinstance(unit := y_units_by_id.get(item), str) else None
-            for item in kept
+            unit if isinstance(unit := y_units_by_id.get(item), str) else None for item in kept
         ],
         # 与 y 逐位对齐的数值形态；未知一律按常规数值。
         "y_formats": [
@@ -790,7 +783,6 @@ class _RateLimiter:
             queue.append(now)
 
 
-
 # 上传文件的大小上限。整表要读进内存做类型推断，没有上限时一个几百兆的文件会拖垮
 # 服务，而用户只会看到超时。
 _MAX_UPLOAD_BYTES = 50 * 1024 * 1024
@@ -807,7 +799,6 @@ async def _upload_bytes(request: Request) -> bytes:
             },
         )
     return data
-
 
 
 def _upload_plan(raw: str) -> tuple[tuple[str, str], ...]:
@@ -835,7 +826,6 @@ def _upload_plan(raw: str) -> tuple[tuple[str, str], ...]:
         table = str(item.get("table", ""))[:63]
         plan.append((sheet, table))
     return tuple(plan)
-
 
 
 class FeedbackStatusRequest(BaseModel):
@@ -1028,9 +1018,7 @@ def create_api(
 
     @app.get("/v1/analytics/data-sources")
     def list_data_sources(request_context: Context):  # noqa: ARG001
-        return {
-            "items": [item.model_dump(mode="json") for item in application.list_data_sources()]
-        }
+        return {"items": [item.model_dump(mode="json") for item in application.list_data_sources()]}
 
     @app.post("/v1/analytics/data-sources")
     def create_data_source(payload: CreateDataSourceRequest, request_context: Context):
@@ -1066,9 +1054,7 @@ def create_api(
         """
 
         expensive(request_context)
-        return application.commit_upload(
-            data=await _upload_bytes(request), plan=_upload_plan(plan)
-        )
+        return application.commit_upload(data=await _upload_bytes(request), plan=_upload_plan(plan))
 
     @app.get("/v1/analytics/query-defaults")
     def read_query_defaults(request_context: Context):
@@ -2680,6 +2666,51 @@ def create_api(
             event["elements"] = [{"kind": item.kind, "label": item.label} for item in step.elements]
         return event
 
+    def _emit_interpretation(
+        events: "queue.Queue[tuple[str, Any] | None]",
+        payload: QueryRequest,
+        projection: dict[str, Any],
+        request_context: Context,
+    ) -> None:
+        """结果解读事件。任何异常都只是没有这段话，不影响已经发出去的结果。"""
+
+        if projection.get("state") != QueryState.COMPLETED.value:
+            return
+        data = projection.get("data") or {}
+        rows = data.get("rows") or []
+        if not rows:
+            return
+        # 过滤条件与默认时间窗：回答卡上已经显示的 chip，模型看不到就会把
+        # 「上海的门店」读成全部门店。
+        interpretation = projection.get("interpretation") or {}
+        # 单位来自已投影的图表提示（业务列名 → 单位），是发布配置里的事实。
+        visualization = projection.get("visualization") or {}
+        units = {
+            label: unit
+            for label, unit in zip(
+                visualization.get("y") or (), visualization.get("y_units") or (), strict=False
+            )
+            if isinstance(label, str) and isinstance(unit, str)
+        }
+        try:
+            text = application.interpret_result(
+                question=payload.question,
+                columns=list(data.get("columns") or []),
+                rows=list(rows),
+                actor_id=request_context.actor_id,
+                options=payload.options,
+                units=units,
+                filters=[
+                    item for item in (interpretation.get("filters") or []) if isinstance(item, str)
+                ],
+                default_time_window=interpretation.get("default_time_window"),
+            )
+        except Exception:  # noqa: BLE001 - 解读永远不该让这条流失败
+            LOGGER.exception("analytics result interpretation failed")
+            return
+        if text:
+            events.put(("summary", {"query_id": projection.get("query_id"), "text": text}))
+
     @app.post("/v1/analytics/query:stream")
     def query_stream(payload: QueryRequest, request_context: Context):
         """与 /query 同一条链路，只是把阶段推进实时吐出来。
@@ -2706,7 +2737,11 @@ def create_api(
                     permission_scope_hash=request_context.permission_scope_hash,
                     on_trace=lambda step: events.put(("stage", _stage_event(step))),
                 )
-                events.put(("result", _ordinary_query_projection(response)))
+                projection = _ordinary_query_projection(response)
+                events.put(("result", projection))
+                # 解读在 result **之后**：表和图先到，一段话随后追加。它多花一次
+                # 模型调用（数秒），不能让用户多等这几秒才看到数字。
+                _emit_interpretation(events, payload, projection, request_context)
             except AnalyticsError as exc:
                 events.put(("error", {"code": exc.code, "message": str(exc)}))
             except Exception:  # noqa: BLE001 - the stream must always terminate

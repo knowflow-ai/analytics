@@ -217,6 +217,7 @@ from knowflow_analytics.query.diagnostics import (
     render_query_diagnostic_export,
 )
 from knowflow_analytics.query.errors import SemanticParsingError
+from knowflow_analytics.query.interpret import ResultInterpreter
 from knowflow_analytics.query.mapper import SemanticMapper
 from knowflow_analytics.query.multi_turn import MultiTurnRewriter
 from knowflow_analytics.query.orchestrator import CandidateOrchestrator
@@ -512,6 +513,7 @@ class AnalyticsApplication:
         textual_corrector: TextualS2SqlCorrector | None = None,
         physical_sql_corrector: LlmPhysicalSqlCorrector | None = None,
         multi_turn_rewriter: MultiTurnRewriter | None = None,
+        result_interpreter: ResultInterpreter | None = None,
         require_evaluation_for_publish: bool = True,
         minimum_evaluation_cases: int = 30,
         minimum_accuracy: float = 1.0,
@@ -539,9 +541,7 @@ class AnalyticsApplication:
         if data_sources is None and (introspector is None or executor is None):
             # 两条装配路子必须二选一说全：都缺的话，第一次连库时才会以
             # AttributeError 炸开，离原因很远。
-            raise ValueError(
-                "either data_sources or both introspector and executor are required"
-            )
+            raise ValueError("either data_sources or both introspector and executor are required")
         self._sources = data_sources or SingleDataSourceRegistry(
             DataSourceBinding(
                 data_source_id=None,
@@ -568,6 +568,7 @@ class AnalyticsApplication:
         self._textual_corrector = textual_corrector
         self._physical_sql_corrector = physical_sql_corrector
         self._multi_turn_rewriter = multi_turn_rewriter
+        self._result_interpreter = result_interpreter
         self._rule_modeller = RuleSemanticModeller()
         self._scope_recommendation_builder = ScopeRecommendationBuilder()
         self._modeling_plan_builder = ModelingPlanBuilder()
@@ -815,9 +816,7 @@ class AnalyticsApplication:
             try:
                 preview = preview_sheet(data, name)
             except WorkbookError as exc:
-                previews.append(
-                    {"sheet": name, "error": {"code": exc.code, "message": str(exc)}}
-                )
+                previews.append({"sheet": name, "error": {"code": exc.code, "message": str(exc)}})
                 continue
             previews.append(
                 {
@@ -3778,6 +3777,36 @@ class AnalyticsApplication:
 
     def get_release(self, release_id: str) -> PublishedRelease:
         return self.catalog.get_release(release_id)
+
+    def interpret_result(
+        self,
+        *,
+        question: str,
+        columns: list[str],
+        rows: list[list[object]],
+        actor_id: str,
+        options: QueryOptions,
+        units: dict[str, str] | None = None,
+        filters: list[str] | None = None,
+        default_time_window: dict[str, object] | None = None,
+    ) -> str | None:
+        """结果解读。装配缺失或未开启时返回 None，调用方据此不发这个事件。"""
+
+        interpreter = self._result_interpreter
+        if interpreter is None:
+            return None
+        if not options.merged("result_interpretation_enabled", interpreter.enabled):
+            return None
+        return interpreter.interpret(
+            question=question,
+            columns=columns,
+            rows=rows,
+            tenant_id=actor_id,
+            units=units,
+            filters=filters,
+            default_time_window=default_time_window,
+            llm_id=options.llm_id,
+        )
 
     def query(
         self,

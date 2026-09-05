@@ -605,6 +605,9 @@ class QueryOptions(FrozenModel):
     # 问题没写时间范围时补哪个窗。None = 历史行为（自然语言问数不补）；
     # "dataset" = 按发布配置；"none" = 不补；N = 最近 N 天。补了的窗必须显示、可撤。
     default_time_window: TimeWindowOverride | None = None
+    # 结果出来后再花一次模型调用把它读成一段话。空 = 跟随部署默认（关闭，与上游一致）。
+    # 它在结果**之后**异步生成，不推迟结果返回。
+    result_interpretation_enabled: bool | None = None
 
     # before：pydantic 会把 True 松散转成 1，转完就认不出它本来是个 bool 了。
     @field_validator("default_time_window", mode="before")

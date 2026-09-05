@@ -307,10 +307,24 @@ class SemanticDecision(FrozenModel):
     alternatives: tuple[ClarificationOption, ...] = ()
 
 
+class UnderstoodElement(FrozenModel):
+    """流式问数在「理解问题」完成时带给前端的一颗 chip。
+
+    只有类型与业务名，没有 ID、Scope、分数：它是给等待中的用户看的「认出了什么」，
+    不是决策依据。普通 wire 零语义 ID 泄漏的合同在这里同样成立。
+    """
+
+    kind: Literal["metric", "dimension", "dimension_value"]
+    label: str = Field(min_length=1)
+
+
 class QueryTraceStep(FrozenModel):
     stage: QueryStage
     status: Literal["started", "completed", "failed", "clarification"]
     detail: dict[str, Any] = Field(default_factory=dict)
+    # 只有 CANDIDATE_DISCOVERY 完成那一步会带：精确命中的指标 / 维度 / 取值。
+    # 不进 detail——detail 是诊断产物，这个是给前端边跑边出 chip 用的观察字段。
+    elements: tuple[UnderstoodElement, ...] = ()
 
 
 class ObservedTrace(list):

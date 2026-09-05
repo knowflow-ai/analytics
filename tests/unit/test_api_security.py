@@ -727,6 +727,7 @@ class _StreamingApplication(_FakeApplication):
             QueryInterpretation,
             QueryStage,
             QueryTraceStep,
+            UnderstoodElement,
         )
 
         for stage, status in (
@@ -742,6 +743,12 @@ class _StreamingApplication(_FakeApplication):
                         status=status,
                         # 内部产物一律不得随阶段事件外泄。
                         detail={"corrected_s2sql": 'SELECT "净收入"', "release_id": "release-1"},
+                        # 「理解问题」完成时认出的成员：只有类型与业务名。
+                        elements=(
+                            (UnderstoodElement(kind="metric", label="净收入"),)
+                            if stage is QueryStage.CANDIDATE_DISCOVERY
+                            else ()
+                        ),
                     )
                 )
         semantic_query = SemanticQuery(
@@ -803,11 +810,20 @@ def test_streaming_query_reports_stages_without_leaking_internals():
         "CANDIDATE_DISCOVERY",
         "EXECUTING",
     ]
-    # 阶段事件只有中性标识与状态：没有 SQL、语义 ID、Scope、版本。
+    # 阶段事件只有中性标识、状态与认出的成员：没有 SQL、语义 ID、Scope、版本。
     assert {key for item in events if item[0] == "stage" for key in item[1]} == {
         "stage",
         "status",
+        "elements",
     }
+    stages = [item[1] for item in events if item[0] == "stage"]
+    # 只有「理解问题」完成那一步带成员，而且成员只有类型与业务名。
+    assert [item.get("elements") for item in stages] == [
+        None,
+        None,
+        [{"kind": "metric", "label": "净收入"}],
+        None,
+    ]
     result = [item[1] for item in events if item[0] == "result"]
     assert len(result) == 1
     assert result[0]["state"] == "COMPLETED"

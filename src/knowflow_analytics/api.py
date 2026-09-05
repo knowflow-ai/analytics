@@ -58,6 +58,7 @@ from knowflow_analytics.query.contracts import (
     QueryRequest,
     QueryResponse,
     QueryRowFilter,
+    QueryTraceStep,
     StructuredQueryRequest,
 )
 from knowflow_analytics.query.diagnostics import QueryDiagnosticExport
@@ -2655,6 +2656,15 @@ def create_api(
             )
         )
 
+    def _stage_event(step: QueryTraceStep) -> dict[str, Any]:
+        """阶段事件的普通 wire 投影：中性阶段标识、状态，以及「理解问题」完成时认出的
+        成员（只有类型与业务名）。detail 永远不进这里——那是诊断产物。"""
+
+        event: dict[str, Any] = {"stage": step.stage.value, "status": step.status}
+        if step.elements:
+            event["elements"] = [{"kind": item.kind, "label": item.label} for item in step.elements]
+        return event
+
     @app.post("/v1/analytics/query:stream")
     def query_stream(payload: QueryRequest, request_context: Context):
         """与 /query 同一条链路，只是把阶段推进实时吐出来。
@@ -2679,9 +2689,7 @@ def create_api(
                     request,
                     actor_id=request_context.actor_id,
                     permission_scope_hash=request_context.permission_scope_hash,
-                    on_trace=lambda step: events.put(
-                        ("stage", {"stage": step.stage.value, "status": step.status})
-                    ),
+                    on_trace=lambda step: events.put(("stage", _stage_event(step))),
                 )
                 events.put(("result", _ordinary_query_projection(response)))
             except AnalyticsError as exc:

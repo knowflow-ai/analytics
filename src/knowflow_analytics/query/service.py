@@ -8,7 +8,7 @@ import secrets
 import time
 import uuid
 from collections import Counter, defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from difflib import SequenceMatcher
@@ -70,6 +70,7 @@ from knowflow_analytics.query.contracts import (
     SemanticDecision,
     SemanticDecisionSource,
     StructuredQueryRequest,
+    UnderstoodElement,
 )
 from knowflow_analytics.query.corrector import LlmPhysicalSqlCorrector
 from knowflow_analytics.query.errors import (
@@ -187,6 +188,55 @@ class _FixedExecutionTarget:
 
     def for_project(self, project_id: str) -> _FixedExecutionTarget:  # noqa: ARG002
         return self
+
+
+# 边跑边出 chip 最多带几颗：超过这个数的问句本身已经不可读，前端也摆不下。
+UNDERSTOOD_ELEMENTS_LIMIT = 12
+
+
+def understood_elements(
+    mapping_attempts: Iterable[MappingResult],
+    *,
+    metric_names: Mapping[str, str],
+    dimension_names: Mapping[str, str],
+) -> tuple[UnderstoodElement, ...]:
+    """「理解问题」完成时认出了什么：精确命中的指标、维度、取值，按业务名去重。
+
+    只取 EXACT / CONFIRMED：keyword / embedding 是弱召回，只是给最终 LLM 的提示
+    （见 2026-09-02 评审），把它们当「理解到了」摆给用户，跑完再消失，比不显示更糟。
+    名字用发布目录里的业务名，不用词典短语——命中的是别名「销售额」时，chip 也要
+    和跑完后理解行上的「销售金额」是同一个词，视觉上才是「原地留下」而不是替换。
+    """
+
+    seen: set[tuple[str, str]] = set()
+    metrics: list[UnderstoodElement] = []
+    dimensions: list[UnderstoodElement] = []
+    values: list[UnderstoodElement] = []
+    for attempt in mapping_attempts:
+        for match in attempt.matches:
+            if match.method not in (MatchMethod.EXACT, MatchMethod.CONFIRMED):
+                continue
+            if match.element_type is SemanticElementType.METRIC:
+                kind = "metric"
+                label = metric_names.get(match.element_id, "")
+                bucket = metrics
+            elif match.element_type is SemanticElementType.DIMENSION:
+                kind = "dimension"
+                label = dimension_names.get(match.element_id, "")
+                bucket = dimensions
+            elif match.element_type is SemanticElementType.DIMENSION_VALUE:
+                raw = match.raw_value
+                kind = "dimension_value"
+                label = str(raw) if raw is not None and str(raw).strip() else match.phrase
+                bucket = values
+            else:
+                continue
+            label = label.strip()
+            if not label or (kind, label) in seen:
+                continue
+            seen.add((kind, label))
+            bucket.append(UnderstoodElement(kind=kind, label=label))
+    return tuple((*metrics, *dimensions, *values)[:UNDERSTOOD_ELEMENTS_LIMIT])
 
 
 class AnalyticsQueryService:
@@ -733,6 +783,12 @@ class AnalyticsQueryService:
             trace[-1] = QueryTraceStep(
                 stage=QueryStage.CANDIDATE_DISCOVERY,
                 status="completed",
+                # 流式问数拿它边跑边出 chip；跑完后理解行上是同一组业务名。
+                elements=understood_elements(
+                    candidate_set.mapping_attempts,
+                    metric_names={item.id: item.name for item in release.metrics},
+                    dimension_names={item.id: item.name for item in release.dimensions},
+                ),
                 detail=(
                     {
                         "candidate_ids": [item.id for item in candidate_set.candidates],

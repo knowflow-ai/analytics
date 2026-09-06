@@ -12,7 +12,7 @@ The LLM only expresses intent as semantic SQL (S2SQL) made of business names. Ph
 
 ## Quick start
 
-You need Docker and reachable OpenAI-compatible chat and embedding endpoints. Compose starts Analytics and its catalog PostgreSQL. Configure the business PostgreSQL you want to analyse in the web UI.
+You need Docker and reachable OpenAI-compatible chat and embedding endpoints. Compose starts Analytics and its catalog PostgreSQL. Fill in the model endpoints under Settings and add the business PostgreSQL databases you want to analyse under Database connections (several are supported).
 
 ```bash
 git clone https://github.com/knowflow-ai/analytics.git
@@ -147,6 +147,7 @@ See [`docs/one-click-query-diagnostics.md`](docs/one-click-query-diagnostics.md)
 
 | Area | Current capability |
 |---|---|
+| Data sources | Multiple PostgreSQL connections, spreadsheet uploads (Excel becomes a data source), per-project binding |
 | Data modelling | Schema snapshots, drift detection, relation canvas, reviewed cardinality, SQL models |
 | AI modelling | Entity/field naming, role classification, metric/dimension drafts, alias and value suggestions |
 | Metric governance | Atomic/derived metrics, default aggregation, formatting, semi-additive constraints, metric time axes |

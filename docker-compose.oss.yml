@@ -1,6 +1,6 @@
 # One-command open-source deployment: catalog PostgreSQL + the analytics service.
-# The business database you want to ask questions about is configured from
-# the web UI (设置) after startup; it is not part of this file.
+# Model endpoints are configured in the web UI (设置) after startup; the business
+# databases you want to ask about are added under 数据库连接. Neither is part of this file.
 services:
   catalog-db:
     image: postgres:16-alpine

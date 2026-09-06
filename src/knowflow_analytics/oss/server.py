@@ -3,7 +3,7 @@
 Responsibilities, in request order:
 
 1. optional shared-password check for everything under ``/api`` and ``/v1``;
-2. settings endpoints under ``/api/oss`` (datasource + models, with probes);
+2. settings endpoints under ``/api/oss`` (chat / embedding model endpoints, with probes);
 3. forwarding ``/v1/analytics/*`` to the shared core with the internal
    signed-context headers the core expects, so the core's auth contract stays
    exactly what the commercial BFF uses;
@@ -24,7 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
 from knowflow_analytics.errors import AnalyticsError
-from knowflow_analytics.oss.config import ModelEndpoint, OssConfig, unmask_url
+from knowflow_analytics.oss.config import ModelEndpoint, OssConfig
 from knowflow_analytics.oss.gateways import (
     OpenAiCompatibleEmbeddingGateway,
     OpenAiCompatibleModelGateway,
@@ -35,7 +35,6 @@ from knowflow_analytics.oss.runtime import (
     OSS_SCOPE_HASH,
     OssRuntime,
     OssSettings,
-    probe_datasource,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -79,18 +78,6 @@ def _settings_router(runtime: OssRuntime) -> APIRouter:
             "ready": runtime.core is not None,
             "error": runtime.core_error,
         }
-
-    @router.post("/settings/test-datasource")
-    def test_datasource(payload: dict[str, Any]) -> dict[str, Any]:
-        url = str(payload.get("datasource_database_url") or "")
-        try:
-            url = unmask_url(url, runtime.config.datasource_database_url.get_secret_value())
-            if not url:
-                raise ValueError("请填写数据库连接串")
-            probe_datasource(url, catalog_url=runtime.settings.catalog_database_url)
-        except Exception as exc:  # noqa: BLE001 - message shown on the settings page
-            raise HTTPException(status_code=400, detail=_safe_message(exc)) from exc
-        return {"ok": True}
 
     @router.post("/settings/test-model")
     def test_model(payload: dict[str, Any]) -> dict[str, Any]:

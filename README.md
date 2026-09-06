@@ -12,7 +12,7 @@ LLM 只负责把用户意图表达成由业务名组成的语义 SQL（S2SQL）�
 
 ## 快速开始
 
-准备 Docker，以及可访问的 OpenAI-compatible Chat / Embedding 模型。Compose 会启动 Analytics 和它自己的 catalog PostgreSQL；要分析的业务 PostgreSQL 在页面中配置。
+准备 Docker，以及可访问的 OpenAI-compatible Chat / Embedding 模型。Compose 会启动 Analytics 和它自己的 catalog PostgreSQL；模型端点在「设置」里填写，要分析的业务 PostgreSQL 在「数据库连接」里添加，支持多个。
 
 ```bash
 git clone https://github.com/knowflow-ai/analytics.git
@@ -147,6 +147,7 @@ AI 可以建议实体名、字段角色、指标、维度和别名。建议先�
 
 | 类别 | 当前能力 |
 |---|---|
+| 数据源 | 多个 PostgreSQL 连接、上传表格（Excel 落库成数据源）、按项目绑定 |
 | 数据建模 | Schema 快照、漂移检测、关系画布、人工基数确认、SQL Model |
 | AI 建模 | 实体/字段命名、角色分类、指标与维度草案、别名和值字典建议 |
 | 指标治理 | 原子/派生指标、默认聚合、展示格式、半可加约束、指标时间轴 |

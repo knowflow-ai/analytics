@@ -423,3 +423,65 @@ class TestManagement:
         registry.create(name="仓库", engine="postgres", dsn=_MYSQL_DSN)
 
         assert all(not hasattr(item, "secret") for item in registry.list())
+
+
+def test_bare_postgresql_dsn_is_pinned_to_psycopg3_before_probing_and_storing(
+    catalog: CatalogStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """开源版实测：照文档粘的 ``postgresql://`` 让 create_engine 去找没装的 psycopg2，
+    直接 500。注册表统一钉到 psycopg 3，探测与落库都用归一后的连接串。"""
+    from knowflow_analytics.catalog import data_sources as module
+
+    seen: list[str] = []
+
+    class _Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+        def exec_driver_sql(self, *_: object) -> None:
+            return None
+
+    class _Engine:
+        def connect(self):
+            return _Connection()
+
+        def dispose(self) -> None:
+            return None
+
+    def fake_create_engine(url: str, **_: object):
+        seen.append(url)
+        return _Engine()
+
+    monkeypatch.setattr(module, "create_engine", fake_create_engine)
+    registry = DataSourceRegistry(
+        catalog=catalog, secret_box=DataSourceSecretBox(_SECRET), default_database_url=""
+    )
+    record = registry.create(name="sales", engine="postgres", dsn="postgresql://u:p@h:5432/d")
+    assert seen == ["postgresql+psycopg://u:p@h:5432/d"]
+    stored = DataSourceSecretBox(_SECRET).decrypt(catalog.read_data_source_dsn(record.id))
+    assert stored == "postgresql+psycopg://u:p@h:5432/d"
+
+
+def test_a_dsn_whose_driver_cannot_load_is_reported_as_unreachable(catalog: CatalogStore) -> None:
+    registry = DataSourceRegistry(
+        catalog=catalog, secret_box=DataSourceSecretBox(_SECRET), default_database_url=""
+    )
+    with pytest.raises(DataSourceError) as raised:
+        registry.test(engine="postgres", dsn="postgresql+nonexistentdriver://u:p@h/d")
+    assert raised.value.code == "DATA_SOURCE_UNREACHABLE"
+
+
+def test_the_catalog_database_may_not_be_added_as_a_data_source(catalog: CatalogStore) -> None:
+    """catalog 里的 analytics_* 内部表会被当成业务表建模；两种写法指向同一个库也要认出来。"""
+    registry = DataSourceRegistry(
+        catalog=catalog,
+        secret_box=DataSourceSecretBox(_SECRET),
+        default_database_url="",
+        catalog_database_url="postgresql+psycopg://u:p@127.0.0.1:5456/analytics_catalog",
+    )
+    with pytest.raises(DataSourceError) as raised:
+        registry.test(engine="postgres", dsn="postgresql://other:pw@127.0.0.1:5456/analytics_catalog")
+    assert raised.value.code == "DATA_SOURCE_IS_CATALOG"

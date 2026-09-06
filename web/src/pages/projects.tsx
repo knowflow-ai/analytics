@@ -51,7 +51,7 @@ function ProjectCard({
   onOpen: () => void;
   /** 仅嵌入版传入：开源独立版不提供多用户 RBAC，不渲染授权入口。 */
   onAuthorize?: () => void;
-  /** 仅嵌入版传入：独立版只有一个由设置页配置的数据源，没有可挑的。 */
+  /** 两版都传：开源版设置页里那个库也是一条普通数据源记录，可与其它记录并列被挑。 */
   onPickDataSource?: () => void;
   onDelete?: () => void;
 }) {
@@ -167,7 +167,7 @@ export function ProjectsPage({ ready }: { ready: boolean }) {
   const dataSources = useQuery({
     queryKey: ['analytics-data-sources'],
     queryFn: listDataSources,
-    enabled: creating && EDITION === 'embedded',
+    enabled: creating,
   });
 
   const create = useMutation({
@@ -200,8 +200,8 @@ export function ProjectsPage({ ready }: { ready: boolean }) {
   });
 
   if (!ready) {
-    // 两种部署的配置出口不同:独立版有自己的设置页(数据源 + 模型);
-    // 嵌入商业版时数据源与模型都来自宿主的租户配置,这里没有设置页可去。
+    // 两种部署的配置出口不同:独立版有自己的设置页(两个模型端点);
+    // 嵌入商业版时模型来自宿主的租户配置,这里没有设置页可去。数据源两版都在本页管理。
     return EDITION === 'embedded' ? (
       <Empty
         title="智能问数尚未就绪"
@@ -210,7 +210,7 @@ export function ProjectsPage({ ready }: { ready: boolean }) {
     ) : (
       <Empty
         title="服务尚未配置"
-        hint="先在设置中连接 PostgreSQL 数据源并填写聊天模型与嵌入模型。"
+        hint="先在设置里填写聊天模型与嵌入模型；要分析的库在本页「数据库连接」里添加。"
         action={
           <Link to={appPath('/settings')}>
             <Button variant="primary">前往设置</Button>
@@ -230,22 +230,19 @@ export function ProjectsPage({ ready }: { ready: boolean }) {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {EDITION === 'embedded' && (
-            <>
-              <Button
-                icon={<Upload className="h-4 w-4" />}
-                onClick={() => setManagingUploads(true)}
-              >
-                上传表格
-              </Button>
-              <Button
-                icon={<Database className="h-4 w-4" />}
-                onClick={() => setManagingSources(true)}
-              >
-                数据库连接
-              </Button>
-            </>
-          )}
+          {/* 多数据源与上传表格两版都有；只有授权（RBAC）是商业版独有。 */}
+          <Button
+            icon={<Upload className="h-4 w-4" />}
+            onClick={() => setManagingUploads(true)}
+          >
+            上传表格
+          </Button>
+          <Button
+            icon={<Database className="h-4 w-4" />}
+            onClick={() => setManagingSources(true)}
+          >
+            数据库连接
+          </Button>
           <Button variant="primary" icon={<Plus className="h-4 w-4" />} onClick={() => setCreating(true)}>
             新建项目
           </Button>
@@ -281,11 +278,7 @@ export function ProjectsPage({ ready }: { ready: boolean }) {
                   ? () => setAuthorizing(project)
                   : undefined
               }
-              onPickDataSource={
-                EDITION === 'embedded'
-                  ? () => setPickingSourceFor(project)
-                  : undefined
-              }
+              onPickDataSource={() => setPickingSourceFor(project)}
               onDelete={() => setDeleting(project)}
             />
           ))}
@@ -405,7 +398,6 @@ export function ProjectsPage({ ready }: { ready: boolean }) {
               }}
             />
           </Field>
-          {EDITION === 'embedded' && (
             <Field
               label="数据源"
               hint="建模会从这个库里读表。建好模型之后再换库要重新核对，所以现在就定下来。"
@@ -425,7 +417,6 @@ export function ProjectsPage({ ready }: { ready: boolean }) {
                 ))}
               </Select>
             </Field>
-          )}
         </div>
       </Dialog>
     </div>

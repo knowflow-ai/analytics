@@ -12,10 +12,9 @@ export interface ModelEndpointSettings {
 }
 
 export interface OssSettings {
-  datasource_database_url: string;
   chat_model: ModelEndpointSettings;
   embedding_model: ModelEndpointSettings;
-  configured: { datasource: boolean; chat_model: boolean; embedding_model: boolean };
+  configured: { chat_model: boolean; embedding_model: boolean };
 }
 
 export interface OssStatus {
@@ -30,17 +29,11 @@ export const getOssStatus = () => request<OssStatus>('/api/oss/status');
 export const getOssSettings = () => request<OssSettings>('/api/oss/settings');
 
 export const saveOssSettings = (
-  input: Pick<OssSettings, 'datasource_database_url' | 'chat_model' | 'embedding_model'>,
+  input: Pick<OssSettings, 'chat_model' | 'embedding_model'>,
 ) =>
   request<OssSettings & { ready: boolean; error: string | null }>('/api/oss/settings', {
     method: 'PUT',
     body: input,
-  });
-
-export const testDatasource = (datasource_database_url: string) =>
-  request<{ ok: true }>('/api/oss/settings/test-datasource', {
-    method: 'POST',
-    body: { datasource_database_url },
   });
 
 export const testModel = (

@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, Field, SecretStr, field_validator
-from sqlalchemy.engine import make_url
 
 _CONFIG_FILE = "config.json"
 _MASK = "********"
@@ -59,25 +58,13 @@ def normalize_postgres_url(url: str) -> str:
 
 
 class OssConfig(BaseModel):
-    datasource_database_url: SecretStr = Field(default=SecretStr(""))
-
-    @field_validator("datasource_database_url")
-    @classmethod
-    def datasource_uses_psycopg(cls, value: SecretStr) -> SecretStr:
-        return SecretStr(normalize_postgres_url(value.get_secret_value()))
+    """开源版设置：只有两个模型端点。数据源在「数据库连接」里逐个添加，不在这里。"""
 
     chat_model: ModelEndpoint = Field(default_factory=ModelEndpoint)
     embedding_model: ModelEndpoint = Field(default_factory=ModelEndpoint)
 
-    def datasource_is_configured(self) -> bool:
-        return bool(self.datasource_database_url.get_secret_value().strip())
-
     def is_complete(self) -> bool:
-        return (
-            self.datasource_is_configured()
-            and self.chat_model.is_configured()
-            and self.embedding_model.is_configured()
-        )
+        return self.chat_model.is_configured() and self.embedding_model.is_configured()
 
     def public_view(self) -> dict:
         """Settings as shown to the browser: secrets replaced by a mask or blank."""
@@ -92,11 +79,9 @@ class OssConfig(BaseModel):
             }
 
         return {
-            "datasource_database_url": _mask_url(self.datasource_database_url.get_secret_value()),
             "chat_model": endpoint(self.chat_model),
             "embedding_model": endpoint(self.embedding_model),
             "configured": {
-                "datasource": self.datasource_is_configured(),
                 "chat_model": self.chat_model.is_configured(),
                 "embedding_model": self.embedding_model.is_configured(),
             },
@@ -123,66 +108,10 @@ class OssConfig(BaseModel):
                 thinking=new.thinking,
             )
 
-        url = incoming.datasource_database_url.get_secret_value()
         return OssConfig(
-            datasource_database_url=SecretStr(
-                unmask_url(url, self.datasource_database_url.get_secret_value())
-            ),
             chat_model=endpoint(self.chat_model, incoming.chat_model),
             embedding_model=endpoint(self.embedding_model, incoming.embedding_model),
         )
-
-
-_SECRET_QUERY_KEYS = ("password", "sslkey", "passfile")
-
-
-def _mask_url(url: str) -> str:
-    """postgresql://user:secret@host/db -> postgresql://user:********@host/db.
-
-    Secrets that libpq accepts as query parameters are masked too.
-    """
-
-    if not url:
-        return url
-    try:
-        parsed = make_url(url)
-    except Exception:  # noqa: BLE001 - unparsable text is shown as typed
-        return url
-    query = {
-        key: (_MASK if key.lower() in _SECRET_QUERY_KEYS else value)
-        for key, value in parsed.query.items()
-    }
-    # hide_password renders "***"; widen it to the mask the UI round-trips.
-    rendered = parsed.set(query=query).render_as_string(hide_password=True)
-    return rendered.replace(":***@", f":{_MASK}@", 1) if parsed.password else rendered
-
-
-def unmask_url(incoming: str, stored: str) -> str:
-    """Splice the stored password back into an edited URL whose password is the mask.
-
-    Only the password is taken from the stored URL; host, port, database and
-    options come from what the user typed.
-    """
-
-    if f":{_MASK}@" not in incoming and f"={_MASK}" not in incoming:
-        return incoming
-    try:
-        typed = make_url(incoming)
-        kept = make_url(stored) if stored else None
-    except Exception as exc:  # noqa: BLE001
-        raise ValueError("数据库连接串格式无效") from exc
-    if typed.password == _MASK:
-        if not kept or not kept.password:
-            raise ValueError("请填写数据库密码")
-        typed = typed.set(password=kept.password)
-    query = dict(typed.query)
-    for key, value in list(query.items()):
-        if value == _MASK:
-            kept_value = (kept.query.get(key) if kept else None) if kept else None
-            if not kept_value:
-                raise ValueError(f"请重新填写 {key}")
-            query[key] = kept_value
-    return typed.set(query=query).render_as_string(hide_password=False)
 
 
 class ConfigStore:
@@ -207,7 +136,6 @@ class ConfigStore:
 
     def save(self, config: OssConfig) -> None:
         payload = {
-            "datasource_database_url": config.datasource_database_url.get_secret_value(),
             "chat_model": _dump_endpoint(config.chat_model),
             "embedding_model": _dump_endpoint(config.embedding_model),
         }

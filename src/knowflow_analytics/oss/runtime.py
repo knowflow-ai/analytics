@@ -16,19 +16,15 @@ from pathlib import Path
 from fastapi import FastAPI
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from sqlalchemy import create_engine, text
-from sqlalchemy.engine import Engine, make_url
+from sqlalchemy import create_engine
 
 from knowflow_analytics.api import create_api
 from knowflow_analytics.application import AnalyticsApplication
+from knowflow_analytics.catalog.data_sources import DataSourceRegistry
+from knowflow_analytics.catalog.secrets import DataSourceSecretBox
 from knowflow_analytics.catalog.store import CatalogStore
-from knowflow_analytics.execution.executor import SqlExecutor
 from knowflow_analytics.modeling.ai_modeller import AiSemanticModeller
 from knowflow_analytics.modeling.dimension_aliases import DimensionValueAliasSuggester
-from knowflow_analytics.modeling.introspector import SchemaIntrospector
-from knowflow_analytics.modeling.profile import ColumnStatisticsProfiler
-from knowflow_analytics.modeling.profiler import DimensionValueProfiler
-from knowflow_analytics.modeling.quality import ModelingQualityProfiler
 from knowflow_analytics.oss.config import ConfigStore, OssConfig, normalize_postgres_url
 from knowflow_analytics.oss.gateways import (
     OpenAiCompatibleEmbeddingGateway,
@@ -46,6 +42,7 @@ LOGGER = logging.getLogger(__name__)
 OSS_ACTOR_ID = "local"
 OSS_SCOPE_HASH = "oss-single-user"
 OSS_PROJECT_ID_PREFIX = "prj_oss_"
+_SERVICE_SECRET_FILE = "service_secret"
 _RETIRE_GRACE_SECONDS = 600.0
 
 
@@ -74,8 +71,7 @@ class OssSettings(BaseSettings):
 class CoreBundle:
     api: FastAPI
     application: AnalyticsApplication
-    datasource_engine: Engine
-    executor: SqlExecutor
+    data_sources: DataSourceRegistry
     model_gateway: OpenAiCompatibleModelGateway
     embedding_gateway: OpenAiCompatibleEmbeddingGateway
 
@@ -83,41 +79,35 @@ class CoreBundle:
         self.application.close()
         self.model_gateway.close()
         self.embedding_gateway.close()
-        self.executor.close()
-        self.datasource_engine.dispose()
+        self.data_sources.close()
 
 
-def _database_identity(url: str) -> tuple[str, str, str]:
-    """(host, port, database) so two spellings of one database compare equal."""
+def load_service_secret(data_dir: Path) -> str:
+    """服务密钥落在数据目录里，重启不变。
 
-    parsed = make_url(url)
-    return (parsed.host or "localhost", str(parsed.port or 5432), parsed.database or "")
+    此前每次启动随机生成。多数据源的连接串是用它派生的密钥加密后存在 catalog 里的，
+    密钥一换全部解不开——重启一次，所有数据源都得重填。澄清/下钻的签名 token 同样
+    绑着它。文件 0600，与 config.json 同一处、同一权限。
+    """
 
-
-def probe_datasource(url: str, *, catalog_url: str | None = None) -> None:
-    url = normalize_postgres_url(url)
-    if not url.startswith("postgresql+psycopg://"):
-        raise ValueError(
-            "仅支持 psycopg 3 PostgreSQL 连接串：postgresql+psycopg://user:password@host:5432/database；"
-            "postgresql:// 与 postgres:// 会自动转换"
-        )
-    if catalog_url and _database_identity(url) == _database_identity(catalog_url):
-        raise ValueError(
-            "数据源不能与服务自己的 catalog 库是同一个数据库：catalog 里的 analytics_* "
-            "内部表会被当成业务表建模。请把业务库作为数据源，或给 catalog 单独建一个库。"
-        )
-    engine = create_engine(url, pool_pre_ping=True)
+    path = data_dir / _SERVICE_SECRET_FILE
     try:
-        with engine.connect() as connection:
-            connection.execute(text("SELECT 1"))
-    finally:
-        engine.dispose()
+        existing = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        existing = ""
+    if len(existing) >= 32:
+        return existing
+    secret = secrets.token_urlsafe(48)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    path.write_text(secret, encoding="utf-8")
+    path.chmod(0o600)
+    return secret
 
 
 class OssRuntime:
     def __init__(self, settings: OssSettings) -> None:
         self.settings = settings
-        self.service_secret = secrets.token_urlsafe(48)
+        self.service_secret = load_service_secret(settings.data_dir)
         self._store = ConfigStore(settings.data_dir)
         self._config = self._store.load()
         self._catalog_engine = create_engine(normalize_postgres_url(settings.catalog_database_url))
@@ -143,9 +133,6 @@ class OssRuntime:
     def update_config(self, incoming: OssConfig) -> OssConfig:
         with self._lock:
             merged = self._config.merged_with(incoming)
-            datasource = merged.datasource_database_url.get_secret_value()
-            if datasource:
-                probe_datasource(datasource, catalog_url=self.settings.catalog_database_url)
             self._store.save(merged)
             self._config = merged
             self._rebuild()
@@ -170,29 +157,31 @@ class OssRuntime:
 
     def _build(self, config: OssConfig) -> CoreBundle:
         settings = self.settings
-        datasource_url = config.datasource_database_url.get_secret_value()
-        datasource_engine = create_engine(datasource_url, pool_pre_ping=True)
-        executor = SqlExecutor(datasource_url)
+        # 与商业版同一套装配：连库组件按项目绑定的数据源解析（多数据源、上传表格
+        # 都走这条）。数据源只在「数据库连接」里添加，设置页不再有"那一个库"。
+        data_sources = DataSourceRegistry(
+            catalog=self.catalog,
+            secret_box=DataSourceSecretBox(self.service_secret),
+            default_database_url="",
+            catalog_database_url=normalize_postgres_url(settings.catalog_database_url),
+            modeling_sample_values=settings.modeling_sample_values,
+        )
         model_gateway = OpenAiCompatibleModelGateway(
             config.chat_model, timeout_seconds=settings.model_timeout_seconds
         )
         embedding_gateway = OpenAiCompatibleEmbeddingGateway(config.embedding_model)
         try:
-            return self._assemble(
-                config, datasource_engine, executor, model_gateway, embedding_gateway
-            )
+            return self._assemble(config, data_sources, model_gateway, embedding_gateway)
         except Exception:
             model_gateway.close()
             embedding_gateway.close()
-            executor.close()
-            datasource_engine.dispose()
+            data_sources.close()
             raise
 
     def _assemble(
         self,
         config: OssConfig,
-        datasource_engine: Engine,
-        executor: SqlExecutor,
+        data_sources: DataSourceRegistry,
         model_gateway: OpenAiCompatibleModelGateway,
         embedding_gateway: OpenAiCompatibleEmbeddingGateway,
     ) -> CoreBundle:
@@ -200,14 +189,10 @@ class OssRuntime:
         del config  # gateways already carry the endpoint configuration
         application = AnalyticsApplication(
             catalog=self.catalog,
-            introspector=SchemaIntrospector(datasource_engine),
-            executor=executor,
+            data_sources=data_sources,
+            # 上传的表格落在 catalog 同一个 PostgreSQL 实例的独立库里。
+            catalog_database_url=normalize_postgres_url(settings.catalog_database_url),
             embedding_gateway=embedding_gateway,
-            semantic_profiler=DimensionValueProfiler(datasource_engine),
-            column_profiler=ColumnStatisticsProfiler(
-                datasource_engine, sample_values=settings.modeling_sample_values
-            ),
-            quality_profiler=ModelingQualityProfiler(datasource_engine, executor),
             ai_modeller=AiSemanticModeller(
                 model_gateway=model_gateway,
                 max_concurrency=settings.modeling_max_concurrency,
@@ -247,8 +232,7 @@ class OssRuntime:
         return CoreBundle(
             api=api,
             application=application,
-            datasource_engine=datasource_engine,
-            executor=executor,
+            data_sources=data_sources,
             model_gateway=model_gateway,
             embedding_gateway=embedding_gateway,
         )

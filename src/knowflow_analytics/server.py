@@ -51,6 +51,7 @@ def create_app() -> FastAPI:
         catalog=catalog,
         secret_box=DataSourceSecretBox(settings.service_secret.get_secret_value()),
         default_database_url=settings.datasource_database_url.get_secret_value(),
+        catalog_database_url=settings.catalog_database_url.get_secret_value(),
         modeling_sample_values=settings.modeling_sample_values,
     )
     exemplar_provider = GoldenSuiteExemplarProvider(

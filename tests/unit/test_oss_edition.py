@@ -24,7 +24,6 @@ from knowflow_analytics.oss.runtime import OSS_ACTOR_ID, OSS_SCOPE_HASH, OssSett
 
 def _full_config() -> OssConfig:
     return OssConfig(
-        datasource_database_url=SecretStr("postgresql://u:pw@db/app"),
         chat_model=ModelEndpoint(base_url="http://llm/v1/", api_key=SecretStr("k1"), model="m"),
         embedding_model=ModelEndpoint(base_url="http://emb/v1", api_key=SecretStr("k2"), model="e"),
     )
@@ -32,7 +31,6 @@ def _full_config() -> OssConfig:
 
 def test_public_view_masks_secrets_and_reports_completion() -> None:
     view = _full_config().public_view()
-    assert view["datasource_database_url"] == "postgresql+psycopg://u:********@db/app"
     assert view["chat_model"] == {
         "base_url": "http://llm/v1",
         "api_key": "********",
@@ -42,25 +40,19 @@ def test_public_view_masks_secrets_and_reports_completion() -> None:
         "max_output_tokens": None,
         "thinking": "auto",
     }
-    assert view["configured"] == {"datasource": True, "chat_model": True, "embedding_model": True}
-    assert OssConfig().public_view()["configured"]["datasource"] is False
+    assert view["configured"] == {"chat_model": True, "embedding_model": True}
+    assert OssConfig().public_view()["configured"]["chat_model"] is False
 
 
 def test_merge_keeps_stored_secrets_when_mask_is_echoed_back() -> None:
     current = _full_config()
     incoming = OssConfig.model_validate(
         {
-            # Host edited, password left masked: keep only the password.
-            "datasource_database_url": "postgresql://u:********@db2:5433/app2",
             "chat_model": {"base_url": "http://llm/v1", "api_key": "********", "model": "m2"},
             "embedding_model": {"base_url": "http://emb/v1", "api_key": "fresh", "model": "e"},
         }
     )
     merged = current.merged_with(incoming)
-    assert (
-        merged.datasource_database_url.get_secret_value()
-        == "postgresql+psycopg://u:pw@db2:5433/app2"
-    )
     assert merged.chat_model.api_key.get_secret_value() == "k1"
     assert merged.chat_model.model == "m2"
     assert merged.embedding_model.api_key.get_secret_value() == "fresh"
@@ -70,21 +62,12 @@ def test_masked_api_key_never_follows_a_new_base_url() -> None:
     current = _full_config()
     incoming = OssConfig.model_validate(
         {
-            "datasource_database_url": "postgresql://u:********@db/app",
             "chat_model": {"base_url": "http://attacker/v1", "api_key": "********", "model": "m"},
             "embedding_model": {"base_url": "http://emb/v1", "api_key": "********", "model": "e"},
         }
     )
     with pytest.raises(ValueError, match="API Key"):
         current.merged_with(incoming)
-
-
-def test_query_string_secrets_are_masked() -> None:
-    view = OssConfig(
-        datasource_database_url=SecretStr("postgresql://u@db/app?password=s3cret&sslmode=require")
-    ).public_view()
-    assert "s3cret" not in view["datasource_database_url"]
-    assert "sslmode=require" in view["datasource_database_url"]
 
 
 def test_config_store_round_trips_and_restricts_permissions(tmp_path: Path) -> None:
@@ -376,29 +359,12 @@ def test_column_profiler_flag_does_not_shadow_sampling_method() -> None:
     assert profiler._sample_values_enabled is True
 
 
-def test_datasource_may_not_be_the_catalog_database() -> None:
-    from knowflow_analytics.oss.runtime import probe_datasource
-
-    catalog = "postgresql+psycopg://u:p@127.0.0.1:5456/analytics_catalog"
-    with pytest.raises(ValueError, match="catalog"):
-        probe_datasource("postgresql://u:p@127.0.0.1:5456/analytics_catalog", catalog_url=catalog)
-
-
 def test_bare_postgresql_urls_are_pinned_to_psycopg3() -> None:
     from knowflow_analytics.oss.config import normalize_postgres_url
 
     assert normalize_postgres_url("postgresql://u:p@h/d") == "postgresql+psycopg://u:p@h/d"
     assert normalize_postgres_url("postgres://u:p@h/d") == "postgresql+psycopg://u:p@h/d"
     assert normalize_postgres_url("postgresql+psycopg://u:p@h/d") == "postgresql+psycopg://u:p@h/d"
-    config = OssConfig(datasource_database_url=SecretStr("postgresql://u:p@h/d"))
-    assert config.datasource_database_url.get_secret_value().startswith("postgresql+psycopg://")
-
-
-def test_psycopg2_url_is_rejected_with_the_supported_driver_format() -> None:
-    from knowflow_analytics.oss.runtime import probe_datasource
-
-    with pytest.raises(ValueError, match="psycopg 3"):
-        probe_datasource("postgresql+psycopg2://u:p@h/d")
 
 
 def test_model_gateway_strips_reasoning_and_puts_schema_in_system_prompt() -> None:
@@ -432,3 +398,13 @@ def test_model_gateway_rejects_output_that_violates_schema() -> None:
     with pytest.raises(ModelGatewayError) as exc:
         gateway.probe()
     assert exc.value.code == "MODEL_OUTPUT_INVALID"
+
+
+def test_service_secret_is_persisted_in_the_data_dir(tmp_path: Path) -> None:
+    """多数据源的连接串用服务密钥加密存库；密钥随进程重生成就全解不开。"""
+    from knowflow_analytics.oss.runtime import load_service_secret
+
+    first = load_service_secret(tmp_path)
+    second = load_service_secret(tmp_path)
+    assert first == second and len(first) >= 32
+    assert oct((tmp_path / "service_secret").stat().st_mode & 0o777) == "0o600"

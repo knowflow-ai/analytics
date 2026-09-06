@@ -1,10 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CheckCircle2, Database, MessageSquareText, Sparkles } from 'lucide-react';
+import { CheckCircle2, MessageSquareText, Sparkles } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import {
   getOssSettings,
   saveOssSettings,
-  testDatasource,
   testModel,
   type ModelEndpointSettings,
   type OssSettings,
@@ -12,7 +11,7 @@ import {
 import { Button, Card, Field, Input, Select, Spinner, useToast } from '@analytics/components/ui';
 import { describeError } from '@analytics/lib/labels';
 
-type Draft = Pick<OssSettings, 'datasource_database_url' | 'chat_model' | 'embedding_model'>;
+type Draft = Pick<OssSettings, 'chat_model' | 'embedding_model'>;
 
 const EMPTY_ENDPOINT: ModelEndpointSettings = {
   base_url: '',
@@ -21,11 +20,6 @@ const EMPTY_ENDPOINT: ModelEndpointSettings = {
   max_output_tokens: null,
   thinking: 'auto',
 };
-
-export const POSTGRES_CONNECTION_PLACEHOLDER =
-  'postgresql+psycopg://user:password@host:5432/database';
-export const POSTGRES_CONNECTION_HINT =
-  '使用 psycopg 3；postgresql:// 与 postgres:// 会自动转换。Docker Compose 连接宿主机时请用 host.docker.internal，不要用 127.0.0.1。';
 
 function Section({
   icon,
@@ -137,14 +131,12 @@ export function SettingsPage() {
   const queryClient = useQueryClient();
   const settings = useQuery({ queryKey: ['oss-settings'], queryFn: getOssSettings });
   const [draft, setDraft] = useState<Draft>({
-    datasource_database_url: '',
     chat_model: EMPTY_ENDPOINT,
     embedding_model: EMPTY_ENDPOINT,
   });
   useEffect(() => {
     if (settings.data) {
       setDraft({
-        datasource_database_url: settings.data.datasource_database_url,
         chat_model: settings.data.chat_model,
         embedding_model: settings.data.embedding_model,
       });
@@ -160,11 +152,6 @@ export function SettingsPage() {
       else toast.error(`设置已保存，但服务未就绪：${result.error ?? '配置不完整'}`);
     },
     onError: (error) => toast.error(describeError(error)),
-  });
-  const probeDatasource = useMutation({
-    mutationFn: () => testDatasource(draft.datasource_database_url),
-    onSuccess: () => toast.success('数据库连接成功。'),
-    onError: (error) => toast.error(`连接失败：${describeError(error)}`),
   });
   const probeChat = useMutation({
     mutationFn: () => testModel('chat_model', draft.chat_model),
@@ -188,37 +175,10 @@ export function SettingsPage() {
       <div className="mb-6">
         <h1 className="text-lg font-semibold text-slate-900">设置</h1>
         <p className="mt-1 text-xs text-slate-400">
-          连接一个 PostgreSQL 业务库，并指定聊天模型与嵌入模型。保存后立即生效，无需重启。
+          指定聊天模型与嵌入模型，保存后立即生效，无需重启。要分析的库在「数据源」页的「数据库连接」里添加。
         </p>
       </div>
       <div className="flex flex-col gap-5">
-        <Section
-          icon={<Database className="h-4 w-4" />}
-          title="数据源"
-          description="只读访问即可。语义模型存放在服务自己的 catalog 库，不会写入这里。"
-          configured={configured.datasource}
-        >
-          <Field label="PostgreSQL 连接串" hint={POSTGRES_CONNECTION_HINT}>
-            <Input
-              placeholder={POSTGRES_CONNECTION_PLACEHOLDER}
-              value={draft.datasource_database_url}
-              onChange={(event) =>
-                setDraft({ ...draft, datasource_database_url: event.target.value })
-              }
-            />
-          </Field>
-          <div className="mt-3">
-            <Button
-              size="sm"
-              loading={probeDatasource.isPending}
-              disabled={!draft.datasource_database_url}
-              onClick={() => probeDatasource.mutate()}
-            >
-              测试连接
-            </Button>
-          </div>
-        </Section>
-
         <Section
           icon={<MessageSquareText className="h-4 w-4" />}
           title="聊天模型"

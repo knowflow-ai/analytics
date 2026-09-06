@@ -78,6 +78,8 @@ class DataSourceRegistry:
         secret_box: DataSourceSecretBox,
         default_database_url: str,
         default_dialect: SqlDialect = SqlDialect.POSTGRES,
+        # 服务自己的 catalog 库：不允许被当成数据源，否则 analytics_* 内部表会被建模。
+        catalog_database_url: str = "",
         modeling_sample_values: bool = True,
         statement_timeout_ms: int = 30_000,
         lock_timeout_ms: int = 2_000,
@@ -85,6 +87,7 @@ class DataSourceRegistry:
         self._catalog = catalog
         self._secret_box = secret_box
         self._default_database_url = default_database_url
+        self._catalog_database_url = catalog_database_url
         self._default_dialect = default_dialect
         self._modeling_sample_values = modeling_sample_values
         self._statement_timeout_ms = statement_timeout_ms
@@ -185,6 +188,7 @@ class DataSourceRegistry:
 
     def create(self, *, name: str, engine: str, dsn: str) -> DataSourceRecord:
         dialect = self._parse_engine(engine)
+        dsn = _normalize_dsn(dialect, dsn)
         self.test(engine=dialect, dsn=dsn)
         return self._catalog.create_data_source(
             name=name, engine=dialect.value, secret=self._secret_box.encrypt(dsn)
@@ -198,6 +202,7 @@ class DataSourceRegistry:
             return None
         secret = None
         if dsn is not None:
+            dsn = _normalize_dsn(SqlDialect(record.engine), dsn)
             self.test(engine=SqlDialect(record.engine), dsn=dsn)
             secret = self._secret_box.encrypt(dsn)
         updated = self._catalog.update_data_source(
@@ -242,8 +247,20 @@ class DataSourceRegistry:
         """
 
         dialect = self._parse_engine(engine)
-        probe = create_engine(dsn, pool_pre_ping=False)
+        dsn = _normalize_dsn(dialect, dsn)
+        if self._catalog_database_url and _database_identity(dsn) == _database_identity(
+            self._catalog_database_url
+        ):
+            raise DataSourceError(
+                "数据源不能与服务自己的 catalog 库是同一个数据库：catalog 里的 analytics_* "
+                "内部表会被当成业务表建模。请给 catalog 单独建一个库。",
+                code="DATA_SOURCE_IS_CATALOG",
+            )
+        probe = None
         try:
+            # 建引擎也在收敛范围内：裸 postgresql:// 会去找没装的 psycopg2，此前这一行
+            # 在 try 之外，用户拿到的是 500 而不是"连不上"（开源版实测）。
+            probe = create_engine(dsn, pool_pre_ping=False)
             with probe.connect() as connection:
                 for statement in dialect.read_only_session_sql(
                     statement_timeout_ms=self._statement_timeout_ms,
@@ -257,7 +274,8 @@ class DataSourceRegistry:
                 code="DATA_SOURCE_UNREACHABLE",
             ) from None
         finally:
-            probe.dispose()
+            if probe is not None:
+                probe.dispose()
 
     @staticmethod
     def _parse_engine(engine: SqlDialect | str) -> SqlDialect:
@@ -381,6 +399,33 @@ class SingleDataSourceRegistry:
     def close(self) -> None:
         if self._binding.engine is not None:
             self._binding.engine.dispose()
+
+
+def _database_identity(url: str) -> tuple[str, str, str]:
+    """(host, port, database)：同一个库的两种写法比较相等。"""
+
+    try:
+        parsed = make_url(url)
+    except Exception:  # noqa: BLE001 - 解析不了就当不相等，交给连接探测去报
+        return ("", "", url)
+    return (parsed.host or "localhost", str(parsed.port or 5432), parsed.database or "")
+
+
+def _normalize_dsn(dialect: SqlDialect, dsn: str) -> str:
+    """PostgreSQL 连接串统一钉到 psycopg 3。
+
+    SQLAlchemy 对裸 ``postgresql://`` 默认找 psycopg2，而我们只装 psycopg 3：用户照
+    着别处文档粘的连接串会在建引擎时炸出 ModuleNotFoundError。与 OSS 设置页的
+    ``normalize_postgres_url`` 同一条规则，放在注册表里让 API 直连的调用方也享受到。
+    """
+
+    value = dsn.strip()
+    if dialect is not SqlDialect.POSTGRES:
+        return value
+    for prefix in ("postgresql://", "postgres://"):
+        if value.startswith(prefix):
+            return "postgresql+psycopg://" + value[len(prefix) :]
+    return value
 
 
 def _legacy_data_source_name(database_url: str) -> str:

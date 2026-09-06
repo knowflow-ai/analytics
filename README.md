@@ -1,6 +1,6 @@
 # KnowFlow Analytics
 
-[English](README.en.md) | 简体中文 | [官网](https://www.knowflowchat.cn) | [社区与支持](#社区与支持)
+[English](README.en.md) | 简体中文 | [官网](https://www.knowflowchat.cn) | [更新日志](CHANGELOG.md) | [社区与支持](#社区与支持)
 
 **面向 AI Agent 与数据应用的开源语义层和受治理查询引擎。**
 
@@ -8,11 +8,11 @@ KnowFlow Analytics 把指标、维度、业务术语、维度值、实体关系�
 
 LLM 只负责把用户意图表达成由业务名组成的语义 SQL（S2SQL）。真正访问数据库的物理表、字段、Join、聚合和参数，由系统根据已发布的语义模型确定性编译。
 
-![KnowFlow Analytics：数据源、语义建模、人工澄清、确认记忆与一键诊断](docs/screenshots/knowflow-analytics-walkthrough.gif)
+![KnowFlow Analytics：数据源、语义建模、人工澄清与一键诊断](docs/screenshots/knowflow-analytics-walkthrough.gif)
 
 ## 快速开始
 
-准备 Docker，以及可访问的 OpenAI-compatible Chat / Embedding 模型。Compose 会启动 Analytics 和它自己的 catalog PostgreSQL；模型端点在「设置」里填写，要分析的业务 PostgreSQL 在「数据库连接」里添加，支持多个。
+准备 Docker，以及可访问的 OpenAI-compatible Chat / Embedding 模型。Compose 会启动 Analytics 和它自己的 catalog PostgreSQL；模型端点在「设置」里填写，要分析的业务库在「数据库连接」里添加，支持多个。也可以直接上传 Excel，它会落库成一个数据源。
 
 ```bash
 git clone https://github.com/knowflow-ai/analytics.git
@@ -22,7 +22,7 @@ docker compose -f docker-compose.oss.yml up -d
 
 打开 <http://localhost:9395>，按页面提示填写业务数据库和两个模型端点。
 
-默认镜像是 [`knowflowai/analytics:v0.0.1`](https://hub.docker.com/r/knowflowai/analytics/tags?name=v0.0.1)，支持 `linux/amd64` 和 `linux/arm64`。
+默认镜像是 [`knowflowai/analytics:v0.0.2`](https://hub.docker.com/r/knowflowai/analytics/tags?name=v0.0.2)，支持 `linux/amd64` 和 `linux/arm64`。
 
 ---
 
@@ -69,7 +69,7 @@ KnowFlow Analytics 与它们遵循相同的基本方向：**语义模型是可�
 - 自然语言有歧义时显式确认，并把人工选择保存为有版本和上下文边界的记忆。
 - 每次查询都有固定阶段诊断，可导出脱敏 Markdown 报告。
 
-KnowFlow Analytics 当前只支持 PostgreSQL 数据源。它不是 Cube 或 Wren AI 的协议实现，也不要求引入它们的运行时。
+KnowFlow Analytics 的数据源目前是 PostgreSQL、MySQL 与上传表格。它不是 Cube 或 Wren AI 的协议实现，也不要求引入它们的运行时。
 
 ---
 
@@ -110,6 +110,8 @@ AI 可以建议实体名、字段角色、指标、维度和别名。建议先�
 
 每个查询作用域冻结一个事实根、明确的指标与维度成员，以及从事实根出发的安全 Join 路径。用户维护语义目录，不需要再维护第二套“主题”配置。
 
+作用域**不在提问时由路由器挑选**。最终 LLM 看到候选作用域成员的并集并写出业务名 S2SQL，编译器再逐个真实作用域尝试确定性翻译：恰好一个翻得出就绑定它，零个说明这个问题跨了事实根，多个则按粒度收敛取最粗的那个。模型提议、编译器裁定——校验比选择容易，而翻译本身已经在验证成员归属、冻结路径可达性和全部治理规则。
+
 ### 4. LLM 只生成语义 SQL
 
 ```text
@@ -124,11 +126,11 @@ AI 可以建议实体名、字段角色、指标、维度和别名。建议先�
 
 如果 S2SQL 引用了未发布名称、丢失已确认过滤值、跨越不安全关系或没有落实人工选择，查询不会进入数据库。
 
-### 5. 人工澄清与确认记忆
+### 5. 人工澄清与词汇缺口回流
 
-普通问数最多展示一张业务确认卡，不暴露内部 Scope、Dataset 或语义 ID。人工选择只有在最终 S2SQL 确实使用该语义、且查询成功执行后才会写入记忆。
+澄清是兜底，不是常规路径。普通问数最多展示一张业务确认卡，只在同名语义元素、或同一短语落到跨事实根的多个指标时出现，不暴露内部 Scope、Dataset 或语义 ID。人工选择必须在最终 S2SQL 里真的被用上，否则这次查询不执行。
 
-记忆绑定用户、项目、Release、语义索引、原短语、候选集、精确上下文和 TTL。版本、候选或上下文变化时自动失效；AI 自动选择不会写长期记忆。
+问不出来的说法不会就这么算了。拒答、澄清、模型自己猜的成员、不认识的取值，以及用户的点赞点踩，都进同一个词汇缺口收件箱，按说法聚合后回流到建模端：补一条业务词典，下一次同样的问法就能直接答。这比把选择记进一张记忆表更可控——词典是可审核、可发布、对所有人生效的语义资源，记忆不是。
 
 详细设计见 [`docs/semantic-confirmation-and-scope-routing.md`](docs/semantic-confirmation-and-scope-routing.md)。
 
@@ -147,14 +149,17 @@ AI 可以建议实体名、字段角色、指标、维度和别名。建议先�
 
 | 类别 | 当前能力 |
 |---|---|
-| 数据源 | 多个 PostgreSQL 连接、上传表格（Excel 落库成数据源）、按项目绑定 |
+| 数据源 | 多个 PostgreSQL / MySQL 连接、上传表格（Excel 落库成数据源）、按项目绑定 |
 | 数据建模 | Schema 快照、漂移检测、关系画布、人工基数确认、SQL Model |
 | AI 建模 | 实体/字段命名、角色分类、指标与维度草案、别名和值字典建议 |
 | 指标治理 | 原子/派生指标、默认聚合、展示格式、半可加约束、指标时间轴 |
 | 查询编译 | S2SQL、冻结 Join 路径、参数化 SQL、只读 Guard |
 | 高级查询 | Set operations、同比/环比、滚动比率、组内占比 |
-| 歧义治理 | 同名冲突、业务候选卡、受限 AI 裁决、人工确认记忆 |
-| 版本管理 | Revision、ETag、不可变 Release、语义索引绑定、回滚 |
+| 歧义治理 | 生成后确定性反推作用域、同名冲突确认卡、跨事实根指标短语澄清 |
+| 版本管理 | Revision、ETag、不可变 Release、语义索引绑定、切换到任意已发布版 |
+| 问数体验 | 流式阶段推送、结果解读、文本 S2SQL 下钻续跑、默认时间窗可见可撤 |
+| 反馈闭环 | 词汇缺口收件箱（六类）、按说法聚合、一键补业务词典 |
+| 运行配置 | 助手级覆盖：行数、时间窗、多轮改写、自洽次数、模型与温度 |
 | 质量保障 | 双模式 Playground、Golden Suite、真实数据质量报告 |
 | 可观测性 | 固定查询时间线、失败记录、脱敏 Markdown 诊断导出 |
 | 部署 | 独立 Web UI、Docker Compose、OpenAI-compatible 模型端点 |
@@ -163,20 +168,21 @@ AI 可以建议实体名、字段角色、指标、维度和别名。建议先�
 
 ## 实测结果
 
-`scripts/product_accuracy_campaign.py` 走与浏览器相同的鉴权 API：原始 PostgreSQL → 导入 → 关系确认 → AI 建模 → 发布 → 发布后加载隐藏问题 → 自然语言试问 → 与参考 SQL 结果逐行比较。
+`scripts/product_accuracy_campaign.py` 走与浏览器相同的鉴权 API：原始数据库 → 导入 → 关系确认 → AI 建模 → 发布 → 发布后加载隐藏问题 → 自然语言试问 → 与参考 SQL 结果逐行比较。
 
-当前三套中文小型回归集共 36 题：
+`0.0.2` 最近一次实测是改最终 Prompt 目录格式时的对照实验：一个数据集、22 道中文问题，每道都走完整问数链路，两种格式结果有分歧时补跑到 n≥4。
 
-| 数据集 | 结构 | 正确 | 准确率 | 静默错答 |
-|---|---:|---:|---:|---:|
-| 电商双十一 | 6 表 | 12 / 12 | 100% | 0 |
-| 城市与图书馆 | 3 表 | 11 / 12 | 91.7% | 0 |
-| 音乐 Holdout | 6 表、8 外键、3 主键 | 9 / 12 | 75% | 0 |
-| **合计** | 15 表 | **32 / 36** | **88.9%** | **0** |
+| | 逐条字典（旧） | 竖线表（新） |
+|---|---:|---:|
+| Prompt 均值 | 6161 字符 | 4744 字符 |
+| 端到端耗时 | 14.8 s | 11.7 s |
+| 22 题结果一致 | 20 / 22 | 20 / 22 |
 
-这些数字是产品链回归证据，不是通用 Text-to-SQL 基准结论。题集规模仍小，且每轮会重新执行 AI 建模。城市集的一次失败来自 HTTP 传输；音乐集的失败包括参考聚合口径分歧，以及无主标识、无业务度量的事件表无法成为事实根。
+两道分歧题都是新格式更好。「卖得最好的产品是哪个」6/6 稳定答对；「各城市有多少家门店」4/4 且 6 秒返回，而旧格式该题首次模型调用连续超时 30 秒，两次退到 Rule 兜底给出一份门店名单——一个看起来正常的错误答案。
 
-项目更关注“静默错答”而不只是完成率：拒绝或澄清对用户可见，一个看起来正常的错误数字不可见。
+这次实验也暴露了一个尚未修复的静默错答：「平均每单销售金额」模型写成 `AVG(销售金额)`，算出的是明细行均值 49.37，按单应为 98.66，六道治理关全部放行。粒度曲解不在现有任何一道关的判据里，已记入待办。
+
+这是一个数据集上的对照实验，不是通用 Text-to-SQL 基准结论。项目更关注“静默错答”而不只是完成率：拒绝或澄清对用户可见，一个看起来正常的错误数字不可见——上面那个 `AVG` 正是后者，也是下一步要补的判据。
 
 ---
 
@@ -193,7 +199,7 @@ AI 可以建议实体名、字段角色、指标、维度和别名。建议先�
   → Agent、UI 或 API 开始查询
 ```
 
-内置界面包含三个主要建模入口：实体与关系、业务词典、目录总览。查询作用域只在高级诊断中展示。
+建模工作台分四页：数据源、语义建模、问数验证、问数反馈。语义建模里的常驻导航是实体与关系、业务词典、目录总览；查询作用域只在高级诊断中展示。
 
 ---
 
@@ -203,7 +209,7 @@ AI 可以建议实体名、字段角色、指标、维度和别名。建议先�
 
 | 变量 | 默认值 | 作用 |
 |---|---|---|
-| `KNOWFLOW_ANALYTICS_IMAGE` | `knowflowai/analytics:v0.0.1` | 要运行的 Analytics 镜像 |
+| `KNOWFLOW_ANALYTICS_IMAGE` | `knowflowai/analytics:v0.0.2` | 要运行的 Analytics 镜像 |
 | `KNOWFLOW_OSS_BIND_ADDRESS` | `127.0.0.1` | 宿主机监听地址 |
 | `KNOWFLOW_OSS_PORT` | `9395` | 宿主机端口 |
 | `CATALOG_DB_PASSWORD` | `analytics` | 内置 catalog PostgreSQL 密码，必须 URL-safe |
@@ -319,13 +325,14 @@ src/knowflow_analytics/
 
 ## 当前边界
 
-- 数据源仅支持 PostgreSQL。
+- 数据源支持 PostgreSQL、MySQL 与上传表格。MySQL 的五种时间粒度、同比自连接与占比窗口都在真库上与 PostgreSQL 逐行比对过；其它方言尚未支持。
 - 独立版是单用户 + 可选共享口令，不提供多用户 RBAC 或行列权限。
 - AI 建模在请求周期内同步执行，大型 Schema 需要分批导入或调高超时。
 - 同一实体存在两条等长最短 Join 路径时，该实体不会自动进入作用域。
 - 既无主标识也无业务度量的事件/桥接表不会成为事实根。
-- 多轮改写默认关闭，只读取同一会话、Release 和业务范围内上一轮成功的语义查询。
-- 确认记忆支持 API 查询和撤销，独立版暂未提供单独的记忆管理页面。
+- 多轮改写默认开启，只读取同一会话、Release 和业务范围内上一轮成功的语义查询，并且只能补口径、不能替用户新增分组维度。
+- 确认记忆已在 `0.0.2` 移除。人工选择只在当次查询内生效，长期修复走业务词典。
+- 结果解读默认关闭；它只允许复述结果里出现过的数字，不做任何模型计算。
 
 ---
 
@@ -334,6 +341,7 @@ src/knowflow_analytics/
 - **官网**：[www.knowflowchat.cn](https://www.knowflowchat.cn)
 - **微信公众号**：KnowFlow 企业知识库
 - **交流群**：加微信 `skycode007`，备注“加群”
+- **更新日志**：[CHANGELOG.md](CHANGELOG.md)
 - **问题反馈**：[GitHub Issues](https://github.com/knowflow-ai/analytics/issues)
 - **KnowFlow 社区**：[社区与支持](https://github.com/knowflow-ai/KnowFlow#%E7%A4%BE%E5%8C%BA%E4%B8%8E%E6%94%AF%E6%8C%81)
 

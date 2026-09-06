@@ -1,6 +1,6 @@
 # KnowFlow Analytics
 
-English | [简体中文](README.md) | [Website](https://www.knowflowchat.cn) | [Community and support](#community-and-support)
+English | [简体中文](README.md) | [Website](https://www.knowflowchat.cn) | [Changelog](CHANGELOG.en.md) | [Community and support](#community-and-support)
 
 **An open-source semantic layer and governed query engine for AI agents and data applications.**
 
@@ -8,11 +8,11 @@ KnowFlow Analytics maintains metrics, dimensions, business terms, dimension valu
 
 The LLM only expresses intent as semantic SQL (S2SQL) made of business names. Physical tables, columns, joins, aggregations, and parameters are compiled deterministically from the published semantic model.
 
-![KnowFlow Analytics: datasource import, semantic modelling, human clarification, confirmation memory and one-click diagnostics](docs/screenshots/knowflow-analytics-walkthrough.gif)
+![KnowFlow Analytics: datasource import, semantic modelling, human clarification and one-click diagnostics](docs/screenshots/knowflow-analytics-walkthrough.gif)
 
 ## Quick start
 
-You need Docker and reachable OpenAI-compatible chat and embedding endpoints. Compose starts Analytics and its catalog PostgreSQL. Fill in the model endpoints under Settings and add the business PostgreSQL databases you want to analyse under Database connections (several are supported).
+You need Docker and reachable OpenAI-compatible chat and embedding endpoints. Compose starts Analytics and its catalog PostgreSQL. Fill in the model endpoints under Settings and add the business databases you want to analyse under Database connections (several are supported). You can also upload an Excel file, which becomes a data source of its own.
 
 ```bash
 git clone https://github.com/knowflow-ai/analytics.git
@@ -20,9 +20,9 @@ cd analytics
 docker compose -f docker-compose.oss.yml up -d
 ```
 
-Open <http://localhost:9395> and follow the setup screen to configure the datasource and model endpoints.
+Open <http://localhost:9395> and follow the setup screen to configure the data source and model endpoints.
 
-The default image is [`knowflowai/analytics:v0.0.1`](https://hub.docker.com/r/knowflowai/analytics/tags?name=v0.0.1), published for `linux/amd64` and `linux/arm64`.
+The default image is [`knowflowai/analytics:v0.0.2`](https://hub.docker.com/r/knowflowai/analytics/tags?name=v0.0.2), published for `linux/amd64` and `linux/arm64`.
 
 ---
 
@@ -69,7 +69,7 @@ KnowFlow Analytics follows the same basic direction: **the semantic model is reu
 - Ambiguous questions request an explicit business choice and can remember that choice within strict version and context boundaries.
 - Every query has a fixed diagnostic timeline and a redacted Markdown export.
 
-KnowFlow Analytics currently supports PostgreSQL datasources only. It is not an implementation of Cube or Wren protocols and does not require either runtime.
+KnowFlow Analytics currently reads PostgreSQL and MySQL data sources plus uploaded spreadsheets. It is not an implementation of Cube or Wren protocols and does not require either runtime.
 
 ---
 
@@ -110,6 +110,8 @@ AI may propose entity names, field roles, metrics, dimensions, and aliases. Sugg
 
 Each scope freezes one fact root, an explicit metric/dimension membership, and safe join paths from that root. Users maintain the semantic catalog rather than a second set of manually curated “topics”.
 
+A scope is **not picked by a router before the question is answered**. The final LLM sees the union of candidate scope members and writes business-name S2SQL; the compiler then tries a deterministic translation against each real scope. Exactly one success binds it, zero means the question crossed fact roots, and several converge to the coarsest grain. The model proposes and the compiler decides: checking is easier than choosing, and translation already validates membership, frozen-path reachability, and every governance rule.
+
 ### 4. The LLM emits semantic SQL only
 
 ```text
@@ -124,11 +126,11 @@ Natural-language question
 
 If S2SQL references an unpublished name, drops a confirmed value, crosses an unsafe relationship, or fails to use an explicit user choice, it never reaches the database.
 
-### 5. Human clarification and confirmation memory
+### 5. Human clarification and vocabulary-gap feedback
 
-An ordinary query shows at most one business confirmation card. It never exposes internal Scope, Dataset, or semantic IDs. A choice is saved only after authoritative S2SQL actually uses it and the query executes successfully.
+Clarification is a fallback, not the normal path. An ordinary query shows at most one business confirmation card, only for same-name semantic elements or for one phrase that lands on metrics in different fact roots. It never exposes internal Scope, Dataset, or semantic IDs. A human choice must actually appear in the authoritative S2SQL, or the query does not execute.
 
-Memory is bound to actor, project, release, semantic index, phrase, candidate set, exact context, and TTL. A changed version, candidate, or context invalidates it automatically. Automatic AI choices do not create long-term memory.
+Wording the system could not answer is not dropped. Refusals, clarifications, members the model guessed on its own, unknown values, and user likes and dislikes all land in one vocabulary-gap inbox, grouped by wording and fed back to modelling: add one glossary term and the same phrasing answers directly next time. This is more controllable than storing the choice in a memory table, because a glossary term is a reviewable, publishable semantic resource that applies to everyone, and a memory is not.
 
 See [`docs/semantic-confirmation-and-scope-routing.md`](docs/semantic-confirmation-and-scope-routing.md).
 
@@ -147,14 +149,17 @@ See [`docs/one-click-query-diagnostics.md`](docs/one-click-query-diagnostics.md)
 
 | Area | Current capability |
 |---|---|
-| Data sources | Multiple PostgreSQL connections, spreadsheet uploads (Excel becomes a data source), per-project binding |
+| Data sources | Multiple PostgreSQL / MySQL connections, spreadsheet uploads (Excel becomes a data source), per-project binding |
 | Data modelling | Schema snapshots, drift detection, relation canvas, reviewed cardinality, SQL models |
 | AI modelling | Entity/field naming, role classification, metric/dimension drafts, alias and value suggestions |
 | Metric governance | Atomic/derived metrics, default aggregation, formatting, semi-additive constraints, metric time axes |
 | Query compilation | S2SQL, frozen join paths, parameterized SQL, read-only guard |
 | Advanced queries | Set operations, period comparison, rolling ratios, group share |
-| Ambiguity governance | Same-name conflicts, business candidate cards, bounded AI adjudication, confirmation memory |
-| Versioning | Revisions, ETags, immutable releases, semantic-index binding, rollback |
+| Ambiguity governance | Deterministic scope inference after generation, same-name confirmation cards, cross-fact-root metric clarification |
+| Versioning | Revisions, ETags, immutable releases, semantic-index binding, switch to any published release |
+| Query experience | Streaming stage events, result interpretation, textual S2SQL drill-down, visible and reversible default time window |
+| Feedback loop | Vocabulary-gap inbox (six kinds), grouping by wording, one-click glossary entry |
+| Runtime options | Assistant-level overrides: rows, time window, multi-turn rewriting, self-consistency, model, temperature |
 | Quality | Two-mode Playground, golden suites, real-data quality reports |
 | Observability | Fixed query timeline, failure records, redacted Markdown diagnostics |
 | Deployment | Standalone web UI, Docker Compose, OpenAI-compatible model endpoints |
@@ -163,20 +168,21 @@ See [`docs/one-click-query-diagnostics.md`](docs/one-click-query-diagnostics.md)
 
 ## Measured results
 
-`scripts/product_accuracy_campaign.py` drives the authenticated product API: raw PostgreSQL → import → relationship confirmation → AI modelling → publish → load hidden questions after publishing → natural-language preview → compare rows with reference SQL.
+`scripts/product_accuracy_campaign.py` drives the authenticated product API: raw database → import → relationship confirmation → AI modelling → publish → load hidden questions after publishing → natural-language preview → compare rows with reference SQL.
 
-The current three small Chinese regression sets contain 36 questions:
+The most recent measurement in `0.0.2` is the controlled experiment behind the final prompt catalog format: one dataset, 22 Chinese questions, each through the full query chain, with divergent questions rerun to n ≥ 4.
 
-| Dataset | Shape | Correct | Accuracy | Silent wrong answers |
-|---|---:|---:|---:|---:|
-| Double 11 commerce | 6 tables | 12 / 12 | 100% | 0 |
-| City and library | 3 tables | 11 / 12 | 91.7% | 0 |
-| Music holdout | 6 tables, 8 FKs, 3 PKs | 9 / 12 | 75% | 0 |
-| **Total** | 15 tables | **32 / 36** | **88.9%** | **0** |
+| | Per-entry dictionary (old) | Pipe table (new) |
+|---|---:|---:|
+| Mean prompt | 6161 chars | 4744 chars |
+| End-to-end latency | 14.8 s | 11.7 s |
+| Questions agreeing | 20 / 22 | 20 / 22 |
 
-These numbers are product-chain regression evidence, not a universal Text-to-SQL benchmark claim. The suites are small and every campaign reruns AI modelling. One city failure was an HTTP transport error. Music failures include a disagreement over reference aggregation and an event table with neither an identifier nor a business measure, so it cannot become a fact root.
+Both divergent questions favour the new format. "Which product sells best" is answered correctly 6/6, and "how many stores per city" is answered 4/4 within 6 seconds, while under the old format the first model call for that question timed out at 30 seconds and twice fell back to the rule parser, returning a list of store names: a plausible wrong answer.
 
-The project tracks silent wrong answers separately from completion rate. A refusal or clarification is visible; a plausible wrong number is not.
+The experiment also exposed one unfixed silent wrong answer. For "average sales amount per order" the model wrote `AVG(sales_amount)`, which is the mean over detail rows (49.37) rather than per order (98.66), and all six governance gates passed it. Grain misreading is not part of any current gate and is on the backlog.
+
+This is a controlled experiment on one dataset, not a universal Text-to-SQL benchmark claim. The project tracks silent wrong answers separately from completion rate: a refusal or clarification is visible, a plausible wrong number is not. That `AVG` is the latter, and the gate for it is the next thing to add.
 
 ---
 
@@ -193,7 +199,7 @@ Connect datasource
   → query from an agent, UI, or API
 ```
 
-The persistent modelling navigation has three areas: entities and relations, business glossary, and catalog overview. Query scopes appear only in advanced diagnostics.
+The workbench has four pages: data sources, semantic modelling, query validation, and query feedback. Inside semantic modelling the persistent navigation is entities and relations, business glossary, and catalog overview. Query scopes appear only in advanced diagnostics.
 
 ---
 
@@ -203,7 +209,7 @@ The persistent modelling navigation has three areas: entities and relations, bus
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `KNOWFLOW_ANALYTICS_IMAGE` | `knowflowai/analytics:v0.0.1` | Analytics image to run |
+| `KNOWFLOW_ANALYTICS_IMAGE` | `knowflowai/analytics:v0.0.2` | Analytics image to run |
 | `KNOWFLOW_OSS_BIND_ADDRESS` | `127.0.0.1` | Host bind address |
 | `KNOWFLOW_OSS_PORT` | `9395` | Published host port |
 | `CATALOG_DB_PASSWORD` | `analytics` | Bundled catalog PostgreSQL password; must be URL-safe |
@@ -319,13 +325,14 @@ Production deployments should still use a dedicated read-only database account, 
 
 ## Current limits
 
-- PostgreSQL is the only supported datasource.
+- Data sources are PostgreSQL, MySQL, and uploaded spreadsheets. All five time grains, the period-comparison self join, and the share window match PostgreSQL row for row on real MySQL. No other dialect is supported yet.
 - Standalone is single-user with an optional shared password; it does not provide multi-user RBAC or row/column policies.
 - AI modelling runs synchronously inside the request deadline. Import large schemas in batches or increase the timeout.
 - An entity reachable through two equally short join paths is excluded from that scope.
 - An event/bridge table with neither an identifier nor a business measure cannot become a fact root.
-- Multi-turn rewriting is disabled by default and only reads the previous successful semantic query in the same conversation, release, and business scope.
-- Confirmation memory supports API listing and revocation; standalone does not yet have a dedicated memory-management screen.
+- Multi-turn rewriting is enabled by default. It only reads the previous successful semantic query in the same conversation, release, and business scope, and it may complete wording without adding a grouping dimension the user never asked for.
+- Confirmation memory was removed in `0.0.2`. A human choice applies to that query only; lasting fixes go through the business glossary.
+- Result interpretation is disabled by default. It may only restate numbers present in the result and performs no calculation.
 
 ---
 
@@ -334,6 +341,7 @@ Production deployments should still use a dedicated read-only database account, 
 - **Website**: [www.knowflowchat.cn](https://www.knowflowchat.cn)
 - **WeChat official account**: KnowFlow 企业知识库
 - **Community group**: add WeChat `skycode007` and include “加群” in your request
+- **Changelog**: [CHANGELOG.en.md](CHANGELOG.en.md)
 - **Issue tracker**: [GitHub Issues](https://github.com/knowflow-ai/analytics/issues)
 - **KnowFlow community**: [Community and support](https://github.com/knowflow-ai/KnowFlow#%E7%A4%BE%E5%8C%BA%E4%B8%8E%E6%94%AF%E6%8C%81)
 

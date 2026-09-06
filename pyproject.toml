@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "knowflow-analytics"
-version = "0.0.1"
+version = "0.0.2"
 description = "KnowFlow Analytics: a governed semantic layer and natural-language query service"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
@@ -20,6 +20,9 @@ dependencies = [
   # 而 pandas 会把 numpy 一起拖进这个刻意保持精简的依赖表。
   "openpyxl>=3.1.5,<4.0.0",
   "psycopg[binary,pool]>=3.2.3,<4.0.0",
+  # MySQL 数据源的驱动。方言差异在 execution/dialect.py，只有三处 sqlglot 装不下的
+  # 例外；驱动本身不带方言逻辑。纯 Python，不引入编译依赖。
+  "pymysql>=1.1.1,<2.0.0",
   "pydantic>=2.12.5,<3.0.0",
   "pydantic-settings>=2.10.0,<3.0.0",
   "sqlalchemy>=2.0.45,<3.0.0",

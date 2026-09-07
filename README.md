@@ -22,7 +22,7 @@ docker compose -f docker-compose.oss.yml up -d
 
 打开 <http://localhost:9395>，按页面提示填写业务数据库和两个模型端点。
 
-默认镜像是 [`knowflowai/analytics:v0.0.2`](https://hub.docker.com/r/knowflowai/analytics/tags?name=v0.0.2)，支持 `linux/amd64` 和 `linux/arm64`。
+默认镜像是 [`knowflowai/analytics:v0.0.3`](https://hub.docker.com/r/knowflowai/analytics/tags?name=v0.0.3)，支持 `linux/amd64` 和 `linux/arm64`。
 
 ---
 
@@ -209,7 +209,7 @@ AI 可以建议实体名、字段角色、指标、维度和别名。建议先�
 
 | 变量 | 默认值 | 作用 |
 |---|---|---|
-| `KNOWFLOW_ANALYTICS_IMAGE` | `knowflowai/analytics:v0.0.2` | 要运行的 Analytics 镜像 |
+| `KNOWFLOW_ANALYTICS_IMAGE` | `knowflowai/analytics:v0.0.3` | 要运行的 Analytics 镜像 |
 | `KNOWFLOW_OSS_BIND_ADDRESS` | `127.0.0.1` | 宿主机监听地址 |
 | `KNOWFLOW_OSS_PORT` | `9395` | 宿主机端口 |
 | `CATALOG_DB_PASSWORD` | `analytics` | 内置 catalog PostgreSQL 密码，必须 URL-safe |

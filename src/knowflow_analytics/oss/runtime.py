@@ -22,7 +22,7 @@ from knowflow_analytics.api import create_api
 from knowflow_analytics.application import AnalyticsApplication
 from knowflow_analytics.catalog.data_sources import DataSourceRegistry
 from knowflow_analytics.catalog.secrets import DataSourceSecretBox
-from knowflow_analytics.catalog.store import CatalogStore
+from knowflow_analytics.catalog.store import CatalogStore, ensure_catalog_database
 from knowflow_analytics.modeling.ai_modeller import AiSemanticModeller
 from knowflow_analytics.modeling.dimension_aliases import DimensionValueAliasSuggester
 from knowflow_analytics.oss.config import ConfigStore, OssConfig, normalize_postgres_url
@@ -110,7 +110,10 @@ class OssRuntime:
         self.service_secret = load_service_secret(settings.data_dir)
         self._store = ConfigStore(settings.data_dir)
         self._config = self._store.load()
-        self._catalog_engine = create_engine(normalize_postgres_url(settings.catalog_database_url))
+        catalog_url = normalize_postgres_url(settings.catalog_database_url)
+        # 建表之前先确保库在。create_all 建不出库，缺库时失败在连接层。
+        ensure_catalog_database(catalog_url)
+        self._catalog_engine = create_engine(catalog_url)
         self.catalog = CatalogStore(self._catalog_engine)
         self.catalog.create_schema()
         self._lock = threading.Lock()

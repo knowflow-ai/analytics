@@ -7,6 +7,7 @@ import time
 import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 from pydantic import Field
 from sqlalchemy import (
@@ -20,10 +21,12 @@ from sqlalchemy import (
     Table,
     and_,
     case,
+    create_engine,
     delete,
     func,
     insert,
     select,
+    text,
     update,
 )
 from sqlalchemy import true as sa_true
@@ -495,6 +498,65 @@ def _query_diagnostic_advisory_lock_id(actor_id: str, project_id: str) -> int:
         person=b"kf-qdiag-lock",
     ).digest()
     return int.from_bytes(digest, byteorder="big", signed=True)
+
+
+def ensure_catalog_database(catalog_database_url: str) -> None:
+    """确保目录库存在。
+
+    目录库存放语义模型的 Revision / Release / 索引快照——它是服务自己的元数据库，
+    不是用户建模的业务库。``create_schema`` 走的是 ``metadata.create_all``，它建表、
+    **建不出库**：库不存在时失败发生在连接层，服务连启动都做不到，报错还是一句
+    与问数无关的 ``database "..." does not exist``。
+
+    上传库早就是服务自建的（见 ``ingest.uploads.ensure_upload_database``），目录库
+    没有这段逻辑纯属不一致。两处用同一套做法：先试着连，连不上再用同实例的
+    maintenance 库建一次。
+
+    建不出来就明确报错让管理员去建，不静默回落到别的库——回落意味着语义模型写进了
+    一个没人预期的地方。已存在的库原样保留，绝不重建。
+    """
+
+    parts = urlsplit(catalog_database_url)
+    if not parts.scheme.startswith("postgresql"):
+        # SQLite 等没有"库不存在"这回事，文件由驱动自己创建。
+        return
+    database = unquote(parts.path.lstrip("/"))
+    if not database:
+        raise CatalogError(
+            "目录库连接串里没有库名，无法确定要连哪个库。",
+            code="CATALOG_DATABASE_URL_INVALID",
+        )
+
+    if _database_is_reachable(catalog_database_url):
+        return
+
+    maintenance = urlunsplit((parts.scheme, parts.netloc, "/postgres", "", ""))
+    admin = create_engine(maintenance, isolation_level="AUTOCOMMIT")
+    quoted = '"' + database.replace('"', '""') + '"'
+    try:
+        with admin.connect() as connection:
+            connection.execute(text(f"CREATE DATABASE {quoted}"))
+    except Exception as exc:  # noqa: BLE001
+        # 多副本同时启动时会有一方撞上"已存在"。以能否连上为准，而不是以谁建的为准。
+        if not _database_is_reachable(catalog_database_url):
+            raise CatalogError(
+                f"目录库「{database}」不存在，且当前数据库账号建不出来。"
+                f"请让管理员在同一个 PostgreSQL 实例上创建它并授权。",
+                code="CATALOG_DATABASE_UNAVAILABLE",
+            ) from exc
+    finally:
+        admin.dispose()
+
+
+def _database_is_reachable(url: str) -> bool:
+    engine = create_engine(url)
+    try:
+        with engine.connect():
+            return True
+    except Exception:  # noqa: BLE001 连不上的原因很多，这里只关心"能不能用"
+        return False
+    finally:
+        engine.dispose()
 
 
 class CatalogStore:

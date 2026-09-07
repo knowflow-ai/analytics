@@ -6,6 +6,21 @@ Versioning note: while on `0.x`, semantic resource contracts, query stages, and 
 
 ---
 
+## [0.0.3] - 2026-09-07
+
+### Fixed
+
+- The service now creates its catalog database when it is missing, the same way it
+  already did for the upload database `analytics_uploads`. Previously
+  `KNOWFLOW_ANALYTICS_AUTO_CREATE_SCHEMA` only ran `metadata.create_all`, which
+  creates tables but cannot create a database, so a fresh deployment failed at the
+  connection layer with `database "analytics_catalog" does not exist` and needed a
+  manual `createdb` to start. When the account cannot create it, the startup error is
+  now an explicit `CATALOG_DATABASE_UNAVAILABLE`; it never silently falls back to
+  another database, and an existing database is left untouched.
+
+---
+
 ## [0.0.2] - 2026-09-05
 
 Everything since `v0.0.1`. Image `knowflowai/analytics:v0.0.2` (`linux/amd64`, `linux/arm64`).

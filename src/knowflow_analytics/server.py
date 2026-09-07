@@ -7,7 +7,7 @@ from knowflow_analytics.api import create_api
 from knowflow_analytics.application import AnalyticsApplication
 from knowflow_analytics.catalog.data_sources import DataSourceRegistry
 from knowflow_analytics.catalog.secrets import DataSourceSecretBox
-from knowflow_analytics.catalog.store import CatalogStore
+from knowflow_analytics.catalog.store import CatalogStore, ensure_catalog_database
 from knowflow_analytics.gateways.embedding import HttpEmbeddingGateway
 from knowflow_analytics.gateways.knowledge import HttpKnowledgeGateway
 from knowflow_analytics.gateways.model import HttpModelGateway
@@ -24,7 +24,11 @@ from knowflow_analytics.settings import AnalyticsSettings
 def create_app() -> FastAPI:
     settings = AnalyticsSettings()
     service_secret = settings.service_secret.get_secret_value()
-    catalog_engine = create_engine(settings.catalog_database_url.get_secret_value())
+    catalog_url = settings.catalog_database_url.get_secret_value()
+    if settings.auto_create_schema:
+        # 建表之前先确保库在。create_all 建不出库，缺库时失败在连接层。
+        ensure_catalog_database(catalog_url)
+    catalog_engine = create_engine(catalog_url)
     catalog = CatalogStore(catalog_engine)
     if settings.auto_create_schema:
         catalog.create_schema()

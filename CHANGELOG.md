@@ -6,6 +6,19 @@
 
 ---
 
+## [0.0.3] - 2026-09-07
+
+### 修复
+
+- 目录库不存在时服务自己建出来，与上传库 `analytics_uploads` 同一套做法。此前
+  `KNOWFLOW_ANALYTICS_AUTO_CREATE_SCHEMA` 只做 `metadata.create_all`（建表、建不出库），
+  全新部署启动会失败在连接层，报错是一句与问数无关的
+  `database "analytics_catalog" does not exist`，只能手动 `createdb` 才能起来。
+  建不出来时给出明确的 `CATALOG_DATABASE_UNAVAILABLE`，不静默回落到别的库；
+  已存在的库原样保留，绝不重建。
+
+---
+
 ## [0.0.2] - 2026-09-05
 
 自 `v0.0.1` 以来的全部改动。镜像 `knowflowai/analytics:v0.0.2`（`linux/amd64`、`linux/arm64`）。

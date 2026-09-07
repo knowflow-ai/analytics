@@ -10,6 +10,10 @@ The LLM only expresses intent as semantic SQL (S2SQL) made of business names. Ph
 
 ![KnowFlow Analytics: datasource import, semantic modelling, human clarification and one-click diagnostics](docs/screenshots/knowflow-analytics-walkthrough.gif)
 
+> **What is open source is the semantic modelling layer and the governed query engine.** That covers the modelling workbench, one-click AI modelling, publishing and version rollback, pre-publish validation, vocabulary-gap feedback, and the S2SQL compiler, governance gates, read-only guard and query API underneath.
+>
+> The **analytics assistant, reports and multi-user permissions** that business users work with are not in the open-source edition. They belong to commercial KnowFlow. Both editions share one semantic model and one query engine. See [Open source and commercial](#open-source-and-commercial).
+
 ## Quick start
 
 You need Docker and reachable OpenAI-compatible chat and embedding endpoints. Compose starts Analytics and its catalog PostgreSQL. Fill in the model endpoints under Settings and add the business databases you want to analyse under Database connections (several are supported). You can also upload an Excel file, which becomes a data source of its own.
@@ -157,12 +161,56 @@ See [`docs/one-click-query-diagnostics.md`](docs/one-click-query-diagnostics.md)
 | Advanced queries | Set operations, period comparison, rolling ratios, group share |
 | Ambiguity governance | Deterministic scope inference after generation, same-name confirmation cards, cross-fact-root metric clarification |
 | Versioning | Revisions, ETags, immutable releases, semantic-index binding, switch to any published release |
-| Query experience | Streaming stage events, result interpretation, textual S2SQL drill-down, visible and reversible default time window |
+| Query engine | Streaming stage events, result summary, textual S2SQL drilldown, visible and reversible default time window (engine capability; the open-source entry point is "Query validation", the conversational page is commercial) |
 | Feedback loop | Vocabulary-gap inbox (six kinds), grouping by wording, one-click glossary entry |
 | Runtime options | Assistant-level overrides: rows, time window, multi-turn rewriting, self-consistency, model, temperature |
 | Quality | Two-mode Playground, golden suites, real-data quality reports |
 | Observability | Fixed query timeline, failure records, redacted Markdown diagnostics |
 | Deployment | Standalone web UI, Docker Compose, OpenAI-compatible model endpoints |
+
+The table above is what the open-source edition ships. The analytics assistant, reports and multi-user permissions are covered in [Open source and commercial](#open-source-and-commercial).
+
+---
+
+## Open source and commercial
+
+The open-source edition gives you **the modelling capability and the query engine**. It ships a complete modelling workbench. Walk through its four steps and you have a publishable semantic model, and you can ask questions in natural language under "Query validation" to check the model question by question.
+
+It does not ship the product surface business users work with. Asking questions day to day, pinning answers into reports, and handing out per-person data permissions live in commercial KnowFlow.
+
+| | Open source | Commercial |
+|---|---|---|
+| Modelling workbench (datasource, modelling, query validation, feedback) | Yes | Yes |
+| One-click AI modelling, alias and value-dictionary suggestions | Yes | Yes |
+| Publishing, version rollback, pre-publish quality report | Yes | Yes |
+| S2SQL compilation, governance gates, read-only guard, query API | Yes | Yes |
+| PostgreSQL / MySQL / uploaded spreadsheets, multiple datasources | Yes | Yes |
+| Vocabulary-gap inbox, golden suite, diagnostics export | Yes | Yes |
+| **Analytics assistant**: conversational questions, follow-ups, drilldown, result summary, conversation sharing | No | Yes |
+| **Reports**: pin answers as cards, group by project, refresh, export to Excel | No | Yes |
+| **Project authorization and data scope**: multi-user RBAC, row-level and column-level permissions | No | Yes |
+| Integration with the knowledge base, agents and enterprise accounts | No | Yes |
+| Sign-in | Single user with an optional shared passphrase | Enterprise accounts, LDAP / OIDC, WeCom |
+
+The open-source edition can answer questions. The entry point is "Query validation" inside the workbench, and its purpose is checking the model before you publish it. The commercial edition wires the same engine to a product surface built for business users.
+
+### What the commercial edition looks like
+
+Business users ask in plain language. The answer card states how the system understood the question, and drilldown continues from there.
+
+![Commercial analytics assistant: interpretation chips, chart, table, result summary and drilldown](docs/screenshots/commercial-ask-assistant.png)
+
+Period-over-period comparisons render as signed growth rates. The purple chip is an interpretation the system supplied on its own, reading "sales" as sales amount, and saying so.
+
+![Commercial analytics assistant: period comparison and automatic interpretation](docs/screenshots/commercial-period-ratio.png)
+
+Answers worth keeping become report cards grouped by project, refreshable for the latest numbers and exportable to Excel.
+
+![Commercial reports: pinned analytics results, refreshable and exportable](docs/screenshots/commercial-reports.png)
+
+The commercial edition also provides project-level authorization and row and column data scope, so the rows and columns each person sees inside one project follow their grants.
+
+For a trial or more detail, see the [website](https://www.knowflowchat.cn), or add WeChat `skycode007` with a note saying "analytics".
 
 ---
 
@@ -326,7 +374,7 @@ Production deployments should still use a dedicated read-only database account, 
 ## Current limits
 
 - Data sources are PostgreSQL, MySQL, and uploaded spreadsheets. All five time grains, the period-comparison self join, and the share window match PostgreSQL row for row on real MySQL. No other dialect is supported yet.
-- Standalone is single-user with an optional shared password; it does not provide multi-user RBAC or row/column policies.
+- Standalone is single-user with an optional shared password; it does not provide multi-user RBAC or row/column policies. Per-person data scope is a commercial feature.
 - AI modelling runs synchronously inside the request deadline. Import large schemas in batches or increase the timeout.
 - An entity reachable through two equally short join paths is excluded from that scope.
 - An event/bridge table with neither an identifier nor a business measure cannot become a fact root.

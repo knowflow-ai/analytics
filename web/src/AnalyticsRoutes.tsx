@@ -4,6 +4,7 @@ import { getOssStatus } from './api/oss';
 import { EDITION } from './api/client';
 import { Spinner } from './components/ui';
 import { useRoutes } from '@analytics/lib/router';
+import { ANALYTICS_MAX_CONTENT_WIDTH_PX } from './lib/layout';
 import { ProjectsPage } from './pages/projects';
 
 // 项目列表是落地页，直接静态引入。其余三个懒加载。
@@ -41,12 +42,19 @@ export function AnalyticsRoutes() {
   const lazily = (node: JSX.Element) => (
     <Suspense fallback={<Spinner />}>{node}</Suspense>
   );
+  // 外壳已改为铺满宽度，限宽由各页自负责。工作台/设置沿用原来的 2160 上限，
+  // 数据源页自己处理（顶栏铺满、卡片区限宽），不套这层。
+  const capped = (node: JSX.Element) => (
+    <div className="w-full" style={{ maxWidth: ANALYTICS_MAX_CONTENT_WIDTH_PX }}>
+      {node}
+    </div>
+  );
   const element = useRoutes([
     { path: '/', element: <ProjectsPage ready={ready} /> },
     ...(EDITION !== 'embedded'
-      ? [{ path: '/settings', element: lazily(<SettingsPage />) }]
+      ? [{ path: '/settings', element: capped(lazily(<SettingsPage />)) }]
       : []),
-    { path: '/projects/:projectId', element: lazily(<WorkbenchPage />) },
+    { path: '/projects/:projectId', element: capped(lazily(<WorkbenchPage />)) },
     { path: '*', element: <ProjectsPage ready={ready} /> },
   ]);
   if (status.isPending) return <Spinner />;

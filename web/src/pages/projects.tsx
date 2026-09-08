@@ -32,7 +32,10 @@ import { ProjectAuthorizeDialog } from './project-authorize';
 import { ProjectDataSourceDialog } from './project-data-source';
 import { describeError, formatDateTime } from '@analytics/lib/labels';
 import { EDITION, appPath } from '@analytics/api/edition';
-import { projectGridTemplateColumns } from '@analytics/lib/layout';
+import {
+  ANALYTICS_MAX_CONTENT_WIDTH_PX,
+  projectGridTemplateColumns,
+} from '@analytics/lib/layout';
 
 export function projectStatusOf(project: AnalyticsProject): { label: string; tone: string } {
   if (project.active_release_id) return { label: '已发布', tone: 'text-emerald-600' };
@@ -248,42 +251,45 @@ export function ProjectsPage({ ready }: { ready: boolean }) {
           </Button>
         </div>
       </div>
-      {projects.isPending && <Spinner />}
-      {projects.isError && (
-        <div className="text-sm text-red-600">{describeError(projects.error)}</div>
-      )}
-      {projects.data && projects.data.items.length === 0 && (
-        <Empty
-          title="还没有项目"
-          hint="新建一个项目，从数据库里挑几张业务表开始。"
-          action={
-            <Button variant="primary" onClick={() => setCreating(true)}>
-              新建项目
-            </Button>
-          }
-        />
-      )}
-      {projects.data && projects.data.items.length > 0 && (
-        <div
-          className="grid gap-4"
-          style={{ gridTemplateColumns: projectGridTemplateColumns() }}
-        >
-          {projects.data.items.map((project) => (
-            <ProjectCard
-              key={project.id}
-              project={project}
-              onOpen={() => navigate(appPath(`/projects/${project.id}`))}
-              onAuthorize={
-                EDITION === 'embedded'
-                  ? () => setAuthorizing(project)
-                  : undefined
-              }
-              onPickDataSource={() => setPickingSourceFor(project)}
-              onDelete={() => setDeleting(project)}
-            />
-          ))}
-        </div>
-      )}
+      {/* 顶栏（标题+按钮）铺满可用宽度；卡片区仍限宽、左对齐，保住 2.5K 屏可读性。 */}
+      <div className="w-full" style={{ maxWidth: ANALYTICS_MAX_CONTENT_WIDTH_PX }}>
+        {projects.isPending && <Spinner />}
+        {projects.isError && (
+          <div className="text-sm text-red-600">{describeError(projects.error)}</div>
+        )}
+        {projects.data && projects.data.items.length === 0 && (
+          <Empty
+            title="还没有项目"
+            hint="新建一个项目，从数据库里挑几张业务表开始。"
+            action={
+              <Button variant="primary" onClick={() => setCreating(true)}>
+                新建项目
+              </Button>
+            }
+          />
+        )}
+        {projects.data && projects.data.items.length > 0 && (
+          <div
+            className="grid gap-4"
+            style={{ gridTemplateColumns: projectGridTemplateColumns() }}
+          >
+            {projects.data.items.map((project) => (
+              <ProjectCard
+                key={project.id}
+                project={project}
+                onOpen={() => navigate(appPath(`/projects/${project.id}`))}
+                onAuthorize={
+                  EDITION === 'embedded'
+                    ? () => setAuthorizing(project)
+                    : undefined
+                }
+                onPickDataSource={() => setPickingSourceFor(project)}
+                onDelete={() => setDeleting(project)}
+              />
+            ))}
+          </div>
+        )}
+      </div>
 
       <DataSourcesDialog
         open={managingSources}

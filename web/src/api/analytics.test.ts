@@ -1,10 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AnalyticsSemanticQuery, AnalyticsTerm } from './types';
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AnalyticsSemanticQuery, AnalyticsTerm } from "./types";
 
 const { requestMock } = vi.hoisted(() => ({ requestMock: vi.fn() }));
 
-vi.mock('./client', () => ({
-  EDITION: 'oss',
+vi.mock("./client", () => ({
+  EDITION: "oss",
   request: requestMock,
 }));
 
@@ -20,159 +20,165 @@ import {
   previewStructuredQuery,
   query,
   saveTerm,
-} from './analytics';
+} from "./analytics";
 
 const version = {
   expected_etag: 8,
-  schema_snapshot_hash: 'sha256:snapshot',
+  schema_snapshot_hash: "sha256:snapshot",
 };
 const term: AnalyticsTerm = {
-  id: 'term-gmv',
-  name: '成交额',
-  description: '交易额',
-  aliases: ['GMV'],
+  id: "term-gmv",
+  name: "成交额",
+  description: "交易额",
+  aliases: ["GMV"],
   dataset_ids: [],
-  metric_ids: ['metric-gmv'],
+  metric_ids: ["metric-gmv"],
   dimension_ids: [],
 };
 
-describe('business dictionary catalog requests', () => {
+describe("business dictionary catalog requests", () => {
   beforeEach(() => requestMock.mockReset());
 
-  it('saves the complete Term DTO with the current revision version', async () => {
-    requestMock.mockResolvedValue({ id: 'revision-1', etag: 9 });
+  it("saves the complete Term DTO with the current revision version", async () => {
+    requestMock.mockResolvedValue({ id: "revision-1", etag: 9 });
 
-    await saveTerm('project-1', 'revision-1', version, term);
+    await saveTerm("project-1", "revision-1", version, term);
 
     expect(requestMock).toHaveBeenCalledWith(
-      '/v1/analytics/projects/project-1/revisions/revision-1/catalog/terms/term-gmv',
+      "/v1/analytics/projects/project-1/revisions/revision-1/catalog/terms/term-gmv",
       {
-        method: 'PUT',
-        projectId: 'project-1',
+        method: "PUT",
+        projectId: "project-1",
         body: { ...version, term },
       },
     );
   });
 
-  it('encodes catalog resource ids as one URL path segment', async () => {
-    requestMock.mockResolvedValueOnce({ impact_hash: 'sha256:impact', effects: [] });
+  it("encodes catalog resource ids as one URL path segment", async () => {
+    requestMock.mockResolvedValueOnce({
+      impact_hash: "sha256:impact",
+      effects: [],
+    });
 
     await previewCatalogDeletion(
-      'project-1',
-      'revision-1',
+      "project-1",
+      "revision-1",
       version,
-      'dimensions',
-      'dimension:电商平台 ID',
+      "dimensions",
+      "dimension:电商平台 ID",
     );
 
     expect(requestMock).toHaveBeenCalledWith(
-      '/v1/analytics/projects/project-1/revisions/revision-1/catalog/dimensions/dimension%3A%E7%94%B5%E5%95%86%E5%B9%B3%E5%8F%B0%20ID/deletion-impact',
+      "/v1/analytics/projects/project-1/revisions/revision-1/catalog/dimensions/dimension%3A%E7%94%B5%E5%95%86%E5%B9%B3%E5%8F%B0%20ID/deletion-impact",
       {
-        method: 'POST',
-        projectId: 'project-1',
+        method: "POST",
+        projectId: "project-1",
         body: version,
       },
     );
   });
 
-  it.each(['.', '..', '../models/victim', 'safe\\..\\victim', 'bad\u0000id'])(
-    'rejects unsafe catalog resource id %j before issuing a request',
+  it.each([".", "..", "../models/victim", "safe\\..\\victim", "bad\u0000id"])(
+    "rejects unsafe catalog resource id %j before issuing a request",
     (resourceId) => {
       expect(() =>
         previewCatalogDeletion(
-          'project-1',
-          'revision-1',
+          "project-1",
+          "revision-1",
           version,
-          'metrics',
+          "metrics",
           resourceId,
         ),
-      ).toThrow('catalog resource id contains an unsafe path segment');
+      ).toThrow("catalog resource id contains an unsafe path segment");
       expect(requestMock).not.toHaveBeenCalled();
     },
   );
 
-  it('deletes a term only after binding confirmation to the previewed impact hash', async () => {
+  it("deletes a term only after binding confirmation to the previewed impact hash", async () => {
     requestMock
-      .mockResolvedValueOnce({ impact_hash: 'sha256:impact', effects: [] })
-      .mockResolvedValueOnce({ id: 'revision-1', etag: 9 });
+      .mockResolvedValueOnce({ impact_hash: "sha256:impact", effects: [] })
+      .mockResolvedValueOnce({ id: "revision-1", etag: 9 });
 
     await deleteCatalogResource(
-      'project-1',
-      'revision-1',
+      "project-1",
+      "revision-1",
       version,
-      'terms',
-      'term-gmv',
+      "terms",
+      "term-gmv",
     );
 
     const path =
-      '/v1/analytics/projects/project-1/revisions/revision-1/catalog/terms/term-gmv';
+      "/v1/analytics/projects/project-1/revisions/revision-1/catalog/terms/term-gmv";
     expect(requestMock).toHaveBeenNthCalledWith(1, `${path}/deletion-impact`, {
-      method: 'POST',
-      projectId: 'project-1',
+      method: "POST",
+      projectId: "project-1",
       body: version,
     });
     expect(requestMock).toHaveBeenNthCalledWith(2, path, {
-      method: 'DELETE',
-      projectId: 'project-1',
+      method: "DELETE",
+      projectId: "project-1",
       body: {
         ...version,
-        expected_impact_hash: 'sha256:impact',
-        confirmation: 'delete',
+        expected_impact_hash: "sha256:impact",
+        confirmation: "delete",
       },
     });
   });
 
-  it('uses the exact impact hash already reviewed by the user without previewing again', async () => {
-    requestMock.mockResolvedValueOnce({ id: 'revision-1', etag: 9 });
+  it("uses the exact impact hash already reviewed by the user without previewing again", async () => {
+    requestMock.mockResolvedValueOnce({ id: "revision-1", etag: 9 });
 
     await deleteCatalogResource(
-      'project-1',
-      'revision-1',
+      "project-1",
+      "revision-1",
       version,
-      'terms',
-      'term-gmv',
-      'sha256:reviewed-impact',
+      "terms",
+      "term-gmv",
+      "sha256:reviewed-impact",
     );
 
     expect(requestMock).toHaveBeenCalledTimes(1);
     expect(requestMock).toHaveBeenCalledWith(
-      '/v1/analytics/projects/project-1/revisions/revision-1/catalog/terms/term-gmv',
+      "/v1/analytics/projects/project-1/revisions/revision-1/catalog/terms/term-gmv",
       {
-        method: 'DELETE',
-        projectId: 'project-1',
+        method: "DELETE",
+        projectId: "project-1",
         body: {
           ...version,
-          expected_impact_hash: 'sha256:reviewed-impact',
-          confirmation: 'delete',
+          expected_impact_hash: "sha256:reviewed-impact",
+          confirmation: "delete",
         },
       },
     );
   });
 });
 
-describe('query diagnostics requests', () => {
+describe("query diagnostics requests", () => {
   beforeEach(() => requestMock.mockReset());
 
-  it('requests the server-authored Markdown report inside the owning project', async () => {
-    requestMock.mockResolvedValueOnce({ filename: 'diagnostic.md', timeline: [] });
+  it("requests the server-authored Markdown report inside the owning project", async () => {
+    requestMock.mockResolvedValueOnce({
+      filename: "diagnostic.md",
+      timeline: [],
+    });
 
-    await exportQueryDiagnostic('project-1', 'query/a b');
+    await exportQueryDiagnostic("project-1", "query/a b");
 
     expect(requestMock).toHaveBeenCalledWith(
-      '/v1/analytics/projects/project-1/query-diagnostics/export',
-      { projectId: 'project-1', query: { query_id: 'query/a b' } },
+      "/v1/analytics/projects/project-1/query-diagnostics/export",
+      { projectId: "project-1", query: { query_id: "query/a b" } },
     );
   });
 
-  it('keeps ordinary Ask business-only while workbench previews request diagnostics', async () => {
-    requestMock.mockResolvedValue({ state: 'COMPLETED' });
-    const input = { question: '各地区销售额', dataset_ids: ['scope-orders'] };
+  it("keeps ordinary Ask business-only while workbench previews request diagnostics", async () => {
+    requestMock.mockResolvedValue({ state: "COMPLETED" });
+    const input = { question: "各地区销售额", dataset_ids: ["scope-orders"] };
     const semanticQuery: AnalyticsSemanticQuery = {
-      dataset_id: 'scope-orders',
-      query_type: 'aggregate',
-      metric_ids: ['metric-revenue'],
+      dataset_id: "scope-orders",
+      query_type: "aggregate",
+      metric_ids: ["metric-revenue"],
       aggregation_overrides: [],
-      dimension_ids: ['dimension-region'],
+      dimension_ids: ["dimension-region"],
       filters: [],
       measure_filters: [],
       metric_filters: [],
@@ -180,15 +186,20 @@ describe('query diagnostics requests', () => {
       limit: null,
     };
 
-    await query('project-1', input);
-    await previewQuery('project-1', 'revision-1', version, input);
-    await previewStructuredQuery('project-1', 'revision-1', version, semanticQuery);
+    await query("project-1", input);
+    await previewQuery("project-1", "revision-1", version, input);
+    await previewStructuredQuery(
+      "project-1",
+      "revision-1",
+      version,
+      semanticQuery,
+    );
 
-    expect(requestMock).toHaveBeenNthCalledWith(1, '/v1/analytics/query', {
-      method: 'POST',
-      projectId: 'project-1',
+    expect(requestMock).toHaveBeenNthCalledWith(1, "/v1/analytics/query", {
+      method: "POST",
+      projectId: "project-1",
       body: {
-        project_id: 'project-1',
+        project_id: "project-1",
         ...input,
         include_diagnostics: false,
         include_debug_sql: false,
@@ -196,10 +207,10 @@ describe('query diagnostics requests', () => {
     });
     expect(requestMock).toHaveBeenNthCalledWith(
       2,
-      '/v1/analytics/projects/project-1/revisions/revision-1/query-preview',
+      "/v1/analytics/projects/project-1/revisions/revision-1/query-preview",
       {
-        method: 'POST',
-        projectId: 'project-1',
+        method: "POST",
+        projectId: "project-1",
         body: {
           ...version,
           ...input,
@@ -210,10 +221,10 @@ describe('query diagnostics requests', () => {
     );
     expect(requestMock).toHaveBeenNthCalledWith(
       3,
-      '/v1/analytics/projects/project-1/revisions/revision-1/structured-query-preview',
+      "/v1/analytics/projects/project-1/revisions/revision-1/structured-query-preview",
       {
-        method: 'POST',
-        projectId: 'project-1',
+        method: "POST",
+        projectId: "project-1",
         body: {
           ...version,
           semantic_query: semanticQuery,
@@ -224,59 +235,74 @@ describe('query diagnostics requests', () => {
   });
 });
 
-describe('问数项目授权（仅嵌入版可见，接口走宿主路径）', () => {
+describe("问数项目授权（仅嵌入版可见，接口走宿主路径）", () => {
   beforeEach(() => requestMock.mockReset());
 
-  it('授权与撤销打到宿主的转发路由，而不是核心', async () => {
+  it("授权与撤销打到宿主的转发路由，而不是核心", async () => {
     requestMock.mockResolvedValue(true);
-    await grantProject('prj_1', {
-      subject_type: 'user',
-      subject_id: 'u-2',
-      role_code: 'viewer',
+    await grantProject("prj_1", {
+      subject_type: "user",
+      subject_id: "u-2",
+      role_code: "viewer",
     });
 
     const [path, options] = requestMock.mock.calls[0];
     // 核心不认识授权：授权是宿主（商业版）能力，路径不带 /v1/analytics 前缀，
     // 因此不会被 client 的 rewritePath 改写到核心直通道上。
-    expect(path).toBe('/v1/kb_folder/analytics_project_grant');
-    expect(options.method).toBe('POST');
+    expect(path).toBe("/v1/kb_folder/analytics_project_grant");
+    expect(options.method).toBe("POST");
     expect(options.body).toEqual({
-      project_id: 'prj_1',
-      subject_type: 'user',
-      subject_id: 'u-2',
-      role_code: 'viewer',
+      project_id: "prj_1",
+      subject_type: "user",
+      subject_id: "u-2",
+      role_code: "viewer",
     });
 
-    await revokeProject('prj_1', {
-      subject_type: 'org',
-      subject_id: 'org-1',
-      role_code: 'viewer',
+    await revokeProject("prj_1", {
+      subject_type: "org",
+      subject_id: "org-1",
+      role_code: "viewer",
     });
-    expect(requestMock.mock.calls[1][0]).toBe('/v1/kb_folder/analytics_project_revoke');
+    expect(requestMock.mock.calls[1][0]).toBe(
+      "/v1/kb_folder/analytics_project_revoke",
+    );
   });
 
-  it('项目 id 进 query 时被编码，列授权只读', async () => {
+  it("项目 id 进 query 时被编码，列授权只读", async () => {
     requestMock.mockResolvedValue({ users: [], orgs: [], groups: [] });
-    await listProjectGrants('prj/1');
+    await listProjectGrants("prj/1");
 
     const [path, options] = requestMock.mock.calls[0];
-    expect(path).toBe('/v1/kb_folder/analytics_project_grants?project_id=prj%2F1');
+    expect(path).toBe(
+      "/v1/kb_folder/analytics_project_grants?project_id=prj%2F1",
+    );
     expect(options).toBeUndefined();
   });
 
-  it('三类主体的查询参数名各不相同，不能套一个通用的 keyword', async () => {
+  it("三类主体的查询参数名各不相同，不能套一个通用的 keyword", async () => {
     requestMock.mockResolvedValue([]);
-    await searchGrantSubjects('user', '张');
-    await searchGrantSubjects('org', '销售');
-    await searchGrantSubjects('group', 'a b');
-    await searchGrantSubjects('user', '');
+    await searchGrantSubjects("user", "张");
+    await searchGrantSubjects("org", "销售");
+    await searchGrantSubjects("group", "a b");
+    await searchGrantSubjects("user", "");
 
     expect(requestMock.mock.calls.map((call) => call[0])).toEqual([
-      '/v1/kb_folder/subjects/users?username=%E5%BC%A0',
-      '/v1/kb_folder/subjects/orgs?keyword=%E9%94%80%E5%94%AE',
-      '/v1/kb_folder/subjects/groups?name=a%20b',
+      "/v1/kb_folder/subjects/users?username=%E5%BC%A0",
+      "/v1/kb_folder/subjects/orgs?keyword=%E9%94%80%E5%94%AE",
+      "/v1/kb_folder/subjects/groups?name=a%20b",
       // 空关键词不带参数（与知识库授权面板一致）。
-      '/v1/kb_folder/subjects/users',
+      "/v1/kb_folder/subjects/users",
+    ]);
+  });
+
+  it('带上项目 id，宿主才能按"该项目的 owner/admin"放行主体列表', async () => {
+    requestMock.mockResolvedValue([]);
+    await searchGrantSubjects("user", "张", "prj_1");
+    await searchGrantSubjects("org", "", "prj/1");
+
+    expect(requestMock.mock.calls.map((call) => call[0])).toEqual([
+      "/v1/kb_folder/subjects/users?username=%E5%BC%A0&project_id=prj_1",
+      "/v1/kb_folder/subjects/orgs?project_id=prj%2F1",
     ]);
   });
 
@@ -284,68 +310,78 @@ describe('问数项目授权（仅嵌入版可见，接口走宿主路径）', (
     // client 不解包响应：核心接口没有信封，宿主接口有。
     requestMock.mockResolvedValue({
       code: 0,
-      message: 'ok',
-      data: { list: [{ id: 'u1', username: 'zhang' }] },
+      message: "ok",
+      data: { list: [{ id: "u1", username: "zhang" }] },
     });
-    expect(await searchGrantSubjects('user', '')).toEqual([
-      { id: 'u1', name: 'zhang' },
+    expect(await searchGrantSubjects("user", "")).toEqual([
+      { id: "u1", name: "zhang" },
     ]);
 
     requestMock.mockResolvedValue({
       code: 0,
-      data: { users: [{ user_id: 'u1', role_code: 'viewer' }], orgs: [], groups: [] },
+      data: {
+        users: [{ user_id: "u1", role_code: "viewer" }],
+        orgs: [],
+        groups: [],
+      },
     });
-    expect((await listProjectGrants('prj_1')).users).toEqual([
-      { user_id: 'u1', role_code: 'viewer' },
+    expect((await listProjectGrants("prj_1")).users).toEqual([
+      { user_id: "u1", role_code: "viewer" },
     ]);
 
     // 没有信封时原样解析，两种形态都要能吃。
-    requestMock.mockResolvedValue({ list: [{ id: 'u2', username: 'li' }] });
-    expect(await searchGrantSubjects('user', '')).toEqual([{ id: 'u2', name: 'li' }]);
+    requestMock.mockResolvedValue({ list: [{ id: "u2", username: "li" }] });
+    expect(await searchGrantSubjects("user", "")).toEqual([
+      { id: "u2", name: "li" },
+    ]);
   });
 
-  it('已授权列表的三类主体各有各的名字字段：nickname / org_name / group_name', async () => {
+  it("已授权列表的三类主体各有各的名字字段：nickname / org_name / group_name", async () => {
     // 实机字段名不是统一的 name，猜一个通用键会让组织/协作组只显示 id。
     requestMock.mockResolvedValue({
       code: 0,
       data: {
-        users: [{ user_id: 'u1', nickname: '张三', role_code: 'viewer' }],
-        orgs: [{ org_unit_id: 'o1', org_name: '研发部', role_code: 'viewer' }],
-        groups: [{ group_id: 'g1', group_name: '数据组', role_code: 'viewer' }],
+        users: [{ user_id: "u1", nickname: "张三", role_code: "viewer" }],
+        orgs: [{ org_unit_id: "o1", org_name: "研发部", role_code: "viewer" }],
+        groups: [{ group_id: "g1", group_name: "数据组", role_code: "viewer" }],
       },
     });
 
-    const grants = await listProjectGrants('prj_1');
-    expect(grants.users[0].nickname).toBe('张三');
-    expect(grants.orgs[0].org_name).toBe('研发部');
-    expect(grants.groups[0].group_name).toBe('数据组');
+    const grants = await listProjectGrants("prj_1");
+    expect(grants.users[0].nickname).toBe("张三");
+    expect(grants.orgs[0].org_name).toBe("研发部");
+    expect(grants.groups[0].group_name).toBe("数据组");
   });
 
-  it('用户与协作组从 list 里取，组织是树要递归拍平', async () => {
+  it("用户与协作组从 list 里取，组织是树要递归拍平", async () => {
     requestMock.mockResolvedValue({
       list: [
-        { id: 'u1', nickname: '张三', username: 'zhang', email: 'z@x.com' },
-        { id: 'u2', username: 'lisi' },
-        { id: '', username: '没有 id 的丢弃' },
+        { id: "u1", nickname: "张三", username: "zhang", email: "z@x.com" },
+        { id: "u2", username: "lisi" },
+        { id: "", username: "没有 id 的丢弃" },
       ],
     });
-    expect(await searchGrantSubjects('user', '')).toEqual([
-      { id: 'u1', name: '张三' },
-      { id: 'u2', name: 'lisi' },
+    expect(await searchGrantSubjects("user", "")).toEqual([
+      { id: "u1", name: "张三" },
+      { id: "u2", name: "lisi" },
     ]);
 
     // 组织返回树，子级按层级缩进；扁平解析会整棵丢掉子组织。
     requestMock.mockResolvedValue([
-      { id: 'o1', name: '总部', children: [{ id: 'o2', name: '华东', children: [] }] },
+      {
+        id: "o1",
+        name: "总部",
+        children: [{ id: "o2", name: "华东", children: [] }],
+      },
     ]);
-    expect(await searchGrantSubjects('org', '')).toEqual([
-      { id: 'o1', name: '总部' },
-      { id: 'o2', name: '\u3000华东' },
+    expect(await searchGrantSubjects("org", "")).toEqual([
+      { id: "o1", name: "总部" },
+      { id: "o2", name: "\u3000华东" },
     ]);
 
-    requestMock.mockResolvedValue({ list: [{ id: 'g1', name: '数据组' }] });
-    expect(await searchGrantSubjects('group', '')).toEqual([
-      { id: 'g1', name: '数据组' },
+    requestMock.mockResolvedValue({ list: [{ id: "g1", name: "数据组" }] });
+    expect(await searchGrantSubjects("group", "")).toEqual([
+      { id: "g1", name: "数据组" },
     ]);
   });
 });

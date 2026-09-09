@@ -1,4 +1,4 @@
-import { EDITION, request } from "./client";
+import { EDITION, request } from './client';
 import type {
   AnalyticsCatalogDimension,
   AnalyticsCatalogHierarchy,
@@ -31,20 +31,20 @@ import type {
   AnalyticsSuggestionDecision,
   AnalyticsTableCatalog,
   AnalyticsTerm,
-} from "./types";
+} from './types';
 
-const PROJECT_ID_PREFIX = "prj_oss_";
+const PROJECT_ID_PREFIX = 'prj_oss_';
 const base = (projectId: string) => `/v1/analytics/projects/${projectId}`;
 const revisionPath = (projectId: string, revisionId: string) =>
   `${base(projectId)}/revisions/${revisionId}`;
 
 function catalogResourcePathSegment(resourceId: string): string {
   if (
-    resourceId === "." ||
-    resourceId === ".." ||
+    resourceId === '.' ||
+    resourceId === '..' ||
     /[\/\\\u0000-\u001f\u007f]/u.test(resourceId)
   ) {
-    throw new Error("catalog resource id contains an unsafe path segment");
+    throw new Error('catalog resource id contains an unsafe path segment');
   }
   return encodeURIComponent(resourceId);
 }
@@ -52,9 +52,7 @@ function catalogResourcePathSegment(resourceId: string): string {
 export function newResourceId(prefix: string): string {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
-  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join(
-    "",
-  );
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
   return `${prefix}_${hex}`;
 }
 
@@ -79,71 +77,57 @@ export const versionOf = (revision: AnalyticsRevision): RevisionVersion => ({
  */
 export const deleteProject = (projectId: string): Promise<unknown> =>
   request(`/v1/analytics/projects/${encodeURIComponent(projectId)}`, {
-    method: "DELETE",
+    method: 'DELETE',
     projectId,
   });
 
 export const listProjects = () =>
-  request<{ items: AnalyticsProject[] }>("/v1/analytics/projects", {
+  request<{ items: AnalyticsProject[] }>('/v1/analytics/projects', {
     // 嵌入版不送 id_prefix：宿主的 /core/projects 根本不读这个查询参数，它按当前
     // 登录用户圈范围（归属前缀 + RBAC 授权）。继续送 `prj_oss_` 只会让读代码的人
     // 以为在按开源前缀过滤，而那个前缀在嵌入版里本来就是错的。
     query:
-      EDITION === "embedded"
+      EDITION === 'embedded'
         ? { limit: 200 }
         : { id_prefix: PROJECT_ID_PREFIX, limit: 200 },
   });
 
 export const createProject = (name: string) => {
-  if (EDITION === "embedded") {
+  if (EDITION === 'embedded') {
     // 商业版:项目 ID 必须由服务端铸(带 HMAC 归属前缀),客户端送 ID 会被拒。
-    return request<AnalyticsProject>("/v1/analytics/projects", {
-      method: "POST",
+    return request<AnalyticsProject>('/v1/analytics/projects', {
+      method: 'POST',
       body: { name },
     });
   }
-  const projectId = newResourceId("prj_oss");
-  return request<AnalyticsProject>("/v1/analytics/projects", {
-    method: "POST",
+  const projectId = newResourceId('prj_oss');
+  return request<AnalyticsProject>('/v1/analytics/projects', {
+    method: 'POST',
     projectId,
     body: { name, project_id: projectId },
   });
 };
 
 export const getModelingSummary = (projectId: string) =>
-  request<AnalyticsModelingSummary>(`${base(projectId)}/modeling-summary`, {
-    projectId,
-  });
+  request<AnalyticsModelingSummary>(`${base(projectId)}/modeling-summary`, { projectId });
 
 // --- datasource -----------------------------------------------------------------
 
 export const listSchemas = (projectId: string) =>
-  request<AnalyticsSchemaCatalog>(
-    `${base(projectId)}/datasources/default/schemas`,
-    {
-      projectId,
-    },
-  );
+  request<AnalyticsSchemaCatalog>(`${base(projectId)}/datasources/default/schemas`, {
+    projectId,
+  });
 
-export const listTables = (
-  projectId: string,
-  schemaName: string,
-  includeViews = false,
-) =>
-  request<AnalyticsTableCatalog>(
-    `${base(projectId)}/datasources/default/tables`,
-    {
-      projectId,
-      query: { schema_name: schemaName, include_views: includeViews },
-    },
-  );
+export const listTables = (projectId: string, schemaName: string, includeViews = false) =>
+  request<AnalyticsTableCatalog>(`${base(projectId)}/datasources/default/tables`, {
+    projectId,
+    query: { schema_name: schemaName, include_views: includeViews },
+  });
 
 // --- revisions ------------------------------------------------------------------
 
 export const getRevision = (projectId: string, revisionId: string) =>
-  request<AnalyticsRevision>(revisionPath(projectId, revisionId), {
-    projectId,
-  });
+  request<AnalyticsRevision>(revisionPath(projectId, revisionId), { projectId });
 
 interface SchemaSnapshot {
   id: string;
@@ -158,33 +142,23 @@ interface SchemaSnapshot {
  */
 export async function createDraft(
   projectId: string,
-  input: {
-    schemas: string[];
-    selected_tables: Record<string, string[]>;
-    include_views: boolean;
-  },
+  input: { schemas: string[]; selected_tables: Record<string, string[]>; include_views: boolean },
 ): Promise<AnalyticsRevision> {
-  const snapshot = await request<SchemaSnapshot>(
-    `${base(projectId)}/schema-snapshots`,
-    {
-      method: "POST",
-      projectId,
-      body: input,
-    },
-  );
-  let revision = await request<AnalyticsRevision>(
-    `${base(projectId)}/revisions`,
-    {
-      method: "POST",
-      projectId,
-      body: { schema_snapshot_id: snapshot.id },
-    },
-  );
+  const snapshot = await request<SchemaSnapshot>(`${base(projectId)}/schema-snapshots`, {
+    method: 'POST',
+    projectId,
+    body: input,
+  });
+  let revision = await request<AnalyticsRevision>(`${base(projectId)}/revisions`, {
+    method: 'POST',
+    projectId,
+    body: { schema_snapshot_id: snapshot.id },
+  });
   for (const table of snapshot.tables) {
     revision = await request<AnalyticsRevision>(
       `${revisionPath(projectId, revision.id)}/models:from-table`,
       {
-        method: "POST",
+        method: 'POST',
         projectId,
         body: {
           expected_etag: revision.etag,
@@ -201,53 +175,41 @@ export async function createDraft(
 export const extendTables = (
   projectId: string,
   revisionId: string,
-  input: RevisionVersion & {
-    selected_tables: Record<string, string[]>;
-    include_views: boolean;
-  },
+  input: RevisionVersion & { selected_tables: Record<string, string[]>; include_views: boolean },
 ) =>
-  request<AnalyticsRevision>(
-    `${revisionPath(projectId, revisionId)}/tables:extend`,
-    {
-      method: "POST",
-      projectId,
-      body: input,
-    },
-  );
+  request<AnalyticsRevision>(`${revisionPath(projectId, revisionId)}/tables:extend`, {
+    method: 'POST',
+    projectId,
+    body: input,
+  });
 
 export const deriveCandidate = (projectId: string, revisionId: string) =>
   request<AnalyticsRevision>(`${revisionPath(projectId, revisionId)}:derive`, {
-    method: "POST",
+    method: 'POST',
     projectId,
   });
 
 // --- layout ---------------------------------------------------------------------
 
 export const getGraphLayout = (projectId: string, revisionId: string) =>
-  request<AnalyticsModelGraphLayout>(
-    `${revisionPath(projectId, revisionId)}/model-graph-layout`,
-    {
-      projectId,
-    },
-  );
+  request<AnalyticsModelGraphLayout>(`${revisionPath(projectId, revisionId)}/model-graph-layout`, {
+    projectId,
+  });
 
 export const saveGraphLayout = (
   projectId: string,
   revisionId: string,
   input: {
     expected_etag: number;
-    positions: AnalyticsModelGraphLayout["positions"];
-    viewport: AnalyticsModelGraphLayout["viewport"];
+    positions: AnalyticsModelGraphLayout['positions'];
+    viewport: AnalyticsModelGraphLayout['viewport'];
   },
 ) =>
-  request<AnalyticsModelGraphLayout>(
-    `${revisionPath(projectId, revisionId)}/model-graph-layout`,
-    {
-      method: "PUT",
-      projectId,
-      body: input,
-    },
-  );
+  request<AnalyticsModelGraphLayout>(`${revisionPath(projectId, revisionId)}/model-graph-layout`, {
+    method: 'PUT',
+    projectId,
+    body: input,
+  });
 
 // --- catalog relations ----------------------------------------------------------
 
@@ -259,7 +221,7 @@ export const saveRelation = (
 ) =>
   request<AnalyticsRevision>(
     `${revisionPath(projectId, revisionId)}/catalog/relations/${catalogResourcePathSegment(relation.id)}`,
-    { method: "PUT", projectId, body: { ...version, relation } },
+    { method: 'PUT', projectId, body: { ...version, relation } },
   );
 
 export const deleteRelation = async (
@@ -269,22 +231,15 @@ export const deleteRelation = async (
   relationId: string,
 ) => {
   const path = `${revisionPath(projectId, revisionId)}/catalog/relations/${catalogResourcePathSegment(relationId)}`;
-  const impact = await request<{ impact_hash: string }>(
-    `${path}/deletion-impact`,
-    {
-      method: "POST",
-      projectId,
-      body: version,
-    },
-  );
-  return request<AnalyticsRevision>(path, {
-    method: "DELETE",
+  const impact = await request<{ impact_hash: string }>(`${path}/deletion-impact`, {
+    method: 'POST',
     projectId,
-    body: {
-      ...version,
-      expected_impact_hash: impact.impact_hash,
-      confirmation: "delete",
-    },
+    body: version,
+  });
+  return request<AnalyticsRevision>(path, {
+    method: 'DELETE',
+    projectId,
+    body: { ...version, expected_impact_hash: impact.impact_hash, confirmation: 'delete' },
   });
 };
 
@@ -296,14 +251,11 @@ export const saveModel = (
   version: RevisionVersion,
   model: AnalyticsCatalogModel,
 ) =>
-  request<AnalyticsRevision>(
-    `${revisionPath(projectId, revisionId)}/catalog/models/${catalogResourcePathSegment(model.id)}`,
-    {
-      method: "PUT",
-      projectId,
-      body: { ...version, model },
-    },
-  );
+  request<AnalyticsRevision>(`${revisionPath(projectId, revisionId)}/catalog/models/${catalogResourcePathSegment(model.id)}`, {
+    method: 'PUT',
+    projectId,
+    body: { ...version, model },
+  });
 
 export const saveDimension = (
   projectId: string,
@@ -313,7 +265,7 @@ export const saveDimension = (
 ) =>
   request<AnalyticsRevision>(
     `${revisionPath(projectId, revisionId)}/catalog/dimensions/${catalogResourcePathSegment(dimension.id)}`,
-    { method: "PUT", projectId, body: { ...version, dimension } },
+    { method: 'PUT', projectId, body: { ...version, dimension } },
   );
 
 export const saveMetric = (
@@ -322,14 +274,11 @@ export const saveMetric = (
   version: RevisionVersion,
   metric: AnalyticsCatalogMetric,
 ) =>
-  request<AnalyticsRevision>(
-    `${revisionPath(projectId, revisionId)}/catalog/metrics/${catalogResourcePathSegment(metric.id)}`,
-    {
-      method: "PUT",
-      projectId,
-      body: { ...version, metric },
-    },
-  );
+  request<AnalyticsRevision>(`${revisionPath(projectId, revisionId)}/catalog/metrics/${catalogResourcePathSegment(metric.id)}`, {
+    method: 'PUT',
+    projectId,
+    body: { ...version, metric },
+  });
 
 /** Business terms are first-class Catalog resources. */
 export const saveTerm = (
@@ -340,7 +289,7 @@ export const saveTerm = (
 ) =>
   request<AnalyticsRevision>(
     `${revisionPath(projectId, revisionId)}/catalog/terms/${catalogResourcePathSegment(term.id)}`,
-    { method: "PUT", projectId, body: { ...version, term } },
+    { method: 'PUT', projectId, body: { ...version, term } },
   );
 
 /** Existing dimension values keep their sampled identity; only presentation is editable. */
@@ -353,7 +302,7 @@ export const saveDimensionValue = (
   request<AnalyticsRevision>(
     `${revisionPath(projectId, revisionId)}/catalog/dimension-values/${catalogResourcePathSegment(dimensionValue.id)}`,
     {
-      method: "PUT",
+      method: 'PUT',
       projectId,
       body: { ...version, dimension_value: dimensionValue },
     },
@@ -366,10 +315,7 @@ export const getCurrentEvaluation = (projectId: string, revisionId: string) =>
     { projectId },
   );
 
-export const getCurrentQualityReport = (
-  projectId: string,
-  revisionId: string,
-) =>
+export const getCurrentQualityReport = (projectId: string, revisionId: string) =>
   request<{ report: AnalyticsModelingQualityReport | null }>(
     `${revisionPath(projectId, revisionId)}/quality-reports%3Alatest`,
     { projectId },
@@ -378,7 +324,7 @@ export const getCurrentQualityReport = (
 export const reviewQualityReport = (
   projectId: string,
   revisionId: string,
-  report: Pick<AnalyticsModelingQualityReport, "id" | "etag" | "content_hash">,
+  report: Pick<AnalyticsModelingQualityReport, 'id' | 'etag' | 'content_hash'>,
   decisions: Array<{ preview_id: string; confirm: boolean; note?: string }>,
 ) =>
   request<AnalyticsModelingQualityReport>(
@@ -386,7 +332,7 @@ export const reviewQualityReport = (
     // 匹配到 GET 那条路由,POST 得到 405。
     `${revisionPath(projectId, revisionId)}/quality-reports/${encodeURIComponent(report.id)}%3Areview`,
     {
-      method: "POST",
+      method: 'POST',
       projectId,
       // expected_etag 是「报告自己的版本」,不是 revision.etag。传错会让
       // modeling_quality_report_is_stale 恒为真,核对永远提交不上去。
@@ -403,14 +349,11 @@ export const createQualityReport = (
   revisionId: string,
   version: RevisionVersion,
 ) =>
-  request<AnalyticsModelingQualityReport>(
-    `${revisionPath(projectId, revisionId)}/quality-reports`,
-    {
-      method: "POST",
-      projectId,
-      body: version,
-    },
-  );
+  request<AnalyticsModelingQualityReport>(`${revisionPath(projectId, revisionId)}/quality-reports`, {
+    method: 'POST',
+    projectId,
+    body: version,
+  });
 
 export const saveHierarchy = (
   projectId: string,
@@ -420,7 +363,7 @@ export const saveHierarchy = (
 ) =>
   request<AnalyticsRevision>(
     `${revisionPath(projectId, revisionId)}/catalog/hierarchies/${catalogResourcePathSegment(hierarchy.id)}`,
-    { method: "PUT", projectId, body: { ...version, hierarchy } },
+    { method: 'PUT', projectId, body: { ...version, hierarchy } },
   );
 
 /** 维度值字典:从真实数据采集取值 → 人工定显示名与别名 → 应用进目录。 */
@@ -432,11 +375,7 @@ export const generateDictionaryPreview = (
 ) =>
   request<AnalyticsDictionaryPreview>(
     `${revisionPath(projectId, revisionId)}/dimension-dictionary/previews`,
-    {
-      method: "POST",
-      projectId,
-      body: { ...version, dimension_ids: dimensionIds },
-    },
+    { method: 'POST', projectId, body: { ...version, dimension_ids: dimensionIds } },
   );
 
 export const applyDictionaryPreview = (
@@ -448,11 +387,7 @@ export const applyDictionaryPreview = (
 ) =>
   request<AnalyticsRevision>(
     `${revisionPath(projectId, revisionId)}/dimension-dictionary/previews/${previewId}/apply`,
-    {
-      method: "POST",
-      projectId,
-      body: { ...version, confirmation: "apply", decisions },
-    },
+    { method: 'POST', projectId, body: { ...version, confirmation: 'apply', decisions } },
   );
 
 /** 为一个指标/维度生成候选别名;只是建议,人工删改后随资源一起保存。 */
@@ -461,7 +396,7 @@ export const suggestAliases = (
   revisionId: string,
   expectedEtag: number,
   input: {
-    resource_type: "dimension" | "metric";
+    resource_type: 'dimension' | 'metric';
     model_id: string;
     name: string;
     biz_name: string;
@@ -469,14 +404,11 @@ export const suggestAliases = (
     existing_aliases?: string[];
   },
 ) =>
-  request<{ aliases: string[] }>(
-    `${revisionPath(projectId, revisionId)}/alias-suggestions`,
-    {
-      method: "POST",
-      projectId,
-      body: { expected_etag: expectedEtag, ...input },
-    },
-  );
+  request<{ aliases: string[] }>(`${revisionPath(projectId, revisionId)}/alias-suggestions`, {
+    method: 'POST',
+    projectId,
+    body: { expected_etag: expectedEtag, ...input },
+  });
 
 export interface QueryFailurePage {
   items: AnalyticsQueryFailure[];
@@ -492,7 +424,7 @@ export const listQueryFailures = (
     limit?: number;
     offset?: number;
     /** `archived` = resolved + ignored，界面上不区分这两者。 */
-    status?: AnalyticsFeedbackStatus | "archived" | "all";
+    status?: AnalyticsFeedbackStatus | 'archived' | 'all';
     /** 不看哪几类。发布页那条提醒排掉 `liked`——赞不是缺口。 */
     excludeKinds?: string[];
   } = {},
@@ -502,7 +434,7 @@ export const listQueryFailures = (
     query: {
       limit: options.limit ?? 50,
       offset: options.offset ?? 0,
-      status: options.status ?? "open",
+      status: options.status ?? 'open',
       ...(options.excludeKinds?.length
         ? { exclude_kinds: options.excludeKinds }
         : {}),
@@ -527,7 +459,7 @@ export const updateQueryFailureStatus = (
 ) =>
   request<{ changed: number }>(`${base(projectId)}/query-failures:status`, {
     projectId,
-    method: "POST",
+    method: 'POST',
     body: input,
   });
 
@@ -540,7 +472,7 @@ export const updateQueryFailureStatus = (
 export const activateRelease = (projectId: string, releaseId: string) =>
   request<{ active_release_id: string | null }>(
     `${base(projectId)}/releases/${encodeURIComponent(releaseId)}:activate`,
-    { method: "POST", projectId },
+    { method: 'POST', projectId },
   );
 
 // --- 评测集 ---------------------------------------------------------------
@@ -555,11 +487,11 @@ export const saveGoldenSuite = (
   projectId: string,
   revisionId: string,
   version: RevisionVersion,
-  suite: AnalyticsGoldenSuiteRecord["suite"],
+  suite: AnalyticsGoldenSuiteRecord['suite'],
 ) =>
   request<AnalyticsGoldenSuiteRecord>(
     `${revisionPath(projectId, revisionId)}/golden-suites/${suite.id}`,
-    { method: "PUT", projectId, body: { ...version, suite } },
+    { method: 'PUT', projectId, body: { ...version, suite } },
   );
 
 export const deleteGoldenSuite = (
@@ -570,22 +502,19 @@ export const deleteGoldenSuite = (
 ) =>
   request<{ deleted: boolean }>(
     `${revisionPath(projectId, revisionId)}/golden-suites/${suiteId}`,
-    { method: "DELETE", projectId, body: version },
+    { method: 'DELETE', projectId, body: version },
   );
 
 export const evaluateSuite = (
   projectId: string,
   revisionId: string,
-  suite: AnalyticsGoldenSuiteRecord["suite"],
+  suite: AnalyticsGoldenSuiteRecord['suite'],
 ) =>
-  request<AnalyticsEvaluationReport>(
-    `${revisionPath(projectId, revisionId)}/evaluate`,
-    {
-      method: "POST",
-      projectId,
-      body: { suite, required_accuracy: 1.0 },
-    },
-  );
+  request<AnalyticsEvaluationReport>(`${revisionPath(projectId, revisionId)}/evaluate`, {
+    method: 'POST',
+    projectId,
+    body: { suite, required_accuracy: 1.0 },
+  });
 
 /** 只预览删除影响(服务端规范化的级联清单),不执行删除。 */
 export const previewCatalogDeletion = (
@@ -597,20 +526,12 @@ export const previewCatalogDeletion = (
 ) =>
   request<{
     impact_hash: string;
-    effects: Array<{
-      action: string;
-      resource_kind: string;
-      resource_id: string;
-      reason?: string;
-    }>;
-  }>(
-    `${revisionPath(projectId, revisionId)}/catalog/${kind}/${catalogResourcePathSegment(resourceId)}/deletion-impact`,
-    {
-      method: "POST",
-      projectId,
-      body: version,
-    },
-  );
+    effects: Array<{ action: string; resource_kind: string; resource_id: string; reason?: string }>;
+  }>(`${revisionPath(projectId, revisionId)}/catalog/${kind}/${catalogResourcePathSegment(resourceId)}/deletion-impact`, {
+    method: 'POST',
+    projectId,
+    body: version,
+  });
 
 /** Two-step governed delete: impact preview, then delete bound to that impact hash. */
 export const deleteCatalogResource = async (
@@ -624,61 +545,39 @@ export const deleteCatalogResource = async (
   const path = `${revisionPath(projectId, revisionId)}/catalog/${kind}/${catalogResourcePathSegment(resourceId)}`;
   // A UI that has already shown the impact must submit that exact hash. Falling
   // back to a preview keeps non-interactive callers on the governed two-step API.
-  const impactHash =
-    reviewedImpactHash ??
-    (
-      await request<{ impact_hash: string }>(`${path}/deletion-impact`, {
-        method: "POST",
-        projectId,
-        body: version,
-      })
-    ).impact_hash;
+  const impactHash = reviewedImpactHash ?? (
+    await request<{ impact_hash: string }>(`${path}/deletion-impact`, {
+      method: 'POST',
+      projectId,
+      body: version,
+    })
+  ).impact_hash;
   return request<AnalyticsRevision>(path, {
-    method: "DELETE",
+    method: 'DELETE',
     projectId,
-    body: {
-      ...version,
-      expected_impact_hash: impactHash,
-      confirmation: "delete",
-    },
+    body: { ...version, expected_impact_hash: impactHash, confirmation: 'delete' },
   });
 };
 
 // --- AI modeling ----------------------------------------------------------------
 
-export const startModelingJob = (
-  projectId: string,
-  revisionId: string,
-  expectedEtag: number,
-) =>
-  request<AnalyticsModelingJob>(
-    `${revisionPath(projectId, revisionId)}/modeling-jobs`,
-    {
-      method: "POST",
-      projectId,
-      body: { expected_etag: expectedEtag },
-    },
-  );
+export const startModelingJob = (projectId: string, revisionId: string, expectedEtag: number) =>
+  request<AnalyticsModelingJob>(`${revisionPath(projectId, revisionId)}/modeling-jobs`, {
+    method: 'POST',
+    projectId,
+    body: { expected_etag: expectedEtag },
+  });
 
 export const getModelingJob = (projectId: string, jobId: string) =>
-  request<AnalyticsModelingJob>(`${base(projectId)}/modeling-jobs/${jobId}`, {
+  request<AnalyticsModelingJob>(`${base(projectId)}/modeling-jobs/${jobId}`, { projectId });
+
+export const cancelModelingJob = (projectId: string, jobId: string) =>
+  request<AnalyticsModelingJob>(`${base(projectId)}/modeling-jobs/${jobId}:cancel`, {
+    method: 'POST',
     projectId,
   });
 
-export const cancelModelingJob = (projectId: string, jobId: string) =>
-  request<AnalyticsModelingJob>(
-    `${base(projectId)}/modeling-jobs/${jobId}:cancel`,
-    {
-      method: "POST",
-      projectId,
-    },
-  );
-
-export const getProposal = (
-  projectId: string,
-  revisionId: string,
-  proposalId: string,
-) =>
+export const getProposal = (projectId: string, revisionId: string, proposalId: string) =>
   request<AnalyticsModelingProposal>(
     `${revisionPath(projectId, revisionId)}/modeling-proposals/${proposalId}`,
     { projectId },
@@ -697,66 +596,45 @@ export const saveProposal = (
 ) =>
   request<AnalyticsModelingProposal>(
     `${revisionPath(projectId, revisionId)}/modeling-proposals/${proposalId}`,
-    { method: "PUT", projectId, body: input },
+    { method: 'PUT', projectId, body: input },
   );
 
 export const applyProposal = (
   projectId: string,
   revisionId: string,
   proposalId: string,
-  input: RevisionVersion & {
-    expected_proposal_etag: number;
-    expected_proposal_hash: string;
-  },
+  input: RevisionVersion & { expected_proposal_etag: number; expected_proposal_hash: string },
 ) =>
   request<{ proposal: AnalyticsModelingProposal; revision: AnalyticsRevision }>(
     `${revisionPath(projectId, revisionId)}/modeling-proposals/${proposalId}:apply`,
-    { method: "POST", projectId, body: { ...input, confirmation: "apply" } },
+    { method: 'POST', projectId, body: { ...input, confirmation: 'apply' } },
   );
 
 // --- validate / publish ---------------------------------------------------------
 
 export const validateRevision = (projectId: string, revisionId: string) =>
-  request<AnalyticsRevision>(
-    `${revisionPath(projectId, revisionId)}/validate`,
-    {
-      method: "POST",
-      projectId,
-    },
-  );
-
-export const getDiagnostics = (projectId: string, revisionId: string) =>
-  request<AnalyticsModelingDiagnostics>(
-    `${revisionPath(projectId, revisionId)}/diagnostics`,
-    {
-      projectId,
-    },
-  );
-
-export const publishRevision = (
-  projectId: string,
-  revisionId: string,
-  version: RevisionVersion,
-) =>
-  request<AnalyticsPublishedRelease>(
-    `${revisionPath(projectId, revisionId)}/publish`,
-    {
-      method: "POST",
-      projectId,
-      body: { ...version, confirmation: "publish" },
-    },
-  );
-
-export const listReleases = (projectId: string) =>
-  request<{ items: AnalyticsReleaseSummary[] }>(`${base(projectId)}/releases`, {
+  request<AnalyticsRevision>(`${revisionPath(projectId, revisionId)}/validate`, {
+    method: 'POST',
     projectId,
   });
 
+export const getDiagnostics = (projectId: string, revisionId: string) =>
+  request<AnalyticsModelingDiagnostics>(`${revisionPath(projectId, revisionId)}/diagnostics`, {
+    projectId,
+  });
+
+export const publishRevision = (projectId: string, revisionId: string, version: RevisionVersion) =>
+  request<AnalyticsPublishedRelease>(`${revisionPath(projectId, revisionId)}/publish`, {
+    method: 'POST',
+    projectId,
+    body: { ...version, confirmation: 'publish' },
+  });
+
+export const listReleases = (projectId: string) =>
+  request<{ items: AnalyticsReleaseSummary[] }>(`${base(projectId)}/releases`, { projectId });
+
 export const getRelease = (projectId: string, releaseId: string) =>
-  request<AnalyticsPublishedRelease>(
-    `${base(projectId)}/releases/${releaseId}`,
-    { projectId },
-  );
+  request<AnalyticsPublishedRelease>(`${base(projectId)}/releases/${releaseId}`, { projectId });
 
 // --- asking ---------------------------------------------------------------------
 
@@ -772,8 +650,8 @@ export interface QueryInput {
 
 /** Ask the active release (what end users do). */
 export const query = (projectId: string, input: QueryInput) =>
-  request<AnalyticsQueryResponse>("/v1/analytics/query", {
-    method: "POST",
+  request<AnalyticsQueryResponse>('/v1/analytics/query', {
+    method: 'POST',
     projectId,
     body: {
       project_id: projectId,
@@ -790,19 +668,16 @@ export const previewQuery = (
   version: RevisionVersion,
   input: QueryInput,
 ) =>
-  request<AnalyticsQueryResponse>(
-    `${revisionPath(projectId, revisionId)}/query-preview`,
-    {
-      method: "POST",
-      projectId,
-      body: {
-        ...version,
-        ...input,
-        include_diagnostics: true,
-        include_debug_sql: true,
-      },
+  request<AnalyticsQueryResponse>(`${revisionPath(projectId, revisionId)}/query-preview`, {
+    method: 'POST',
+    projectId,
+    body: {
+      ...version,
+      ...input,
+      include_diagnostics: true,
+      include_debug_sql: true,
     },
-  );
+  });
 
 /** Structured playground: submit a governed SemanticQuery, skipping NL parsing. */
 export const previewStructuredQuery = (
@@ -811,18 +686,15 @@ export const previewStructuredQuery = (
   version: RevisionVersion,
   semantic_query: AnalyticsSemanticQuery,
 ) =>
-  request<AnalyticsQueryResponse>(
-    `${revisionPath(projectId, revisionId)}/structured-query-preview`,
-    {
-      method: "POST",
-      projectId,
-      body: {
-        ...version,
-        semantic_query,
-        include_debug_sql: true,
-      },
+  request<AnalyticsQueryResponse>(`${revisionPath(projectId, revisionId)}/structured-query-preview`, {
+    method: 'POST',
+    projectId,
+    body: {
+      ...version,
+      semantic_query,
+      include_debug_sql: true,
     },
-  );
+  });
 
 /** Export the immutable, server-authored evidence for one completed query attempt. */
 export const exportQueryDiagnostic = (projectId: string, queryId: string) =>
@@ -839,8 +711,8 @@ export const exportQueryDiagnostic = (projectId: string, queryId: string) =>
 // 宿主接口有 `{code, data, message}`——所以这里必须自己剥一层，否则拿到的是
 // 信封本身，看起来就是"接口没数据"。
 
-export type GrantSubjectType = "user" | "org" | "group";
-export type ProjectRole = "admin" | "editor" | "viewer";
+export type GrantSubjectType = 'user' | 'org' | 'group';
+export type ProjectRole = 'admin' | 'editor' | 'viewer';
 
 export interface ProjectGrants {
   // 实机返回的用户名字段是 nickname（不是 username）；两个都收，取到哪个用哪个。
@@ -865,11 +737,9 @@ export interface ProjectGrants {
   }>;
 }
 
-const HOST_GRANT_BASE = "/v1/kb_folder";
+const HOST_GRANT_BASE = '/v1/kb_folder';
 
-export const listProjectGrants = async (
-  projectId: string,
-): Promise<ProjectGrants> => {
+export const listProjectGrants = async (projectId: string): Promise<ProjectGrants> => {
   const data = hostPayload(
     await request<unknown>(
       `${HOST_GRANT_BASE}/analytics_project_grants?project_id=${encodeURIComponent(projectId)}`,
@@ -884,27 +754,19 @@ export const listProjectGrants = async (
 
 export const grantProject = (
   projectId: string,
-  body: {
-    subject_type: GrantSubjectType;
-    subject_id: string;
-    role_code: ProjectRole;
-  },
+  body: { subject_type: GrantSubjectType; subject_id: string; role_code: ProjectRole },
 ) =>
   request<boolean>(`${HOST_GRANT_BASE}/analytics_project_grant`, {
-    method: "POST",
+    method: 'POST',
     body: { project_id: projectId, ...body },
   });
 
 export const revokeProject = (
   projectId: string,
-  body: {
-    subject_type: GrantSubjectType;
-    subject_id: string;
-    role_code: ProjectRole;
-  },
+  body: { subject_type: GrantSubjectType; subject_id: string; role_code: ProjectRole },
 ) =>
   request<boolean>(`${HOST_GRANT_BASE}/analytics_project_revoke`, {
-    method: "POST",
+    method: 'POST',
     body: { project_id: projectId, ...body },
   });
 
@@ -919,7 +781,7 @@ export interface GrantSubjectOption {
 
 export interface DataScopeRowFilter {
   dimension_id: string;
-  operator: "eq" | "in";
+  operator: 'eq' | 'in';
   value: string;
 }
 
@@ -954,9 +816,7 @@ export const fetchDataScope = async (
     subject_id: subject.subject_id,
   });
   const data = hostPayload(
-    await request<unknown>(
-      `${HOST_GRANT_BASE}/analytics_project_data_scope?${query}`,
-    ),
+    await request<unknown>(`${HOST_GRANT_BASE}/analytics_project_data_scope?${query}`),
   ) as Partial<DataScope> | null;
   return {
     visible_model_ids: data?.visible_model_ids ?? [],
@@ -970,13 +830,13 @@ export const saveDataScope = (
   scope: DataScope,
 ) =>
   request<boolean>(`${HOST_GRANT_BASE}/analytics_project_data_scope_set`, {
-    method: "POST",
+    method: 'POST',
     body: { project_id: projectId, ...subject, ...scope },
   });
 
 /** 宿主接口统一是 `{code, data, message}`；核心接口没有信封。 */
 function hostPayload(response: unknown): unknown {
-  if (response && typeof response === "object" && "code" in response) {
+  if (response && typeof response === 'object' && 'code' in response) {
     return (response as { data?: unknown }).data;
   }
   return response;
@@ -990,7 +850,7 @@ function flattenOrgTree(nodes: unknown, depth = 0): GrantSubjectOption[] {
     if (item.id === undefined || item.id === null) continue;
     out.push({
       id: String(item.id),
-      name: `${"\u3000".repeat(depth)}${String(item.name ?? item.id)}`,
+      name: `${'\u3000'.repeat(depth)}${String(item.name ?? item.id)}`,
     });
     out.push(...flattenOrgTree(item.children, depth + 1));
   }
@@ -1013,25 +873,23 @@ export async function searchGrantSubjects(
   // 目录的管理权，不带它的话只有超管和组织管理员能打开选人器。
   const query = (name: string) => {
     const parts = [
-      keyword ? `${name}=${encodeURIComponent(keyword)}` : "",
-      projectId ? `project_id=${encodeURIComponent(projectId)}` : "",
+      keyword ? `${name}=${encodeURIComponent(keyword)}` : '',
+      projectId ? `project_id=${encodeURIComponent(projectId)}` : '',
     ].filter(Boolean);
-    return parts.length ? `?${parts.join("&")}` : "";
+    return parts.length ? `?${parts.join('&')}` : '';
   };
 
-  if (kind === "org") {
+  if (kind === 'org') {
     const data = hostPayload(
-      await request<unknown>(
-        `${HOST_GRANT_BASE}/subjects/orgs${query("keyword")}`,
-      ),
+      await request<unknown>(`${HOST_GRANT_BASE}/subjects/orgs${query('keyword')}`),
     );
     return flattenOrgTree(data);
   }
 
-  const path = kind === "user" ? "users" : "groups";
+  const path = kind === 'user' ? 'users' : 'groups';
   const data = hostPayload(
     await request<unknown>(
-      `${HOST_GRANT_BASE}/subjects/${path}${query(kind === "user" ? "username" : "name")}`,
+      `${HOST_GRANT_BASE}/subjects/${path}${query(kind === 'user' ? 'username' : 'name')}`,
     ),
   );
   const rows = Array.isArray(data)
@@ -1042,9 +900,9 @@ export async function searchGrantSubjects(
   return rows
     .map((row) => {
       const item = row as Record<string, unknown>;
-      const id = item.id ?? "";
+      const id = item.id ?? '';
       const name =
-        kind === "user"
+        kind === 'user'
           ? (item.nickname ?? item.username ?? item.email ?? id)
           : (item.name ?? id);
       return { id: String(id), name: String(name) };
@@ -1063,7 +921,7 @@ export async function searchGrantSubjects(
 // 写成核心的路径，由 client 的 rewritePath 决定去哪：嵌入版转成
 // `/v1/analytics/core/...`（宿主 BFF 的专办路由，带全局 admin 闸门），独立版原样
 // 打核心。**不要在这里写死 `/core`**——那会被再重写一次，变成 `core/core`，静默 404。
-const DATA_SOURCE_BASE = "/v1/analytics";
+const DATA_SOURCE_BASE = '/v1/analytics';
 
 export interface DataSource {
   id: string;
@@ -1087,16 +945,13 @@ export const createDataSource = (input: {
   dsn: string;
 }): Promise<DataSource> =>
   request<DataSource>(`${DATA_SOURCE_BASE}/data-sources`, {
-    method: "POST",
+    method: 'POST',
     body: input,
   });
 
-export const testDataSource = (input: {
-  engine: string;
-  dsn: string;
-}): Promise<unknown> =>
+export const testDataSource = (input: { engine: string; dsn: string }): Promise<unknown> =>
   request(`${DATA_SOURCE_BASE}/data-sources:test`, {
-    method: "POST",
+    method: 'POST',
     body: input,
   });
 
@@ -1106,16 +961,13 @@ export const updateDataSource = (
 ): Promise<DataSource> =>
   request<DataSource>(
     `${DATA_SOURCE_BASE}/data-sources/${encodeURIComponent(dataSourceId)}`,
-    { method: "PUT", body: input },
+    { method: 'PUT', body: input },
   );
 
 export const deleteDataSource = (dataSourceId: string): Promise<unknown> =>
-  request(
-    `${DATA_SOURCE_BASE}/data-sources/${encodeURIComponent(dataSourceId)}`,
-    {
-      method: "DELETE",
-    },
-  );
+  request(`${DATA_SOURCE_BASE}/data-sources/${encodeURIComponent(dataSourceId)}`, {
+    method: 'DELETE',
+  });
 
 /** 项目当前绑的数据源；没绑返回 null（那种项目回落到部署的默认库）。 */
 export const getProjectDataSource = async (
@@ -1132,14 +984,12 @@ export const bindProjectDataSource = (
   projectId: string,
   dataSourceId: string,
 ): Promise<unknown> =>
-  request(
-    `/v1/analytics/projects/${encodeURIComponent(projectId)}/data-source`,
-    {
-      method: "PUT",
-      projectId,
-      body: { data_source_id: dataSourceId },
-    },
-  );
+  request(`/v1/analytics/projects/${encodeURIComponent(projectId)}/data-source`, {
+    method: 'PUT',
+    projectId,
+    body: { data_source_id: dataSourceId },
+  });
+
 
 /** 上传的表格。 */
 export interface UploadedTable {
@@ -1172,7 +1022,7 @@ export interface UploadInspection {
 /** 一次看完所有 sheet——按 sheet 逐次调用会把同一个文件重传很多遍。 */
 export const inspectUpload = (file: Blob): Promise<UploadInspection> =>
   request<UploadInspection>(`${DATA_SOURCE_BASE}/uploads:inspect`, {
-    method: "POST",
+    method: 'POST',
     file,
   });
 
@@ -1189,17 +1039,17 @@ export const commitUpload = (
   plan: { sheet: string; table: string }[],
 ): Promise<{ data_source_id: string; results: UploadOutcome[] }> =>
   request(`${DATA_SOURCE_BASE}/uploads:commit`, {
-    method: "POST",
+    method: 'POST',
     file,
     query: { plan: JSON.stringify(plan) },
   });
 
 export const loadUpload = (
   file: Blob,
-  input: { sheet: string; table: string; mode: "append" | "replace" },
+  input: { sheet: string; table: string; mode: 'append' | 'replace' },
 ): Promise<{ table: string; row_count: number; mode: string }> =>
   request(`${DATA_SOURCE_BASE}/uploads:load`, {
-    method: "POST",
+    method: 'POST',
     file,
     query: input,
   });
@@ -1213,5 +1063,5 @@ export const listUploads = async (): Promise<UploadedTable[]> => {
 
 export const deleteUpload = (table: string): Promise<{ deleted: boolean }> =>
   request(`${DATA_SOURCE_BASE}/uploads/${encodeURIComponent(table)}`, {
-    method: "DELETE",
+    method: 'DELETE',
   });

@@ -1,6 +1,6 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { SlidersHorizontal, Trash2 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { SlidersHorizontal, Trash2 } from 'lucide-react';
+import { useMemo, useState } from 'react';
 import {
   grantProject,
   listProjectGrants,
@@ -9,7 +9,7 @@ import {
   type GrantSubjectOption,
   type GrantSubjectType,
   type ProjectRole,
-} from "@analytics/api/analytics";
+} from '@analytics/api/analytics';
 import {
   Badge,
   Button,
@@ -19,22 +19,21 @@ import {
   Input,
   Select,
   Spinner,
-} from "@analytics/components/ui";
-import { describeError } from "@analytics/lib/labels";
-import { ProjectDataScopePanel } from "./project-data-scope";
+} from '@analytics/components/ui';
+import { describeError } from '@analytics/lib/labels';
+import { ProjectDataScopePanel } from './project-data-scope';
 
 const SUBJECT_TABS: ReadonlyArray<{ key: GrantSubjectType; label: string }> = [
-  { key: "user", label: "用户" },
-  { key: "org", label: "组织" },
-  { key: "group", label: "协作组" },
+  { key: 'user', label: '用户' },
+  { key: 'org', label: '组织' },
+  { key: 'group', label: '协作组' },
 ];
 
-const ROLES: ReadonlyArray<{ key: ProjectRole; label: string; hint: string }> =
-  [
-    { key: "viewer", label: "可提问", hint: "能用该项目的助手提问、查看结果" },
-    { key: "editor", label: "可建模", hint: "在可提问之上，还能修改语义模型" },
-    { key: "admin", label: "可管理", hint: "在可建模之上，还能管理该项目" },
-  ];
+const ROLES: ReadonlyArray<{ key: ProjectRole; label: string; hint: string }> = [
+  { key: 'viewer', label: '可提问', hint: '能用该项目的助手提问、查看结果' },
+  { key: 'editor', label: '可建模', hint: '在可提问之上，还能修改语义模型' },
+  { key: 'admin', label: '可管理', hint: '在可建模之上，还能管理该项目' },
+];
 
 /**
  * 问数项目授权：把用户/组织/协作组授权到一个项目（= 一套语义模型）。
@@ -57,9 +56,9 @@ export function ProjectAuthorizeDialog({
   onClose: () => void;
 }) {
   const queryClient = useQueryClient();
-  const [kind, setKind] = useState<GrantSubjectType>("user");
-  const [keyword, setKeyword] = useState("");
-  const [role, setRole] = useState<ProjectRole>("viewer");
+  const [kind, setKind] = useState<GrantSubjectType>('user');
+  const [keyword, setKeyword] = useState('');
+  const [role, setRole] = useState<ProjectRole>('viewer');
   const [error, setError] = useState<string | null>(null);
   // 正在配置数据范围的主体；null = 回到授权列表。
   const [scopeTarget, setScopeTarget] = useState<{
@@ -68,14 +67,14 @@ export function ProjectAuthorizeDialog({
     name: string;
   } | null>(null);
 
-  const grantsKey = ["analytics-project-grants", projectId];
+  const grantsKey = ['analytics-project-grants', projectId];
   const grants = useQuery({
     queryKey: grantsKey,
     queryFn: () => listProjectGrants(projectId),
     enabled: open && Boolean(projectId),
   });
   const subjects = useQuery({
-    queryKey: ["analytics-grant-subjects", projectId, kind, keyword],
+    queryKey: ['analytics-grant-subjects', projectId, kind, keyword],
     queryFn: () => searchGrantSubjects(kind, keyword, projectId),
     enabled: open,
   });
@@ -115,22 +114,22 @@ export function ProjectAuthorizeDialog({
     if (!data) return [];
     return [
       ...(data.users ?? []).map((item) => ({
-        subject_type: "user" as const,
+        subject_type: 'user' as const,
         subject_id: item.user_id,
         name: item.nickname || item.username || item.user_id,
-        role_code: (item.role_code || "viewer") as ProjectRole,
+        role_code: (item.role_code || 'viewer') as ProjectRole,
       })),
       ...(data.orgs ?? []).map((item) => ({
-        subject_type: "org" as const,
+        subject_type: 'org' as const,
         subject_id: item.org_unit_id,
         name: item.org_name || item.name || item.org_unit_id,
-        role_code: (item.role_code || "viewer") as ProjectRole,
+        role_code: (item.role_code || 'viewer') as ProjectRole,
       })),
       ...(data.groups ?? []).map((item) => ({
-        subject_type: "group" as const,
+        subject_type: 'group' as const,
         subject_id: item.group_id,
         name: item.group_name || item.name || item.group_id,
-        role_code: (item.role_code || "viewer") as ProjectRole,
+        role_code: (item.role_code || 'viewer') as ProjectRole,
       })),
     ];
   }, [grants.data]);
@@ -169,18 +168,12 @@ export function ProjectAuthorizeDialog({
   }
 
   return (
-    <Dialog
-      open={open}
-      title={`授权「${projectName}」`}
-      onClose={onClose}
-      width="max-w-2xl"
-    >
+    <Dialog open={open} title={`授权「${projectName}」`} onClose={onClose} width="max-w-2xl">
       <div className="space-y-4">
         {error && <ErrorBanner message={error} />}
 
         <p className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-slate-600">
-          授权的是<b>整个项目</b>
-          （一套语义模型）。项目下的实体、指标与维度随项目继承，
+          授权的是<b>整个项目</b>（一套语义模型）。项目下的实体、指标与维度随项目继承，
           不单独授权。被授权的人能看到什么，与谁把助手分享给他无关。
         </p>
 
@@ -195,12 +188,12 @@ export function ProjectAuthorizeDialog({
                     setKind(tab.key);
                     // 关键词跟着 tab 走：三类主体各查各的接口，把上一个 tab 的
                     // 搜索词带过来会让新 tab 直接空列表，看起来像"这里没有数据"。
-                    setKeyword("");
+                    setKeyword('');
                   }}
                   className={`rounded-md px-2.5 py-1 text-xs transition-colors ${
                     kind === tab.key
-                      ? "bg-blue-600 font-medium text-white"
-                      : "text-slate-600 hover:bg-slate-100"
+                      ? 'bg-blue-600 font-medium text-white'
+                      : 'text-slate-600 hover:bg-slate-100'
                   }`}
                 >
                   {tab.label}
@@ -278,15 +271,12 @@ export function ProjectAuthorizeDialog({
                 >
                   <span className="flex items-center gap-2">
                     <Badge tone="slate">
-                      {
-                        SUBJECT_TABS.find((tab) => tab.key === row.subject_type)
-                          ?.label
-                      }
+                      {SUBJECT_TABS.find((tab) => tab.key === row.subject_type)?.label}
                     </Badge>
                     <span className="text-slate-700">{row.name}</span>
                     <span className="text-slate-400">
-                      {ROLES.find((item) => item.key === row.role_code)
-                        ?.label ?? row.role_code}
+                      {ROLES.find((item) => item.key === row.role_code)?.label ??
+                        row.role_code}
                     </span>
                   </span>
                   <span className="flex items-center gap-1">

@@ -111,10 +111,22 @@ export function updateCatalogModelFieldRole(
     });
   }
 
+  // 普通字段没有角色对象可以带名字，业务名落在物理字段条目上；与列名相同
+  // 视为没起名。指定了角色的字段名字由角色对象承载，物理条目不动。
+  const fields =
+    input.kind === 'field'
+      ? model.modelDetail.fields.map((field) => {
+          if (field.fieldName !== fieldName) return field;
+          const name = input.name.trim();
+          return { ...field, name: name && name !== fieldName ? name : null };
+        })
+      : model.modelDetail.fields;
+
   return {
     ...model,
     modelDetail: {
       ...model.modelDetail,
+      fields,
       identifiers,
       dimensions,
       measures,

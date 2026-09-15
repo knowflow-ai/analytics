@@ -216,6 +216,12 @@ class ModelSchemaContract(CatalogContract):
 class ModelFieldContract(CatalogContract):
     field_name: str = Field(min_length=1, max_length=256)
     data_type: str = Field(min_length=1, max_length=256)
+    # 普通字段（没有标识/维度/度量角色）的业务名。此前无处可存，业务实体里改名
+    # 在请求发出前就被丢掉（knowflow-ai/analytics#2）。为空时不序列化：spec_hash
+    # 覆盖目录投影，存量目录多出一个键就会让全部 Release 的哈希漂移。
+    name: str | None = Field(
+        default=None, min_length=1, max_length=256, exclude_if=lambda value: value is None
+    )
 
 
 class IdentifierContract(CatalogContract):

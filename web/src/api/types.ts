@@ -430,7 +430,8 @@ export interface AnalyticsCatalogModel {
     identifiers: AnalyticsCatalogIdentifier[];
     dimensions: AnalyticsCatalogModelDimension[];
     measures: AnalyticsCatalogMeasure[];
-    fields: Array<{ fieldName: string; dataType: string }>;
+    /** name：普通字段（无角色）的业务名；为空表示沿用物理列名。 */
+    fields: Array<{ fieldName: string; dataType: string; name?: string | null }>;
     sqlVariables: AnalyticsCatalogSqlVariable[];
   };
   viewers: string[];

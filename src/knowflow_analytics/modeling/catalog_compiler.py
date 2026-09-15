@@ -365,7 +365,7 @@ def _compile_model(
             default_aggregation = _aggregation(measure.agg)
         else:
             kind = FieldKind.FIELD
-            name = physical.field_name
+            name = physical.name or physical.field_name
             create_dimension = False
             identifier_type = None
             dimension_type = None

@@ -25,7 +25,7 @@ from knowflow_analytics.modeling.contracts import (
     SuggestionPatch,
     SuggestionSource,
     SuggestionState,
-    semantic_context_content_hash,
+    carry_semantic_context_review,
 )
 from knowflow_analytics.modeling.type_system import aggregation_accepts_type, types_can_join
 
@@ -121,17 +121,6 @@ class RevisionEditor:
         # from model context or ask for clarification, not reject the catalog.
         next_suggestions = revision.suggestions if suggestions is None else tuple(suggestions)
         self._validate_targets(semantic_spec, next_suggestions)
-        previous_context_by_id = {
-            item.id: item for item in revision.semantic_spec.semantic_context
-        }
-        context_is_reviewed_subset = bool(semantic_spec.semantic_context) and all(
-            previous_context_by_id.get(item.id) == item
-            for item in semantic_spec.semantic_context
-        )
-        preserve_context_review = (
-            revision.semantic_context_review_hash is not None
-            and context_is_reviewed_subset
-        )
         return ModelingRevision(
             id=revision.id,
             project_id=revision.project_id,
@@ -145,21 +134,7 @@ class RevisionEditor:
             modeling_job_id=revision.modeling_job_id,
             ai_modeling_artifact_hash=revision.ai_modeling_artifact_hash,
             ai_alias_reviewed_resources=revision.ai_alias_reviewed_resources,
-            semantic_context_review_hash=(
-                semantic_context_content_hash(semantic_spec.semantic_context)
-                if preserve_context_review
-                else None
-            ),
-            semantic_context_reviewed_by=(
-                revision.semantic_context_reviewed_by
-                if preserve_context_review
-                else None
-            ),
-            semantic_context_reviewed_at=(
-                revision.semantic_context_reviewed_at
-                if preserve_context_review
-                else None
-            ),
+            **carry_semantic_context_review(revision, semantic_spec.semantic_context),
         )
 
     def add_suggestions(

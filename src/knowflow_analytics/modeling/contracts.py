@@ -469,12 +469,34 @@ def semantic_context_content_hash(
     """Bind the exact reviewed context independently from unrelated artifacts."""
 
     return content_hash(
-        {
-            "semantic_context": [
-                item.model_dump(mode="json") for item in tuple(entries)
-            ]
-        }
+        {"semantic_context": [item.model_dump(mode="json") for item in tuple(entries)]}
     )
+
+
+def carry_semantic_context_review(
+    revision: ModelingRevision,
+    semantic_context: Iterable[SemanticContextEntry],
+) -> dict[str, object]:
+    """新上下文能不能沿用旧评审：三个审计字段一起给，或一起清空。
+
+    评审哈希必须绑住当前内容（见 ``catalog_projection_is_bound``）。凡是替换
+    Candidate 的语义投影，都要经这里决定审计字段，不能把旧值原样 ``model_copy``
+    过去：内容一变，构造就被契约拒绝，整条 AI 建模以 ValidationError 失败
+    （2026-09-15 客户重跑「AI 自动建模」实际撞上）。
+
+    只有新上下文的每一条都与已评审的那条逐字相同（子集）时才沿用；新草稿进来
+    或任一条被改，就清空三项，让发布前的「需要人工评审」把关，而不是在这里报错。
+    """
+
+    entries = tuple(semantic_context)
+    previous = {item.id: item for item in revision.semantic_spec.semantic_context}
+    reviewed_subset = bool(entries) and all(previous.get(item.id) == item for item in entries)
+    keep = revision.semantic_context_review_hash is not None and reviewed_subset
+    return {
+        "semantic_context_review_hash": (semantic_context_content_hash(entries) if keep else None),
+        "semantic_context_reviewed_by": revision.semantic_context_reviewed_by if keep else None,
+        "semantic_context_reviewed_at": revision.semantic_context_reviewed_at if keep else None,
+    }
 
 
 def _query_scope_compilation_hash(

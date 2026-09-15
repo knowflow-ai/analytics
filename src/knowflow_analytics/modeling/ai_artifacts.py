@@ -61,6 +61,7 @@ from knowflow_analytics.modeling.contracts import (
     QueryScopeCompilationDiagnostic,
     QueryScopeExclusionDiagnostic,
     SemanticAliasDraft,
+    carry_semantic_context_review,
 )
 
 
@@ -92,11 +93,13 @@ class OneClickModelingArtifactService:
             datasets=datasets,
             routes=routes,
         )
+        topic_release = compile_semantic_catalog(topic_catalog)
         topic_revision = ModelingRevision.model_validate(
             revision.model_copy(
                 update={
                     "semantic_catalog": topic_catalog,
-                    "semantic_spec": compile_semantic_catalog(topic_catalog),
+                    "semantic_spec": topic_release,
+                    **carry_semantic_context_review(revision, topic_release.semantic_context),
                 }
             ).model_dump(mode="python")
         )
@@ -183,6 +186,9 @@ class OneClickModelingArtifactService:
                     "ai_alias_reviewed_resources": tuple(
                         f"{item.resource_type}:{item.resource_id}" for item in artifact.alias_drafts
                     ),
+                    # 新草稿进了上下文时旧评审失效；内容没变则原样沿用（同一条规则见
+                    # RevisionEditor.replace_semantic_catalog）
+                    **carry_semantic_context_review(revision, release.semantic_context),
                 }
             ).model_dump(mode="python")
         )

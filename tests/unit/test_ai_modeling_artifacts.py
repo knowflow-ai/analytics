@@ -641,7 +641,8 @@ def test_renamed_resources_keep_their_source_column_as_alias():
         item.model_copy(
             update={
                 "field_id": (
-                    "field:staff.headcount" if item.id == "metric:staff.headcount"
+                    "field:staff.headcount"
+                    if item.id == "metric:staff.headcount"
                     else "field:orders.net"
                 )
             }
@@ -854,3 +855,74 @@ def test_entity_name_dimension_gains_the_bare_entity_noun_as_alias():
     }
     assert twice_aliases["dim:library:name"].count("图书馆") == 1
     assert twice == updated
+
+
+class _AliasModeller:
+    def suggest_alias_batch(self, *, resources, **_kwargs):
+        from knowflow_analytics.modeling.ai_modeller import AliasSuggestionOutput
+
+        return {str(item["resource_id"]): AliasSuggestionOutput(aliases=()) for item in resources}
+
+
+class _NoDimensionValueAliases:
+    def suggest(self, **_kwargs):
+        return {}
+
+
+def _reviewed_revision(sales_catalog):
+    """一个语义上下文已经人工评审过的 Candidate（评审哈希绑住当前内容）。"""
+    from datetime import UTC, datetime
+
+    from knowflow_analytics.modeling.catalog_contracts import SemanticCatalog
+    from knowflow_analytics.modeling.contracts import semantic_context_content_hash
+    from knowflow_analytics.modeling.revision import RevisionEditor
+
+    context = SemanticContextEntry(
+        id="ctx-project-currency",
+        target_type="project",
+        target_id=sales_catalog.project_id,
+        kind="convention",
+        text="金额统一使用人民币。",
+        source_type="human_convention",
+    )
+    models = list(sales_catalog.models)
+    # 给一张表补上说明，重跑 AI 建模时它会成为一条新的上下文草稿
+    models[0] = models[0].model_copy(update={"description": "订单主表，一行一张订单。"})
+    catalog = SemanticCatalog.model_validate(
+        sales_catalog.model_copy(
+            update={"semantic_context": (context,), "models": tuple(models)}
+        ).model_dump(mode="python")
+    )
+    return RevisionEditor().create(
+        project_id=catalog.project_id,
+        schema_snapshot_hash="snapshot",
+        semantic_catalog=catalog,
+        semantic_context_review_hash=semantic_context_content_hash((context,)),
+        semantic_context_reviewed_by="reviewer",
+        semantic_context_reviewed_at=datetime.now(UTC),
+    )
+
+
+def test_rerunning_ai_modeling_on_a_reviewed_context_keeps_the_context_and_drops_the_stale_review(
+    sales_catalog,
+):
+    """重复建模回归：上下文已评审的 Candidate 再跑一次 AI 建模不能整条失败。
+
+    实机：第二次点「开始 AI 建模」报 ValidationError「semantic context review does not
+    bind current content」。新草稿进了上下文，内容变了，评审哈希却原样带着。
+    """
+    revision = _reviewed_revision(sales_catalog)
+    service = OneClickModelingArtifactService(
+        ai_modeller=_AliasModeller(), dimension_alias_suggester=_NoDimensionValueAliases()
+    )
+
+    artifact = service.build(revision)
+    materialized = service.materialize(revision, artifact)
+
+    reviewed_ids = {item.id for item in revision.semantic_spec.semantic_context}
+    assert reviewed_ids <= {item.id for item in materialized.semantic_spec.semantic_context}
+    assert len(materialized.semantic_spec.semantic_context) > len(reviewed_ids)
+    # 内容变了，旧评审不再绑住当前内容，必须重审；已评审的条目本身原样保留
+    assert materialized.semantic_context_review_hash is None
+    assert materialized.semantic_context_reviewed_by is None
+    assert materialized.semantic_context_reviewed_at is None

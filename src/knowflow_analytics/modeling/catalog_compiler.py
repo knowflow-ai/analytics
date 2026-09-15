@@ -336,7 +336,9 @@ def _compile_model(
             create_dimension = bool(identifier.is_create_dimension)
             identifier_type = identifier.type.value
             dimension_type = None
-            semantic_expr = _quote_identifier(physical.field_name)
+            semantic_expr = _quote_identifier(
+                physical.field_name, known_columns=(physical.field_name,)
+            )
             unit = None
             default_aggregation = None
         elif dimension is not None:
@@ -349,7 +351,7 @@ def _compile_model(
             create_dimension = bool(dimension.is_create_dimension)
             identifier_type = None
             dimension_type = dimension.type.value
-            semantic_expr = _quote_identifier(dimension.expr)
+            semantic_expr = _quote_identifier(dimension.expr, known_columns=(physical.field_name,))
             unit = None
             default_aggregation = None
         elif measure is not None:
@@ -358,7 +360,7 @@ def _compile_model(
             create_dimension = False
             identifier_type = None
             dimension_type = None
-            semantic_expr = _quote_identifier(measure.expr)
+            semantic_expr = _quote_identifier(measure.expr, known_columns=(physical.field_name,))
             unit = measure.unit
             default_aggregation = _aggregation(measure.agg)
         else:
@@ -445,7 +447,7 @@ def _compile_dimension(
         if model_id == dimension.model_id
     }
     referenced = validate_dimension_expression(
-        _quote_identifier(dimension.expr),
+        _quote_identifier(dimension.expr, known_columns=model_fields),
         available_fields=model_fields,
     )
     expression_fields = tuple(model_fields[item] for item in referenced)
@@ -672,7 +674,7 @@ def _compile_metric(
                     code="MEASURE_METRIC_EXPRESSION_UNSUPPORTED",
                 )
             referenced_fields = validate_dimension_expression(
-                _quote_identifier(measure.expr),
+                _quote_identifier(measure.expr, known_columns=model_fields),
                 available_fields=model_fields,
             )
             source_fields = tuple(model_fields[item] for item in referenced_fields)
@@ -894,7 +896,6 @@ def relation_default_cardinality():
     return Cardinality.MANY_TO_MANY
 
 
-
 _METRIC_TIME_AXIS_NAME = "统计时间"
 
 
@@ -950,11 +951,10 @@ def _synthesize_metric_time_axes(
             metric_time_axis=True,
         )
         updated.append(
-            dataset.model_copy(
-                update={"dimension_ids": (*dataset.dimension_ids, axis_id)}
-            )
+            dataset.model_copy(update={"dimension_ids": (*dataset.dimension_ids, axis_id)})
         )
     return tuple(updated)
+
 
 def _compile_dataset(
     data_set: DataSetContract,
@@ -1286,7 +1286,7 @@ def _stable_id(prefix: str, *parts: str) -> str:
     return f"{prefix}:{digest}"
 
 
-def _quote_identifier(expression: str) -> str:
+def _quote_identifier(expression: str, *, known_columns: Iterable[str] = ()) -> str:
     """Render a physical column name as a parseable SQL identifier.
 
     ``semantic_expr`` is parsed as SQL when a revision is validated. A bare
@@ -1294,11 +1294,18 @@ def _quote_identifier(expression: str) -> str:
     number and resolves to no governed field. Only a plain column name is
     quoted; a real expression is left untouched so computed dimensions and
     metric formulas keep their meaning.
+
+    ``known_columns`` 是这张表的物理列名。表达式与其中一个完全相同时，不管它含
+    什么字符都按标识符加引号：MySQL 的列名可以带空格（``Enc Type``），按"含空格
+    就是表达式"去猜会把它解析成 ``Enc AS Type``，整条建模以「unknown field: Enc」
+    失败（2026-09-15 客户实机）。
     """
 
     name = expression.strip()
     if not name:
         return expression
+    if name in set(known_columns):
+        return '"' + name.replace('"', '""') + '"'
     if name.startswith('"') and name.endswith('"') and len(name) > 1:
         return name
     if any(character in name for character in "()+-*/,'\" "):

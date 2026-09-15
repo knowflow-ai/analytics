@@ -63,6 +63,7 @@ from knowflow_analytics.modeling.contracts import (
     SemanticAliasDraft,
     carry_semantic_context_review,
 )
+from knowflow_analytics.modeling.semantic_expression import quote_sql_identifier
 
 
 class OneClickModelingArtifactService:
@@ -608,7 +609,7 @@ def ensure_default_count_metrics(
             model_id=model_id,
             metric_define_type=MetricDefineType.FIELD,
             metric_define_by_field_params=MetricDefineByFieldParamsContract(
-                expr=f"COUNT({physical.column})",
+                expr=f"COUNT({quote_sql_identifier(physical.column)})",
                 fields=(FieldParamContract(field_name=physical.column),),
             ),
             ext={

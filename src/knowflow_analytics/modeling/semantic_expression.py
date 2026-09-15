@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Iterable
 
 import sqlglot
@@ -7,6 +8,21 @@ from sqlglot import exp
 from sqlglot.errors import ParseError
 
 from knowflow_analytics.errors import SemanticValidationError, TranslationError
+
+_PLAIN_IDENTIFIER = re.compile(r"^[^\W\d]\w*$")
+
+
+def quote_sql_identifier(name: str) -> str:
+    """把物理列名渲染成能被 SQL 解析器当成一个标识符读出的形式。
+
+    纯标识符（字母、下划线或汉字开头，后接字母数字下划线）原样返回，其余一律加
+    双引号。MySQL 允许 ``Enc Type`` 这样带空格的列名，裸着放进表达式会被解析成
+    ``Enc AS Type``，于是去找一个叫 Enc 的字段（2026-09-15 客户实机）。
+    """
+
+    if _PLAIN_IDENTIFIER.match(name):
+        return name
+    return '"' + name.replace('"', '""') + '"'
 
 
 def validate_dimension_expression(

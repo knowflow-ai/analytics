@@ -54,6 +54,7 @@ import { AliasCompletionCard } from './alias-completion';
 import { ApiError } from '@analytics/api/client';
 import {
   autoPassedCount,
+  aliasReviewGap,
   publishChecks,
   publishHeadline,
   publishReady,
@@ -271,6 +272,12 @@ export function PublishPanel({
     report: freshReport,
     names: semanticNames,
   });
+  // 别名审核没做完：诊断先于校验把它报出来，卡片按诊断渲染；校验失败那条路只是兜底。
+  const aliasGapMessage =
+    aliasReviewGap(diagnostics.data?.diagnostics ?? [])?.message ??
+    (structureFailure?.code === 'AI_MODELING_ALIAS_REVIEW_INCOMPLETE'
+      ? structureFailure.message
+      : null);
   const ready = publishReady(checks, queue) && !readOnly;
   const autoPassed = autoPassedCount(freshReport, queue);
   const headline = publishHeadline({
@@ -395,25 +402,25 @@ export function PublishPanel({
           </div>
 
           {/* 自动校验失败时原因不能只剩一个「未通过」——那等于把错误咽掉了。 */}
-          {structureError &&
-            (structureFailure?.code === 'AI_MODELING_ALIAS_REVIEW_INCOMPLETE' && !readOnly ? (
-              <AliasCompletionCard
-                projectId={projectId}
-                revision={revision}
-                message={structureFailure.message}
-                onApplied={(next) => {
-                  acceptRevision(next);
-                  setStructureError(null);
-                  setStructureFailure(null);
-                  validate.mutate();
-                }}
-                onRevalidate={() => validate.mutate()}
-              />
-            ) : (
+          {aliasGapMessage && !readOnly ? (
+            <AliasCompletionCard
+              projectId={projectId}
+              revision={revision}
+              message={aliasGapMessage}
+              onApplied={(next) => {
+                setStructureError(null);
+                setStructureFailure(null);
+                acceptRevision(next);
+              }}
+              onRevalidate={() => diagnostics.refetch()}
+            />
+          ) : (
+            structureError && (
               <div className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
                 结构校验没通过：{structureError}
               </div>
-            ))}
+            )
+          )}
         </div>
 
         {/* 二、只有人能拍板的 */}

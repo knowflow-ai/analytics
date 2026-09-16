@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  aliasReviewGap,
   autoPassedCount,
   publishChecks,
   publishHeadline,
@@ -219,6 +220,22 @@ describe('需要人做点什么的队列', () => {
     expect(queue).toHaveLength(1);
     expect(queue[0]).toMatchObject({ tone: 'blocking', title: '门店 → 销售单' });
     expect(queue[0].hint).toContain('改基数');
+  });
+
+  it('别名审核没做完这条阻断由补全卡片承接，不再进队列', () => {
+    // 诊断接口先于结构校验把它报出来，页面因此永远不会跑校验；卡片必须挂在诊断上。
+    const gap = diagnostic({
+      diagnostic_code: 'AI_MODELING_ALIAS_REVIEW_INCOMPLETE',
+      title: '结构校验未通过',
+      message: '有 1 个可问的资源改动后还没做过别名审核：维度「账户号」。',
+    });
+    const diagnostics = [gap, diagnostic()];
+
+    expect(aliasReviewGap(diagnostics)?.message).toContain('账户号');
+    expect(aliasReviewGap([diagnostic()])).toBeNull();
+    const queue = reviewQueue({ diagnostics, report: null, names });
+    expect(queue).toHaveLength(1);
+    expect(queue[0].title).toBe('门店 → 销售单');
   });
 
   it('提醒类诊断不进队列', () => {

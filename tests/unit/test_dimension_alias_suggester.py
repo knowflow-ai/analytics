@@ -1,6 +1,8 @@
 import threading
 import time
 
+import pytest
+
 from knowflow_analytics.modeling.contracts import (
     DimensionValueCandidate,
     ModelingRevision,
@@ -228,3 +230,72 @@ def test_invalid_alias_output_is_retried_before_failing_the_run(sales_release):
 
     assert gateway.attempts == [1, 2]
     assert suggestions["candidate-a"]["display_name"] == "展示"
+
+
+def _candidates(count: int):
+    return tuple(
+        DimensionValueCandidate(
+            id=f"candidate-{index:03d}",
+            dimension_value_id=f"value-{index:03d}",
+            dimension_id="region",
+            value=f"R{index:03d}",
+            observed=True,
+            display_name=f"R{index:03d}",
+        )
+        for index in range(count)
+    )
+
+
+def _revision(sales_release):
+    return ModelingRevision(
+        id="revision-alias",
+        project_id=sales_release.project_id,
+        schema_snapshot_hash="sha256:snapshot",
+        etag=1,
+        semantic_spec=sales_release,
+    )
+
+
+def test_alias_suggester_halves_the_batch_when_the_model_times_out(sales_release):
+    """现场：一批 200 个取值让慢模型 60 秒出不来。超时时把批减半再试，而不是原样重发三次。"""
+    from knowflow_analytics.gateways.model import ModelGatewayTimeout
+
+    sizes: list[int] = []
+
+    class Gateway:
+        def generate_json(self, **kwargs):
+            ids = kwargs["trace"]["candidate_ids"]
+            sizes.append(len(ids))
+            if len(ids) > 50:
+                raise ModelGatewayTimeout("model gateway timed out")
+            return {
+                "items": [
+                    {"candidate_id": cid, "display_name": cid, "aliases": ["a"]} for cid in ids
+                ]
+            }
+
+    candidates = _candidates(120)
+    suggestions = DimensionValueAliasSuggester(Gateway()).suggest(
+        revision=_revision(sales_release), candidates=candidates
+    )
+
+    assert set(suggestions) == {item.id for item in candidates}
+    assert sizes == [120, 60, 30, 30, 30, 30]
+
+
+def test_alias_suggester_gives_up_when_the_smallest_batch_still_times_out(sales_release):
+    from knowflow_analytics.gateways.model import ModelGatewayTimeout
+
+    sizes: list[int] = []
+
+    class Gateway:
+        def generate_json(self, **kwargs):
+            sizes.append(len(kwargs["trace"]["candidate_ids"]))
+            raise ModelGatewayTimeout("model gateway timed out")
+
+    with pytest.raises(ModelGatewayTimeout):
+        DimensionValueAliasSuggester(Gateway()).suggest(
+            revision=_revision(sales_release), candidates=_candidates(120)
+        )
+    # 每个批大小只试一次就减半：120 → 60 → 30 → 25（最小），不再按原样重发
+    assert sizes == [120, 60, 30, 25]

@@ -19,7 +19,7 @@ import httpx
 import jsonschema
 
 from knowflow_analytics.gateways.embedding import EmbeddingGatewayError
-from knowflow_analytics.gateways.model import ModelGatewayError
+from knowflow_analytics.gateways.model import ModelGatewayError, ModelGatewayTimeout
 from knowflow_analytics.oss.config import ModelEndpoint
 from knowflow_analytics.semantic.index import EmbeddingBatch
 
@@ -152,6 +152,9 @@ class OpenAiCompatibleModelGateway:
                     request=response.request,
                     response=response,
                 )
+            except httpx.TimeoutException as exc:
+                # 与商业版网关一致：超时不原样重发，交给调用方缩小请求（别名生成减半批次）
+                raise ModelGatewayTimeout("model gateway timed out") from exc
             except httpx.HTTPError as exc:
                 last = exc
             if index < _TRANSPORT_RETRIES - 1:

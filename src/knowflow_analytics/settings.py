@@ -47,6 +47,10 @@ class AnalyticsSettings(BaseSettings):
     # One governed modeling or S2SQL call against a large model can exceed a
     # minute, and the gateway's read timeout aborts the whole run when it does.
     model_gateway_timeout_seconds: float = Field(default=60.0, ge=1.0, le=600.0)
+    # 建模类调用（AI 建模、别名、维度值别名）是后台任务，用单独的更长超时，实际取
+    # 它与 model_gateway_timeout_seconds 中较大者；
+    # 自建 vLLM 上一批维度值别名常超过 60 秒（2026-09-16 现场）。
+    model_gateway_modeling_timeout_seconds: float = Field(default=180.0, ge=1.0, le=600.0)
     # One-click modeling fans out per table and per business entity. Free model
     # tiers reject that burst (Groq 429 on tokens-per-minute, Gemini 503) while
     # answering the same calls serially, so the fan-out has to match the

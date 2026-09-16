@@ -17,6 +17,10 @@ class ModelGatewayError(AnalyticsError):
         super().__init__(message, code=code, stage="MODELING_SUGGESTION")
 
 
+class ModelGatewayTimeout(ModelGatewayError):
+    """模型在读超时内没有回完。调用方可据此缩小请求（如减半批次），而不是原样重发。"""
+
+
 class StructuredModelGateway(Protocol):
     def generate_json(
         self,
@@ -34,6 +38,14 @@ _BACKOFF_SECONDS = (0.5, 2.0, 5.0)
 # 问数链路上各用途的超时上限（秒）。实测正常 7–20s；全局 60s 加上传输层 3 次重试，
 # 一次挂住的调用最坏 60+60+60。超时不再在传输层重试同一个 prompt——那本来就该交给
 # 解析器的升温 / 反馈重试链去换一种生成。建模类用途不在这里，沿用全局（AI 补全要 240s）。
+# 建模类用途（AI 建模、别名、维度值别名）是后台任务，不在请求路径上；自建的大模型
+# 给一批维度值起别名常常超过 60 秒（2026-09-16 现场：三次 60 秒超时后整轮建模失败）。
+# 它们用单独的、更长的超时，问数链路的上限不变。
+_MODELING_PURPOSE_PREFIXES = (
+    "analytics.modeling",
+    "analytics.alias_suggestion",
+    "analytics.dimension_value_aliases",
+)
 _PURPOSE_TIMEOUT_CAPS: dict[str, float] = {
     "analytics.s2sql": 30.0,
     "analytics.s2sql.corrector": 30.0,
@@ -61,6 +73,7 @@ class HttpModelGateway:
         service_token: str,
         llm_id: str,
         timeout_seconds: float = 60.0,
+        modeling_timeout_seconds: float = 180.0,
         client: httpx.Client | None = None,
     ) -> None:
         self._owns_client = client is None
@@ -70,6 +83,13 @@ class HttpModelGateway:
         self._service_token = service_token
         self._llm_id = llm_id
         self._timeout_seconds = timeout_seconds
+        self._modeling_timeout_seconds = modeling_timeout_seconds
+
+    def _timeout_for(self, purpose: str) -> float:
+        if purpose.startswith(_MODELING_PURPOSE_PREFIXES):
+            # 存量部署可能把全局超时调到 240 给 AI 补全用，建模取两者中较大的
+            return max(self._modeling_timeout_seconds, self._timeout_seconds)
+        return min(self._timeout_seconds, _PURPOSE_TIMEOUT_CAPS.get(purpose, self._timeout_seconds))
 
     def _post_with_backoff(self, body: dict[str, Any], *, purpose: str) -> Any:
         """网络抖动和 5xx 退避重试；4xx 与信封里的业务拒绝不重试。
@@ -78,9 +98,7 @@ class HttpModelGateway:
         """
 
         last: Exception | None = None
-        timeout = min(
-            self._timeout_seconds, _PURPOSE_TIMEOUT_CAPS.get(purpose, self._timeout_seconds)
-        )
+        timeout = self._timeout_for(purpose)
         for index in range(_TRANSPORT_RETRIES):
             try:
                 response = self._client.post(
@@ -103,8 +121,8 @@ class HttpModelGateway:
                 last = exc
             except httpx.TimeoutException as exc:
                 # 超时不重试：同一个 prompt 再等一遍只是把尾巴拉长；解析器自己的
-                # 重试链会换温度 / 带上拒绝原因重新生成。
-                raise ModelGatewayError("model gateway timed out") from exc
+                # 重试链会换温度 / 带上拒绝原因重新生成，别名生成会把批减半。
+                raise ModelGatewayTimeout("model gateway timed out") from exc
             except (httpx.HTTPError, ValueError) as exc:
                 last = exc
             if index < _TRANSPORT_RETRIES - 1:

@@ -144,5 +144,6 @@ class TestGatewayRecordsItsCalls:
             ("analytics.s2sql", False),
         ]
         assert calls[0]["prompt_chars"] == len("各门店销售额")
-        assert calls[1]["error"] == "ModelGatewayError"
+        # 超时现在记为更具体的子类名，诊断里能一眼看出是超时而不是拒绝
+        assert calls[1]["error"] == "ModelGatewayTimeout"
         assert all("elapsed_ms" in item for item in calls)

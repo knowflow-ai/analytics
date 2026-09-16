@@ -468,3 +468,67 @@ def test_embedding_gateway_requires_a_tenant_binding():
     with pytest.raises(EmbeddingGatewayError, match="tenant"):
         gateway.for_tenant("")
     assert captured.get("count", 0) == 0
+
+
+def test_model_gateway_gives_modeling_purposes_their_own_longer_timeout():
+    """现场：自建 vLLM 上一批维度值别名生成超过 60 秒，三次都被读超时掐断，建模整条失败。
+
+    建模类调用是后台任务，不该和问数链路共用一个短超时。
+    """
+    seen: dict[str, float] = {}
+
+    class Client:
+        def post(self, path, *, headers, json, timeout):
+            seen[json["purpose"]] = timeout
+            return httpx.Response(
+                200,
+                json={"code": 0, "data": {"structured": {}}},
+                request=httpx.Request("POST", "http://ragflow.invalid" + path),
+            )
+
+        def close(self):
+            pass
+
+    gateway = HttpModelGateway(
+        base_url="http://ragflow.invalid",
+        service_token="service-token",
+        llm_id="model@provider",
+        client=Client(),
+        timeout_seconds=60.0,
+        modeling_timeout_seconds=180.0,
+    )
+    for purpose in (
+        "analytics.dimension_value_aliases",
+        "analytics.alias_suggestion",
+        "analytics.modeling.naming",
+        "analytics.s2sql",
+        "analytics.result_interpretation",
+    ):
+        gateway.generate_json(
+            purpose=purpose,
+            messages=[{"role": "user", "content": "x"}],
+            response_schema={"type": "object"},
+            trace={"tenant_id": "tenant-1"},
+        )
+
+    assert seen["analytics.dimension_value_aliases"] == 180.0
+    assert seen["analytics.alias_suggestion"] == 180.0
+    assert seen["analytics.modeling.naming"] == 180.0
+    assert seen["analytics.s2sql"] == 30.0  # 问数链路的上限不变
+    assert seen["analytics.result_interpretation"] == 20.0
+
+
+def test_model_gateway_timeout_is_a_distinct_error():
+    from knowflow_analytics.gateways.model import ModelGatewayError, ModelGatewayTimeout
+
+    def handler(request):
+        raise httpx.ReadTimeout("slow", request=request)
+
+    with pytest.raises(ModelGatewayTimeout) as excinfo:
+        _gateway(handler).generate_json(
+            purpose="analytics.dimension_value_aliases",
+            messages=[{"role": "user", "content": "x"}],
+            response_schema={"type": "object"},
+            trace={"tenant_id": "tenant-1"},
+        )
+    assert isinstance(excinfo.value, ModelGatewayError)

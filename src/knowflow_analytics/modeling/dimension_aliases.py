@@ -7,7 +7,11 @@ from pydantic import Field, ValidationError, model_validator
 
 from knowflow_analytics.contracts import FrozenModel
 from knowflow_analytics.errors import SemanticValidationError
-from knowflow_analytics.gateways.model import ModelGatewayError, StructuredModelGateway
+from knowflow_analytics.gateways.model import (
+    ModelGatewayError,
+    ModelGatewayTimeout,
+    StructuredModelGateway,
+)
 from knowflow_analytics.modeling.contracts import (
     DimensionValueCandidate,
     ModelingRevision,
@@ -42,6 +46,8 @@ class DimensionValueAliasSuggester:
     """
 
     _BATCH_SIZE = 200
+    # 模型超时时把批减半再试，减到这个大小仍超时才放弃
+    _MIN_BATCH_SIZE = 25
     _MAX_ATTEMPTS = 3
     _MAX_PARALLEL_DIMENSIONS = 3
 
@@ -100,8 +106,10 @@ class DimensionValueAliasSuggester:
         tenant_id: str = "",
     ) -> dict[str, dict[str, object]]:
         output: dict[str, dict[str, object]] = {}
-        for offset in range(0, len(candidates), self._BATCH_SIZE):
-            batch = candidates[offset : offset + self._BATCH_SIZE]
+        offset = 0
+        batch_size = self._BATCH_SIZE
+        while offset < len(candidates):
+            batch = candidates[offset : offset + batch_size]
             # One batch asks for up to 200 values at once, so a single schema slip
             # is likely and used to abort the entire one-click modeling run. The
             # ModelSchema stage retries for the same reason; the attempt number
@@ -109,6 +117,7 @@ class DimensionValueAliasSuggester:
             # generation.
             parsed = None
             last_error: Exception | None = None
+            timed_out = False
             for attempt in range(1, self._MAX_ATTEMPTS + 1):
                 try:
                     payload = self._gateway.generate_json(
@@ -137,6 +146,11 @@ class DimensionValueAliasSuggester:
                             "AI alias output must contain every requested candidate exactly once",
                             code="AI_ALIAS_OUTPUT_INVALID",
                         )
+                except ModelGatewayTimeout as exc:
+                    # 慢模型一批出不来：原样重发只会再等一遍，把批减半更可能过。
+                    last_error = exc
+                    timed_out = True
+                    break
                 except (ModelGatewayError, ValidationError, SemanticValidationError) as exc:
                     last_error = exc
                     continue
@@ -144,7 +158,11 @@ class DimensionValueAliasSuggester:
                 break
             if parsed is None:
                 assert last_error is not None
+                if timed_out and len(batch) > self._MIN_BATCH_SIZE:
+                    batch_size = max(self._MIN_BATCH_SIZE, len(batch) // 2)
+                    continue
                 raise last_error
+            offset += len(batch)
             output.update(
                 {
                     item.candidate_id: {

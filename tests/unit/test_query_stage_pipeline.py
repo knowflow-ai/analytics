@@ -422,16 +422,14 @@ def test_all_retry_runs_rule_on_all_mapping_when_all_llm_has_no_candidate(
 ):
     """Reviewed parity: the ALL pass remains LLM_OR_RULE, not LLM-only.
 
-    The first valid LLM candidate is rejected after parsing, so the discovery
-    Rule candidate must not be resurrected.  The ALL LLM then produces no
-    candidate; only then may RuleSqlParser build a new candidate from ALL mapping.
+    规则兜底只剩一个合法入口：模型没形成候选。两趟都没形成时，ALL 那趟才可以让
+    RuleSqlParser 用 ALL 映射重新造一个候选。
+    （2026-09-16 用户评审：模型写出来过、被治理规则拒掉之后，任何一趟都不再退给规则
+    兜底——它只会丢掉表达不了的那部分，给出一个看起来正常的错数字。）
     """
 
     gateway = _SequenceGateway(
-        {
-            "thought": "valid candidate rejected by the complete workflow",
-            "sql": 'SELECT "区域", SUM("净收入") FROM "销售经营" GROUP BY "区域"',
-        },
+        {"thought": "no candidate", "sql": "SELECT"},
         {"thought": "invalid ALL candidate", "sql": "SELECT"},
     )
     orchestrator = CandidateOrchestrator(
@@ -474,14 +472,13 @@ def test_all_retry_runs_rule_on_all_mapping_when_all_llm_has_no_candidate(
     assert parsed.mapping.mode is MapMode.ALL
     assert parsed.id != candidates.candidates[0].id
     assert gateway.calls == 2
-    assert validations == [("llm", MapMode.STRICT), ("rule", MapMode.ALL)]
+    assert validations == [("rule", MapMode.STRICT), ("rule", MapMode.ALL)]
     assert events == [
         "final_mapping",
-        "llm_candidate",
-        "llm_candidate_rejected",
+        "llm_parse_failed",
+        "rule_fallback_candidate",
+        "rule_fallback_rejected",
         "all_mapping",
-        # 第一趟候选被拒的原因先带给模型，再跑 ALL 那趟。
-        "retry_feedback",
         "all_llm_parse_failed",
         "all_rule_fallback_candidate",
         "selected_candidate",
@@ -495,10 +492,7 @@ def test_all_rule_with_no_semantic_candidate_fails_cleanly(
     """An empty ALL Rule result is not a candidate and must never become a 500."""
 
     gateway = _SequenceGateway(
-        {
-            "thought": "valid candidate rejected by the complete workflow",
-            "sql": 'SELECT "区域", SUM("净收入") FROM "销售经营" GROUP BY "区域"',
-        },
+        {"thought": "no candidate", "sql": "SELECT"},
         {"thought": "invalid ALL candidate", "sql": "SELECT"},
     )
     orchestrator = CandidateOrchestrator(
@@ -623,7 +617,7 @@ def test_governance_blocking_all_rule_failure_is_rethrown(
     sales_index,
     blocking_code,
 ):
-    llm_parser = _CandidateThenErrorLlmParser("LLM_S2SQL_INVALID")
+    llm_parser = _AlwaysErrorLlmParser("LLM_S2SQL_INVALID")
     orchestrator = CandidateOrchestrator(
         mapper=SemanticMapper(),
         rule_parser=_RuleParserBlockingOnAll(blocking_code),
@@ -635,7 +629,6 @@ def test_governance_blocking_all_rule_failure_is_rethrown(
         index=sales_index,
         dataset_ids=("sales_dataset",),
     )
-    llm_parser.template = candidates.candidates[0]
 
     def reject_first_candidate(_candidate):
         raise SemanticParsingError(
@@ -819,3 +812,119 @@ def test_cross_dataset_sort_uses_semantic_parse_comparator():
     )
 
     assert _cross_dataset_sort_key(dataset_exact) < _cross_dataset_sort_key(metric_only)
+
+
+class _AlwaysErrorLlmParser:
+    """两趟都没形成候选：规则兜底仍然有资格接手。"""
+
+    def __init__(self, error_code: str) -> None:
+        self.error_code = error_code
+        self.calls = 0
+
+    def parse(self, **_kwargs):
+        self.calls += 1
+        raise SemanticParsingError("synthetic no candidate", code=self.error_code)
+
+
+class _RuleParserSpy:
+    """记录规则兜底被调用过几次。"""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self._delegate = RuleS2SqlParser()
+
+    def parse(self, **kwargs):
+        self.calls += 1
+        return self._delegate.parse(**kwargs)
+
+
+class _TimingOutLlmParser:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def parse(self, **_kwargs):
+        self.calls += 1
+        raise SemanticParsingError(
+            "模型在规定时间内没有返回",
+            code="LLM_S2SQL_TIMEOUT",
+            details={"attempts": [{"attempt": 1, "error": "ModelGatewayTimeout"}]},
+        )
+
+
+def test_a_model_timeout_refuses_instead_of_answering_with_the_rule_parser(
+    sales_release,
+    sales_index,
+):
+    """现场：三次 30 秒超时后退到规则兜底，给出一个丢了条件和占比的求和。
+
+    超时不是「模型答不出」，是「没等到」。拿规则替它答等于换了一个问题：
+    「余额大于 2000 的账户占比」答成了全体余额求和。
+    """
+
+    llm_parser = _TimingOutLlmParser()
+    rule_parser = _RuleParserSpy()
+    orchestrator = CandidateOrchestrator(
+        mapper=SemanticMapper(),
+        llm_parser=llm_parser,
+        rule_parser=rule_parser,
+    )
+    candidates = orchestrator.discover(
+        question="各区域净收入",
+        release=sales_release,
+        index=sales_index,
+        dataset_ids=("sales_dataset",),
+    )
+    rule_parser.calls = 0  # discover 阶段本来就会用规则造候选，这里只数兜底
+
+    with pytest.raises(SemanticParsingError) as raised:
+        orchestrator.final_parse(
+            question="各区域净收入",
+            query_id="model-timeout",
+            release=sales_release,
+            index=sales_index,
+            selected=candidates.candidates[0],
+        )
+
+    assert raised.value.code == "LLM_S2SQL_TIMEOUT"
+    assert rule_parser.calls == 0
+    # 换个更长的提示词再问一遍只会再超一次（实机 ALL 那趟 6521 字，同样 30 秒）。
+    assert llm_parser.calls == 1
+
+
+def test_a_rejected_model_candidate_never_falls_back_to_the_rule_parser(
+    sales_release,
+    sales_index,
+):
+    """模型写出来了、被方言校验拒掉，说明这个问题的写法当前表达不了。
+
+    此时规则兜底只会丢掉它表达不了的那部分（条件、占比），给出一个看起来正常的数字。
+    """
+
+    llm_parser = _ParsedLlmCandidate()
+    rule_parser = _RuleParserSpy()
+    orchestrator = CandidateOrchestrator(
+        mapper=SemanticMapper(),
+        llm_parser=llm_parser,
+        rule_parser=rule_parser,
+        textual_corrector=_RejectLlmCorrector(),
+    )
+    candidates = orchestrator.discover(
+        question="各区域净收入",
+        release=sales_release,
+        index=sales_index,
+        dataset_ids=("sales_dataset",),
+    )
+    llm_parser.template = candidates.candidates[0]
+    rule_parser.calls = 0  # 同上
+
+    with pytest.raises(SemanticParsingError) as raised:
+        orchestrator.final_parse(
+            question="各区域净收入",
+            query_id="rejected-candidate",
+            release=sales_release,
+            index=sales_index,
+            selected=candidates.candidates[0],
+        )
+
+    assert raised.value.code == "SYNTHETIC_CORRECTION_FAILED"
+    assert rule_parser.calls == 0

@@ -520,9 +520,14 @@ class LlmS2SqlParser:
                     last_error = exc
                     output = None
         if output is None:
+            # 超时不是「写不出合法查询」，是「没等到」。两者的处置完全不同：前者可以
+            # 交给规则兜底，后者拿规则替它答等于换了一个问题。
+            timed_out = bool(failures) and all(
+                item["error"] == "ModelGatewayTimeout" for item in failures
+            )
             raise SemanticParsingError(
-                "模型未返回合法的语义查询",
-                code="LLM_S2SQL_INVALID",
+                "模型在规定时间内没有返回" if timed_out else "模型未返回合法的语义查询",
+                code="LLM_S2SQL_TIMEOUT" if timed_out else "LLM_S2SQL_INVALID",
                 details={"attempts": failures},
             ) from last_error
         candidate_id = (

@@ -4952,6 +4952,19 @@ def _error_diagnosis(exc: AnalyticsError) -> QueryDiagnosis:
             recommendation="拆成单事实问题，或先建立经过治理的联合模型/视图。",
             user_hint="这些指标不能安全地在一次查询中合并。请拆开提问，或先建立联合分析模型。",
         )
+    if exc.code == "LLM_S2SQL_TIMEOUT":
+        # 超时不退给规则兜底：规则表达不了条件与占比，答出来的是另一个问题的数字。
+        return QueryDiagnosis(
+            category=QueryDiagnosticCategory.FINAL_PARSING,
+            stage=QueryStage.FINAL_PARSING.value,
+            severity="error",
+            summary="模型在读超时内没有写完这条查询",
+            recommendation=(
+                "调大 KNOWFLOW_ANALYTICS_MODEL_GATEWAY_QUERY_TIMEOUT_SECONDS，"
+                "或给问数换一个更快的模型。"
+            ),
+            user_hint="模型这次没能在规定时间内作答，没有结果可以给你。请稍后重试。",
+        )
     if exc.code == "DIMENSION_NOT_REACHABLE":
         return QueryDiagnosis(
             category=QueryDiagnosticCategory.ROUTING,

@@ -29,6 +29,10 @@ from knowflow_analytics.query.parser import (
 )
 from knowflow_analytics.semantic.index import SemanticElementType, SemanticIndexSnapshot
 
+# 模型在读超时内没作答。与「写不出合法查询」不同：那是模型的判断，这只是没等到，
+# 拿规则兜底替它答等于换了一个问题。
+_TIMEOUT_CODE = "LLM_S2SQL_TIMEOUT"
+
 
 class CandidateOrchestrator:
     """Outer orchestration of the natural-language parsing stages."""
@@ -453,6 +457,9 @@ class CandidateOrchestrator:
         emit("final_mapping", final_mapping.model_dump(mode="json"))
         selected = selected.model_copy(update={"mapping": final_mapping})
         rule_fallback_allowed = self._llm_parser is None
+        # 模型写出来过、被治理规则拒掉：说明这个问题的写法当前表达不了。规则兜底只会
+        # 丢掉它表达不了的那部分（条件、占比），给出一个看起来正常的数字。
+        candidate_rejected = False
         if self._llm_parser is not None:
             try:
                 llm_candidate = self._llm_parser.parse(
@@ -475,7 +482,9 @@ class CandidateOrchestrator:
                         **({"details": exc.details} if exc.details else {}),
                     },
                 )
-                if exc.code in GOVERNANCE_BLOCKING_S2SQL_CODES:
+                if exc.code in GOVERNANCE_BLOCKING_S2SQL_CODES or exc.code == _TIMEOUT_CODE:
+                    # 超时直接拒答：换一个更长的提示词再问一遍只会再超一次（实机 ALL
+                    # 那趟 6521 字，同样 30 秒），而规则兜底答的是另一个问题。
                     raise
                 # The LLM parser runs before the rule parser.  When the
                 # LLM parser adds no candidate, RuleSqlParser may still take over.
@@ -526,6 +535,7 @@ class CandidateOrchestrator:
                     # of resurrecting the discovery-stage Rule candidate.
                     errors.append(exc)
                     rule_fallback_allowed = False
+                    candidate_rejected = True
         if rule_fallback_allowed:
             emit("rule_fallback_candidate", selected.model_dump(mode="json"))
             try:
@@ -599,13 +609,13 @@ class CandidateOrchestrator:
                         **({"details": exc.details} if exc.details else {}),
                     },
                 )
-                if exc.code in GOVERNANCE_BLOCKING_S2SQL_CODES:
+                if exc.code in GOVERNANCE_BLOCKING_S2SQL_CODES or exc.code == _TIMEOUT_CODE:
                     raise
                 errors.append(exc)
                 # The ALL retry keeps Text2SQLType.LLM_OR_RULE upstream.  A
                 # failed LLMSqlParser therefore leaves the fresh ALL-pass
                 # candidate list empty and allows RuleSqlParser to run.
-                all_rule_fallback_allowed = True
+                all_rule_fallback_allowed = not candidate_rejected
             else:
                 emit("all_candidate", all_candidate.model_dump(mode="json"))
                 try:
@@ -633,6 +643,7 @@ class CandidateOrchestrator:
                     # A candidate already exists in this ALL pass, so the
                     # immediately following RuleSqlParser must still exit.
                     errors.append(exc)
+                    candidate_rejected = True
             if all_rule_fallback_allowed:
                 try:
                     all_rule_candidate = self._rule_parser.parse(

@@ -127,8 +127,14 @@ def _typed_semantic_ambiguity_groups(
         # 说法（「大区」→ 华东/华南/…）本来就该合成 IN 过滤，不是对冲，归 grounding
         # validator 管。把它们也算进来会把那条既有行为变成澄清。
         members = (
-            (*typed, *(m for m in group.members
-                       if m.element_type is SemanticElementType.DIMENSION_VALUE))
+            (
+                *typed,
+                *(
+                    m
+                    for m in group.members
+                    if m.element_type is SemanticElementType.DIMENSION_VALUE
+                ),
+            )
             if typed and include_values
             else typed
         )
@@ -364,7 +370,6 @@ def settle_after_parse(
             )
         )
     return Settlement(resolved=tuple(resolved), decisions=tuple(decisions))
-
 
 
 def _value_bindings(mapping: MappingResult) -> dict[str, SemanticValueBinding]:

@@ -1,6 +1,5 @@
 import { EDITION, request } from './client';
 import type {
-  AnalyticsAliasCompletion,
   AnalyticsCatalogDimension,
   AnalyticsCatalogHierarchy,
   AnalyticsDictionaryDecision,
@@ -610,30 +609,6 @@ export const applyProposal = (
     `${revisionPath(projectId, revisionId)}/modeling-proposals/${proposalId}:apply`,
     { method: 'POST', projectId, body: { ...input, confirmation: 'apply' } },
   );
-
-// --- 发布页就地补全别名 ---------------------------------------------------------
-
-export const suggestAliasCompletion = (
-  projectId: string,
-  revisionId: string,
-  expectedEtag: number,
-) =>
-  request<AnalyticsAliasCompletion>(
-    `${revisionPath(projectId, revisionId)}/alias-completion:suggest`,
-    { method: 'POST', projectId, body: { expected_etag: expectedEtag } },
-  );
-
-export const applyAliasCompletion = (
-  projectId: string,
-  revisionId: string,
-  expectedEtag: number,
-  drafts: AnalyticsSemanticAliasReview[],
-) =>
-  request<AnalyticsRevision>(`${revisionPath(projectId, revisionId)}/alias-completion:apply`, {
-    method: 'POST',
-    projectId,
-    body: { expected_etag: expectedEtag, drafts },
-  });
 
 // --- validate / publish ---------------------------------------------------------
 

@@ -43,6 +43,7 @@ def relevance_score(cosine: float) -> float:
 
     return (cosine + 1.0) / 2.0
 
+
 _EVALUATION_ONLY_TAGS = frozenset({"holdout", "calibration"})
 
 

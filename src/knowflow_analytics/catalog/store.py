@@ -2065,9 +2065,7 @@ class CatalogStore:
 
         with self._engine.begin() as connection:
             target = connection.execute(
-                select(releases.c.project_id, releases.c.status).where(
-                    releases.c.id == release_id
-                )
+                select(releases.c.project_id, releases.c.status).where(releases.c.id == release_id)
             ).one_or_none()
             # 归属校验在这里做，不能只靠路由：release id 是可猜的，拿别的项目的
             # 快照当自己的线上版本会让问数用上另一个项目的语义模型。
@@ -2106,9 +2104,7 @@ class CatalogStore:
                 releases.c.spec_hash,
                 releases.c.status,
                 releases.c.created_at,
-                func.row_number()
-                .over(order_by=releases.c.created_at.asc())
-                .label("sequence"),
+                func.row_number().over(order_by=releases.c.created_at.asc()).label("sequence"),
             )
             .where(releases.c.project_id == project_id)
             .subquery()
@@ -2116,9 +2112,7 @@ class CatalogStore:
         with self._engine.connect() as connection:
             rows = (
                 connection.execute(
-                    select(numbered)
-                    .order_by(numbered.c.created_at.desc())
-                    .limit(limit)
+                    select(numbered).order_by(numbered.c.created_at.desc()).limit(limit)
                 )
                 .mappings()
                 .all()
@@ -2412,9 +2406,7 @@ class CatalogStore:
         # 带正解的排前面（照着补别名即可），拒答排后面（还得先诊断）；次数在同档内比。
         by_kind = case(_KIND_ORDER, value=grouped.c.kind, else_=len(_KIND_ORDER))
         with self._engine.connect() as connection:
-            total = connection.execute(
-                select(func.count()).select_from(grouped)
-            ).scalar_one()
+            total = connection.execute(select(func.count()).select_from(grouped)).scalar_one()
             rows = (
                 connection.execute(
                     select(grouped)
@@ -2500,11 +2492,7 @@ class CatalogStore:
                     )
                 )
             ).all()
-            matched = [
-                row.id
-                for row in rows
-                if wanted & _record_phrases(row.payload)
-            ]
+            matched = [row.id for row in rows if wanted & _record_phrases(row.payload)]
             if not matched:
                 return 0
             result = connection.execute(

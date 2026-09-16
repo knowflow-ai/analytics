@@ -35,11 +35,7 @@ class SemanticSymbolTable:
         self._by_symbol: dict[str, tuple[ResolvedSemanticSymbol, ...]] = {}
         self._by_id: dict[str, ResolvedSemanticSymbol] = {}
         route = next(
-            (
-                item
-                for item in release.analysis_topic_routes
-                if item.dataset_id == dataset.id
-            ),
+            (item for item in release.analysis_topic_routes if item.dataset_id == dataset.id),
             None,
         )
         scoped_names = scope_canonical_names(release, route) if route is not None else {}
@@ -49,9 +45,7 @@ class SemanticSymbolTable:
             if metric.id not in dataset.metric_ids:
                 continue
             canonical_name = scoped_names.get(metric.id, metric.name)
-            resolved = ResolvedSemanticSymbol(
-                kind="metric", id=metric.id, name=canonical_name
-            )
+            resolved = ResolvedSemanticSymbol(kind="metric", id=metric.id, name=canonical_name)
             self._by_id[metric.id] = resolved
             resolved_items.append((resolved, (metric.name, *metric.aliases)))
         for dimension in release.dimensions:

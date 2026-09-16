@@ -26,9 +26,6 @@ from knowflow_analytics.contracts import (
 from knowflow_analytics.errors import SemanticValidationError
 from knowflow_analytics.modeling.rule_modeller import stable_id
 
-_DEFAULT_COUNT_PREFIX = "metric:default_count:"
-_LEGACY_DEFAULT_COUNT_MARKER = ":field:"
-
 
 def default_count_metric_id(model_id: str) -> str:
     """默认计数指标的 ID 只跟模型走。
@@ -39,22 +36,6 @@ def default_count_metric_id(model_id: str) -> str:
     """
 
     return stable_id("metric", "default_count", model_id)
-
-
-def canonical_default_count_metric_id(metric_id: str) -> str:
-    """把旧格式 ``metric:default_count:<模型>:field:<列>`` 归一到只跟模型走的 ID。
-
-    模型 ID 自己可能含冒号（``model:schema:table``），按第一个 ``:field:`` 切。
-    不是旧格式的原样返回。
-    """
-
-    if not metric_id.startswith(_DEFAULT_COUNT_PREFIX):
-        return metric_id
-    rest = metric_id[len(_DEFAULT_COUNT_PREFIX) :]
-    model_id, marker, _column = rest.partition(_LEGACY_DEFAULT_COUNT_MARKER)
-    if not marker or not model_id:
-        return metric_id
-    return default_count_metric_id(model_id)
 
 
 class AnalysisTopicExclusion(FrozenModel):

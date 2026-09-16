@@ -184,9 +184,7 @@ class SemanticIndexBuilder:
 
         metrics_by_id = {item.id: item for item in release.metrics}
         dimensions_by_id = {item.id: item for item in release.dimensions}
-        routes_by_dataset = {
-            item.dataset_id: item for item in release.analysis_topic_routes
-        }
+        routes_by_dataset = {item.dataset_id: item for item in release.analysis_topic_routes}
         for dataset in release.datasets:
             for phrase, source, priority in _names(
                 dataset.name, dataset.aliases, technical_name=dataset.id

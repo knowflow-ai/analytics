@@ -35,7 +35,6 @@ from knowflow_analytics.modeling.analysis_topics import (
     AnalysisTopicProposal,
     AnalysisTopicProposer,
     _canonical_name,
-    canonical_default_count_metric_id,
     default_count_metric_id,
     entity_name_dimension_name,
     scope_canonical_names,
@@ -186,9 +185,6 @@ class OneClickModelingArtifactService:
                     "semantic_catalog": catalog,
                     "semantic_spec": release,
                     "ai_modeling_artifact_hash": artifact.artifact_hash,
-                    "ai_alias_reviewed_resources": tuple(
-                        f"{item.resource_type}:{item.resource_id}" for item in artifact.alias_drafts
-                    ),
                     # 新草稿进了上下文时旧评审失效；内容没变则原样沿用（同一条规则见
                     # RevisionEditor.replace_semantic_catalog）
                     **carry_semantic_context_review(revision, release.semantic_context),
@@ -308,32 +304,11 @@ class OneClickModelingArtifactService:
             validate_analysis_topic_route(release, route)
         return updated
 
-    def suggest_alias_drafts_for(
-        self,
-        revision: ModelingRevision,
-        *,
-        resources: Iterable[tuple[str, str]],
-        tenant_id: str = "",
-    ) -> tuple[SemanticAliasDraft, ...]:
-        """只为指定的几项生成别名草稿，其它资源不进模型。
-
-        发布页就地补全用：门指名了哪几项没审核，就只问这几项。
-        """
-
-        only = frozenset(resources)
-        if not only:
-            return ()
-        drafts = list(self._suggest_aliases(revision, tenant_id=tenant_id, only=only))
-        if any(resource_type == "dimension_value" for resource_type, _ in only):
-            drafts.extend(self._suggest_value_aliases(revision, tenant_id=tenant_id, only=only))
-        return tuple(drafts)
-
     def _suggest_aliases(
         self,
         revision: ModelingRevision,
         *,
         tenant_id: str = "",
-        only: frozenset[tuple[str, str]] | None = None,
     ) -> tuple[SemanticAliasDraft, ...]:
         if self._ai_modeller is None:
             raise SemanticValidationError(
@@ -359,12 +334,6 @@ class OneClickModelingArtifactService:
                 key=lambda value: (value[0], value[1].id),
             )
         )
-        if only is not None:
-            resources = tuple(
-                (resource_type, item)
-                for resource_type, item in resources
-                if (resource_type, item.id) in only
-            )
 
         # Aliases depend only on a resource's own metadata, so one request per
         # metric and per dimension turns a realistic schema into hundreds of model
@@ -444,11 +413,8 @@ class OneClickModelingArtifactService:
         revision: ModelingRevision,
         *,
         tenant_id: str = "",
-        only: frozenset[tuple[str, str]] | None = None,
     ) -> tuple[SemanticAliasDraft, ...]:
         values = self._catalog(revision).dimension_values
-        if only is not None:
-            values = tuple(item for item in values if ("dimension_value", item.id) in only)
         if not values:
             return ()
         if self._dimension_alias_suggester is None:
@@ -1399,21 +1365,9 @@ def apply_semantic_alias_drafts(
     return SemanticCatalog.model_validate(updated.model_dump(mode="python"))
 
 
-def missing_alias_reviews(
-    release: SemanticRelease,
-    *,
-    alias_drafts: Iterable[SemanticAliasDraft] | None = None,
-    alias_reviewed_resources: Iterable[str] | None = None,
-) -> list[tuple[str, str]]:
-    """可问的维度、指标、取值里，还没做过别名审核的那些（发布门和就地补全共用）。"""
+def _queryable_resources(release: SemanticRelease) -> set[tuple[str, str]]:
+    """可问的维度、指标、取值；AI 产物必须为它们每一个都带别名草稿。"""
 
-    reviewed = (
-        {(item.resource_type, item.resource_id) for item in alias_drafts}
-        if alias_drafts is not None
-        else {
-            _reviewed_resource_key(item) for item in alias_reviewed_resources or () if ":" in item
-        }
-    )
     dimensions = {item.id: item for item in release.dimensions}
     queryable_dimensions = {
         ("dimension", item_id)
@@ -1429,52 +1383,19 @@ def missing_alias_reviews(
         for item in release.dimension_values
         if ("dimension", item.dimension_id) in queryable_dimensions
     }
-    return sorted((queryable_dimensions | queryable_metrics | queryable_values) - reviewed)
-
-
-def _reviewed_resource_key(item: str) -> tuple[str, str]:
-    """审核记录 ``类型:ID`` → (类型, ID)；旧格式的默认计数 ID 归一到新 ID。"""
-
-    resource_type, _, resource_id = item.partition(":")
-    if resource_type == "metric":
-        resource_id = canonical_default_count_metric_id(resource_id)
-    return resource_type, resource_id
-
-
-def _describe_alias_review_gap(
-    release: SemanticRelease,
-    missing: list[tuple[str, str]],
-    *,
-    limit: int = 6,
-) -> str:
-    dimensions = {item.id: item for item in release.dimensions}
-    metrics = {item.id: item for item in release.metrics}
-    values = {item.id: item for item in release.dimension_values}
-    labels = []
-    for resource_type, resource_id in missing[:limit]:
-        if resource_type == "dimension" and resource_id in dimensions:
-            labels.append(f"维度「{dimensions[resource_id].name}」")
-        elif resource_type == "metric" and resource_id in metrics:
-            labels.append(f"指标「{metrics[resource_id].name}」")
-        elif resource_type == "dimension_value" and resource_id in values:
-            value = values[resource_id]
-            dimension = dimensions.get(value.dimension_id)
-            owner = f"{dimension.name}=" if dimension is not None else ""
-            labels.append(f"取值「{owner}{value.display_name}」")
-        else:
-            labels.append(resource_id)
-    if len(missing) > limit:
-        labels.append(f"等 {len(missing)} 项")
-    return "、".join(labels)
+    return queryable_dimensions | queryable_metrics | queryable_values
 
 
 def validate_ai_modeling_completeness(
     release: SemanticRelease,
     *,
     alias_drafts: Iterable[SemanticAliasDraft] | None = None,
-    alias_reviewed_resources: Iterable[str] | None = None,
 ) -> None:
-    """Fail closed when the one-click modeling artifact is not query-complete."""
+    """Fail closed when the one-click modeling artifact is not query-complete.
+
+    别名只在 AI 产物内部检查：产物必须覆盖每个可问资源。发布门不再看别名，
+    有没有别名是召回好坏，不是能不能发（2026-09-16 用户评审）。
+    """
 
     primary_models = {
         item.model_id
@@ -1528,18 +1449,13 @@ def validate_ai_modeling_completeness(
             code="AI_MODELING_METRIC_COVERAGE_INCOMPLETE",
         )
 
-    if alias_drafts is None and alias_reviewed_resources is None:
+    if alias_drafts is None:
         return
-    missing_alias_review = missing_alias_reviews(
-        release,
-        alias_drafts=alias_drafts,
-        alias_reviewed_resources=alias_reviewed_resources,
-    )
-    if missing_alias_review:
+    drafted = {(item.resource_type, item.resource_id) for item in alias_drafts}
+    missing = sorted(_queryable_resources(release) - drafted)
+    if missing:
         raise SemanticValidationError(
-            f"有 {len(missing_alias_review)} 个可问的资源改动后还没做过别名审核："
-            f"{_describe_alias_review_gap(release, missing_alias_review)}。"
-            "在发布页点「补全缺失的别名」生成别名草稿并采用。",
+            f"AI modeling artifact has no alias draft for queryable resources: {missing[:5]}",
             code="AI_MODELING_ALIAS_REVIEW_INCOMPLETE",
         )
 

@@ -82,15 +82,9 @@ class SchemaIntrospector:
                     )
                 ).all()
         except SQLAlchemyError as exc:
-            raise SchemaIntrospectionError(
-                f"{self._dialect.value} schema listing failed"
-            ) from exc
+            raise SchemaIntrospectionError(f"{self._dialect.value} schema listing failed") from exc
         return tuple(
-            sorted(
-                name
-                for name in {str(row[0]) for row in rows}
-                if not _is_system_schema(name)
-            )
+            sorted(name for name in {str(row[0]) for row in rows} if not _is_system_schema(name))
         )
 
     def list_tables(

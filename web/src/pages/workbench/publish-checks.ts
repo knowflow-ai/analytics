@@ -232,29 +232,11 @@ const label = (names: ReadonlyMap<string, string>, id: string) =>
  * 只收两类：机器判定为阻断的（要回去改建模），和机器判不了、只有人能拍板的
  * （指标样本的数字对不对）。其余几十项自动通过的检查折叠起来，默认不看。
  */
-/** 别名审核没做完的错误码。发布页用补全卡片承接它，不再当普通阻断行。 */
-export const ALIAS_REVIEW_GAP_CODE = 'AI_MODELING_ALIAS_REVIEW_INCOMPLETE';
-
-/**
- * 诊断里那条「还有资源没做别名审核」。
- *
- * 诊断接口自己会跑一遍发布校验并把失败当阻断报出来，页面于是永远不会再去调校验，
- * 所以卡片必须挂在诊断上，而不是挂在校验失败上。
- */
-export function aliasReviewGap(
-  diagnostics: ReadonlyArray<AnalyticsModelingDiagnostic>,
-): AnalyticsModelingDiagnostic | null {
-  return (
-    diagnostics.find((item) => item.blocking && item.diagnostic_code === ALIAS_REVIEW_GAP_CODE) ??
-    null
-  );
-}
-
 export function reviewQueue({ diagnostics, report, names }: QueueInput): ReviewItem[] {
   const items: ReviewItem[] = [];
 
   diagnostics
-    .filter((item) => item.blocking && item.diagnostic_code !== ALIAS_REVIEW_GAP_CODE)
+    .filter((item) => item.blocking)
     .forEach((item, index) => {
       items.push({
         id: `diagnostic:${item.diagnostic_code}:${index}`,

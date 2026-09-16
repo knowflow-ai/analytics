@@ -332,8 +332,7 @@ def _fmt_filters(filters: tuple[tuple[Any, Any, Any], ...]) -> str:
     if not filters:
         return "无"
     return "、".join(
-        f"{fid} {op.value if hasattr(op, 'value') else op} {value!r}"
-        for fid, op, value in filters
+        f"{fid} {op.value if hasattr(op, 'value') else op} {value!r}" for fid, op, value in filters
     )
 
 

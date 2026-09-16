@@ -350,10 +350,7 @@ class RevisionEditor:
         for route in revision.semantic_spec.analysis_topic_routes:
             validate_analysis_topic_route(revision.semantic_spec, route)
         if revision.ai_modeling_artifact_hash is not None:
-            validate_ai_modeling_completeness(
-                revision.semantic_spec,
-                alias_reviewed_resources=revision.ai_alias_reviewed_resources,
-            )
+            validate_ai_modeling_completeness(revision.semantic_spec)
         if revision.state is RevisionState.VALIDATED:
             return revision
         return revision.model_copy(

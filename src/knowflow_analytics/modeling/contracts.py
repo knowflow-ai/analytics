@@ -190,6 +190,8 @@ class ModelingRevision(FrozenModel):
     parent_revision_id: str | None = None
     modeling_job_id: str | None = Field(default=None, min_length=1, max_length=128)
     ai_modeling_artifact_hash: str | None = Field(default=None, max_length=128)
+    # 旧版发布门用过的「已审核别名资源」。2026-09-16 撤门后不再读写，声明保留只为
+    # 读回存量版本（合同 extra=forbid）。
     ai_alias_reviewed_resources: tuple[str, ...] = Field(default=(), max_length=20_000)
     semantic_context_review_hash: str | None = Field(default=None, max_length=128)
     semantic_context_reviewed_by: str | None = Field(default=None, min_length=1, max_length=128)
@@ -319,13 +321,6 @@ class SemanticAliasDraft(SemanticAliasReview):
     """One editable alias suggestion included in an AI modeling Candidate."""
 
     resource_name: str = Field(default="", max_length=256)
-
-
-class AliasCompletion(FrozenModel):
-    """发布页就地补全：只为还没做过别名审核的资源生成的草稿。"""
-
-    revision_etag: int = Field(ge=1)
-    drafts: tuple[SemanticAliasDraft, ...] = Field(default=(), max_length=10_000)
 
 
 QUERY_SCOPE_COMPILER_VERSION = "knowflow-query-scope-v1"

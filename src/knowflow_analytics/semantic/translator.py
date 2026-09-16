@@ -257,9 +257,7 @@ class SemanticTranslator:
         # 砍掉另一个,实测「即时预订占比」恒等于 1.0:可执行、看着正常、是错的。
         mixed_filter_scopes = len(distinct_filter_sets) > 1
         common_metric_filters = (
-            ()
-            if mixed_filter_scopes
-            else (metric_filter_sets[0] if metric_filter_sets else ())
+            () if mixed_filter_scopes else (metric_filter_sets[0] if metric_filter_sets else ())
         )
 
         def render_metric_scope(filters: tuple[FixedFilter, ...]) -> str:
@@ -705,9 +703,7 @@ class _ReleaseIndexes:
             raise TranslationError(f"field model was not planned: {field_id}")
         return f"{_quote(alias)}.{_quote(field.column)}"
 
-    def metric_model_ids(
-        self, metric: MetricSpec, _seen: frozenset[str] = frozenset()
-    ) -> set[str]:
+    def metric_model_ids(self, metric: MetricSpec, _seen: frozenset[str] = frozenset()) -> set[str]:
         # 环保护:自引用公式在这里比在 _compile_formula 先炸栈。UI 作不出环
         # (来源列表排除自身),但伪造/导入的 release 不该把服务打成 RecursionError。
         # 中性返回会让空 model_ids 先撞上 EMPTY_ONTOLOGY_PROJECTION 这个误导性
@@ -723,9 +719,7 @@ class _ReleaseIndexes:
             return {metric.model_id}
         model_ids: set[str] = set()
         for dependency in _formula_references(metric.formula or ""):
-            model_ids.update(
-                self.metric_model_ids(self.metrics[dependency], _seen | {metric.id})
-            )
+            model_ids.update(self.metric_model_ids(self.metrics[dependency], _seen | {metric.id}))
         return model_ids
 
     def detail_metric_sql(self, metric: MetricSpec, aliases: dict[str, str]) -> str:
@@ -942,9 +936,7 @@ class _ReleaseIndexes:
                 resolve_column=lambda name: _aggregate_sql(
                     scoped(
                         raw_metric_expression,
-                        _deduplicate_fixed_filters(
-                            (*scope, *sources[name.casefold()].filters)
-                        ),
+                        _deduplicate_fixed_filters((*scope, *sources[name.casefold()].filters)),
                     ),
                     sources[name.casefold()].aggregation,
                 ),

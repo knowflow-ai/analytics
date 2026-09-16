@@ -53,8 +53,11 @@ class SheetPreview:
 
     @property
     def changes(self) -> tuple[str, ...]:
-        items = [f"{item.source_name or '(空表头)'} → {item.name}：{item.change}"
-                 for item in self.columns if item.renamed]
+        items = [
+            f"{item.source_name or '(空表头)'} → {item.name}：{item.change}"
+            for item in self.columns
+            if item.renamed
+        ]
         items.extend(f"{name}：整列为空，已忽略" for name in self.dropped_columns)
         return tuple(items)
 
@@ -135,6 +138,7 @@ def _infer_sql_type(values: list[object]) -> str:
         return "text"
     if all(isinstance(value, bool) for value in present):
         return "boolean"
+
     def _temporal(value: object) -> bool:
         return isinstance(value, (datetime, date)) and not isinstance(value, time)
 
@@ -159,9 +163,7 @@ def preview_sheet(data: bytes, sheet: str) -> SheetPreview:
         raise WorkbookError(f"「{sheet}」是空的。", code="SHEET_EMPTY")
     header, body = rows[0], rows[1:]
     if len(header) > MAX_COLUMNS:
-        raise WorkbookError(
-            f"这张表超过 {MAX_COLUMNS} 列。", code="SHEET_TOO_WIDE"
-        )
+        raise WorkbookError(f"这张表超过 {MAX_COLUMNS} 列。", code="SHEET_TOO_WIDE")
     if not body:
         raise WorkbookError(f"「{sheet}」只有表头，没有数据行。", code="SHEET_HAS_NO_ROWS")
 

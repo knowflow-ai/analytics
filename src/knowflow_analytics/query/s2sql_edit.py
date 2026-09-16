@@ -159,6 +159,7 @@ def replace_metric(s2sql: str, new_metric: str, *, is_metric: Callable[[str], bo
     _prune_order(tree, _refers_to_a_metric)
     return tree.sql(dialect=_DIALECT)
 
+
 def set_time_window(s2sql: str, column: str, start: str | None) -> str:
     """把时间维上的范围条件整体换成一个下界；``start=None`` 即「不限时间」。"""
 

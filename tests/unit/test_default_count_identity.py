@@ -8,17 +8,13 @@ from __future__ import annotations
 
 import json
 
-import pytest
 from test_m2_modeling import _catalog
 
 from knowflow_analytics.contracts import TermSpec
-from knowflow_analytics.errors import SemanticValidationError
 from knowflow_analytics.modeling.ai_artifacts import (
     ensure_default_count_metrics,
     reconcile_query_scopes,
-    validate_ai_modeling_completeness,
 )
-from knowflow_analytics.modeling.catalog_compiler import compile_semantic_catalog
 from knowflow_analytics.modeling.catalog_contracts import SemanticCatalog, SemanticContextEntry
 
 ORDERS_COUNT = "metric:default_count:model_orders"
@@ -50,26 +46,6 @@ def _with_orders_composite_primary(catalog: SemanticCatalog) -> SemanticCatalog:
     return SemanticCatalog.model_validate(
         catalog.model_copy(update={"models": tuple(models)}).model_dump(mode="python")
     )
-
-
-def _reviewed_resources(release, *, rewrite: dict[str, str] | None = None) -> tuple[str, ...]:
-    dimensions = {item.id: item for item in release.dimensions}
-    queryable_dimensions = {
-        item_id
-        for dataset in release.datasets
-        for item_id in dataset.dimension_ids
-        if dimensions[item_id].semantic_type != "identifier"
-    }
-    reviewed = [f"dimension:{item_id}" for item_id in queryable_dimensions]
-    reviewed += [
-        f"metric:{item_id}" for dataset in release.datasets for item_id in dataset.metric_ids
-    ]
-    reviewed += [
-        f"dimension_value:{item.id}"
-        for item in release.dimension_values
-        if item.dimension_id in queryable_dimensions
-    ]
-    return tuple((rewrite or {}).get(item, item) for item in reviewed)
 
 
 def test_default_count_metric_id_follows_the_model_not_the_identifier_column() -> None:
@@ -157,28 +133,3 @@ def test_legacy_default_count_id_is_migrated_together_with_every_reference() -> 
         item for item in migrated.analysis_topic_routes if item.root_model_id == "model_orders"
     )
     assert route.default_count_metric_id == ORDERS_COUNT
-
-
-def test_completeness_accepts_a_legacy_reviewed_default_count_id() -> None:
-    release = compile_semantic_catalog(reconcile_query_scopes(_catalog()))
-    reviewed = _reviewed_resources(
-        release, rewrite={f"metric:{ORDERS_COUNT}": f"metric:{LEGACY_ORDERS_COUNT}"}
-    )
-
-    validate_ai_modeling_completeness(release, alias_reviewed_resources=reviewed)
-
-
-def test_alias_review_gap_names_the_resources_in_business_terms() -> None:
-    release = compile_semantic_catalog(reconcile_query_scopes(_catalog()))
-    reviewed = tuple(
-        item for item in _reviewed_resources(release) if item != f"metric:{ORDERS_COUNT}"
-    )
-
-    with pytest.raises(SemanticValidationError) as raised:
-        validate_ai_modeling_completeness(release, alias_reviewed_resources=reviewed)
-
-    assert raised.value.code == "AI_MODELING_ALIAS_REVIEW_INCOMPLETE"
-    message = str(raised.value)
-    assert "订单数量" in message
-    assert "别名审核" in message
-    assert "metric:default_count" not in message

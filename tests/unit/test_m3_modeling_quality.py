@@ -177,3 +177,34 @@ def test_metric_sample_review_cannot_override_execution_failure(sales_release):
     assert reviewed.blocking_count == 1
     assert reviewed.metric_previews[0].status is QualityStatus.CONFIRMED
     assert reviewed.metric_previews[1].status is QualityStatus.BLOCKING
+
+
+def test_grain_blocker_names_the_primary_identifier_it_measured():
+    """现场：报「账户评分表主标识存在 0 条 NULL、41773 条重复记录」，建模者不知道
+    该改哪一列。主标识可能有多个候选，提示必须指名道姓。"""
+    import json
+    import time
+    from pathlib import Path
+
+    from knowflow_analytics.modeling.catalog_compiler import compile_semantic_catalog
+    from knowflow_analytics.modeling.catalog_contracts import SemanticCatalog
+
+    fixture = Path(__file__).parents[2] / "fixtures" / "modeling_contract_v1.json"
+    release = compile_semantic_catalog(
+        SemanticCatalog.model_validate(json.loads(fixture.read_text(encoding="utf-8")))
+    )
+    profiler = ModelingQualityProfiler(Mock(), Mock())
+    profiler._model_source = lambda model, release: ("SELECT 1", {})
+    profiler._execute_one = lambda query, parameters: (43697, 0, 1924)
+
+    profiles = profiler._profile_grains(release, started=time.monotonic())
+
+    fields = {item.id: item for item in release.fields}
+    measured = [row for row in profiles if row.identifier_field_ids]
+    assert measured, "夹具里至少有一个模型配置了主标识"
+    row = measured[0]
+    identifier = fields[row.identifier_field_ids[0]]
+    assert row.duplicate_rows == 43697 - 1924
+    assert identifier.name in row.message
+    assert identifier.column in row.message
+    assert "43697" in row.message

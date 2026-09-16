@@ -285,6 +285,11 @@ class ModelingQualityProfiler:
                 )
                 continue
             source_sql, parameters = self._model_source(model, release)
+            # 提示里指名道姓：建模者看到「主标识有 4 万条重复」时得知道该改哪一列
+            identifier_label = " + ".join(
+                f"{item.name}（{item.column}）" if item.name != item.column else item.column
+                for item in identifiers
+            )
             columns = [_quote_identifier(item.column) for item in identifiers]
             null_predicate = " OR ".join(f"{item} IS NULL" for item in columns)
             non_null_predicate = " AND ".join(f"{item} IS NOT NULL" for item in columns)
@@ -321,9 +326,11 @@ class ModelingQualityProfiler:
                     null_rate=null_rate,
                     status=QualityStatus.BLOCKING if blocking else QualityStatus.PASSED,
                     message=(
-                        f"主标识存在 {null_rows} 条 NULL、{duplicate_rows} 条重复记录。"
+                        f"主标识 {identifier_label} 存在 {null_rows} 条 NULL、"
+                        f"{duplicate_rows} 条重复记录（共 {total_rows} 行）。"
+                        "换一个在数据里唯一的列做主标识，或取消它的主标识角色。"
                         if blocking
-                        else "主标识在当前数据中非空且唯一。"
+                        else f"主标识 {identifier_label} 在当前数据中非空且唯一。"
                     ),
                 )
             )

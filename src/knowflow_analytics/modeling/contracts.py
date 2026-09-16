@@ -321,6 +321,13 @@ class SemanticAliasDraft(SemanticAliasReview):
     resource_name: str = Field(default="", max_length=256)
 
 
+class AliasCompletion(FrozenModel):
+    """发布页就地补全：只为还没做过别名审核的资源生成的草稿。"""
+
+    revision_etag: int = Field(ge=1)
+    drafts: tuple[SemanticAliasDraft, ...] = Field(default=(), max_length=10_000)
+
+
 QUERY_SCOPE_COMPILER_VERSION = "knowflow-query-scope-v1"
 
 

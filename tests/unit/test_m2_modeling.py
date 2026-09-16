@@ -65,7 +65,12 @@ class _EmbeddingGateway:
         )
 
 
-def _application_with_catalog(catalog: SemanticCatalog) -> AnalyticsApplication:
+def _application_with_catalog(
+    catalog: SemanticCatalog,
+    *,
+    ai_modeller=None,
+    dimension_alias_suggester=None,
+) -> AnalyticsApplication:
     store = CatalogStore(
         create_engine(
             "sqlite+pysqlite:///:memory:",
@@ -79,6 +84,8 @@ def _application_with_catalog(catalog: SemanticCatalog) -> AnalyticsApplication:
         introspector=object(),
         executor=object(),
         embedding_gateway=_EmbeddingGateway(),
+        ai_modeller=ai_modeller,
+        dimension_alias_suggester=dimension_alias_suggester,
         require_evaluation_for_publish=False,
     )
     application.create_project(project_id=catalog.project_id, name="销售分析")
@@ -288,9 +295,7 @@ def test_resource_delete_cascades_only_context_bound_to_deleted_targets(
         expected_impact_hash=impact.impact_hash,
     )
 
-    assert {item.id for item in updated.semantic_context} == {
-        retained_context.id
-    }
+    assert {item.id for item in updated.semantic_context} == {retained_context.id}
     assert any(
         item.action == "delete"
         and item.resource_kind.value == "semantic_context"
@@ -318,9 +323,9 @@ def test_removing_a_reviewed_context_subset_preserves_review_of_remaining_entrie
         source_type="human_convention",
     )
     catalog = SemanticCatalog.model_validate(
-        catalog.model_copy(
-            update={"semantic_context": (removed, retained)}
-        ).model_dump(mode="python")
+        catalog.model_copy(update={"semantic_context": (removed, retained)}).model_dump(
+            mode="python"
+        )
     )
     reviewed_at = datetime(2026, 8, 27, tzinfo=UTC)
     revision = ModelingRevision(
@@ -330,16 +335,12 @@ def test_removing_a_reviewed_context_subset_preserves_review_of_remaining_entrie
         etag=1,
         semantic_catalog=catalog,
         semantic_spec=compile_semantic_catalog(catalog),
-        semantic_context_review_hash=semantic_context_content_hash(
-            catalog.semantic_context
-        ),
+        semantic_context_review_hash=semantic_context_content_hash(catalog.semantic_context),
         semantic_context_reviewed_by="reviewer-1",
         semantic_context_reviewed_at=reviewed_at,
     )
     reduced_catalog = SemanticCatalog.model_validate(
-        catalog.model_copy(update={"semantic_context": (retained,)}).model_dump(
-            mode="python"
-        )
+        catalog.model_copy(update={"semantic_context": (retained,)}).model_dump(mode="python")
     )
 
     updated = RevisionEditor().replace_semantic_catalog(
@@ -349,17 +350,15 @@ def test_removing_a_reviewed_context_subset_preserves_review_of_remaining_entrie
         semantic_catalog=reduced_catalog,
     )
 
-    assert updated.semantic_context_review_hash == semantic_context_content_hash(
-        (retained,)
-    )
+    assert updated.semantic_context_review_hash == semantic_context_content_hash((retained,))
     assert updated.semantic_context_reviewed_by == "reviewer-1"
     assert updated.semantic_context_reviewed_at == reviewed_at
 
     changed_context = retained.model_copy(update={"text": "修改后的项目口径"})
     changed_catalog = SemanticCatalog.model_validate(
-        catalog.model_copy(
-            update={"semantic_context": (removed, changed_context)}
-        ).model_dump(mode="python")
+        catalog.model_copy(update={"semantic_context": (removed, changed_context)}).model_dump(
+            mode="python"
+        )
     )
     changed = RevisionEditor().replace_semantic_catalog(
         revision,
@@ -431,9 +430,7 @@ def test_authenticated_delete_api_requires_exact_preview_hash():
         source_type="human_convention",
     )
     catalog = SemanticCatalog.model_validate(
-        catalog.model_copy(
-            update={"semantic_context": (metric_context,)}
-        ).model_dump(mode="python")
+        catalog.model_copy(update={"semantic_context": (metric_context,)}).model_dump(mode="python")
     )
     application = _application_with_catalog(catalog)
     client = TestClient(
@@ -458,8 +455,7 @@ def test_authenticated_delete_api_requires_exact_preview_hash():
     assert preview.status_code == 200, preview.text
     impact = preview.json()
     assert any(
-        item["resource_kind"] == "semantic_context"
-        and item["resource_id"] == metric_context.id
+        item["resource_kind"] == "semantic_context" and item["resource_id"] == metric_context.id
         for item in impact["effects"]
     )
 
@@ -563,9 +559,9 @@ def test_relation_delete_reconciles_scopes_and_invalidated_query_rules_in_previe
         outputs=("dimension_order_time",),
     )
     catalog = SemanticCatalog.model_validate(
-        catalog.model_copy(
-            update={"query_rules": (invalidated_rule, retained_rule)}
-        ).model_dump(mode="python")
+        catalog.model_copy(update={"query_rules": (invalidated_rule, retained_rule)}).model_dump(
+            mode="python"
+        )
     )
     planner = CatalogDeletionPlanner()
 
@@ -593,9 +589,12 @@ def test_relation_delete_reconciles_scopes_and_invalidated_query_rules_in_previe
     assert {item.id for item in orders_scope.data_set_detail.data_set_model_configs} == {
         "model_orders"
     }
-    assert next(
-        item for item in updated.analysis_topic_routes if item.dataset_id == "dataset_sales"
-    ).paths == ()
+    assert (
+        next(
+            item for item in updated.analysis_topic_routes if item.dataset_id == "dataset_sales"
+        ).paths
+        == ()
+    )
     assert updated.query_rules == (retained_rule,)
     assert any(
         item.action == "unlink"
@@ -610,8 +609,7 @@ def test_relation_delete_reconciles_scopes_and_invalidated_query_rules_in_previe
         for item in impact.effects
     )
     assert not any(
-        item.resource_kind is ResourceKind.QUERY_RULE
-        and item.resource_id == retained_rule.id
+        item.resource_kind is ResourceKind.QUERY_RULE and item.resource_id == retained_rule.id
         for item in impact.effects
     )
 
@@ -657,9 +655,7 @@ def test_authenticated_relation_delete_returns_the_reconciled_query_rule_impact(
         outputs=("dimension_customer_name",),
     )
     catalog = SemanticCatalog.model_validate(
-        catalog.model_copy(update={"query_rules": (invalidated_rule,)}).model_dump(
-            mode="python"
-        )
+        catalog.model_copy(update={"query_rules": (invalidated_rule,)}).model_dump(mode="python")
     )
     application = _application_with_catalog(catalog)
     client = TestClient(
@@ -686,8 +682,7 @@ def test_authenticated_relation_delete_returns_the_reconciled_query_rule_impact(
     assert preview.status_code == 200, preview.text
     impact = preview.json()
     assert any(
-        item["resource_kind"] == "query_rule"
-        and item["resource_id"] == invalidated_rule.id
+        item["resource_kind"] == "query_rule" and item["resource_id"] == invalidated_rule.id
         for item in impact["effects"]
     )
     deleted = client.request(
@@ -780,9 +775,7 @@ def test_model_delete_retires_its_compiled_scope_in_the_reviewed_plan() -> None:
 
     _assert_scopes_are_fully_routed(updated)
     assert "dataset_sales" not in {item.id for item in updated.data_sets}
-    assert {item.root_model_id for item in updated.analysis_topic_routes} == {
-        "model_customers"
-    }
+    assert {item.root_model_id for item in updated.analysis_topic_routes} == {"model_customers"}
     assert any(
         item.action == "delete"
         and item.resource_kind is ResourceKind.DATASET
@@ -814,9 +807,7 @@ def test_deleting_the_last_business_metric_retires_a_root_without_a_primary_key(
                     orders_without_primary if item.id == orders.id else item
                     for item in catalog.models
                 ),
-                "metrics": tuple(
-                    item for item in catalog.metrics if item.id == "metric_revenue"
-                ),
+                "metrics": tuple(item for item in catalog.metrics if item.id == "metric_revenue"),
                 "data_sets": (),
                 "analysis_topic_routes": (),
             }

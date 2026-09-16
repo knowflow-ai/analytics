@@ -350,7 +350,7 @@ def test_primary_entities_retain_independent_count_scopes_when_reachable(sales_r
     """Reviewed QueryScope contract: reachability never removes an entity count root."""
 
     from knowflow_analytics.contracts import Aggregation, MetricSpec
-    from knowflow_analytics.modeling.rule_modeller import stable_id
+    from knowflow_analytics.modeling.analysis_topics import default_count_metric_id
 
     fields = tuple(
         item.model_copy(update={"identifier_type": "primary"})
@@ -358,7 +358,7 @@ def test_primary_entities_retain_independent_count_scopes_when_reachable(sales_r
         else item
         for item in sales_release.fields
     )
-    customer_count_id = stable_id("metric", "default_count", "customers", "customers.id")
+    customer_count_id = default_count_metric_id("customers")
     release = sales_release.model_copy(
         update={
             "fields": fields,

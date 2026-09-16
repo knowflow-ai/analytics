@@ -50,6 +50,8 @@ import { feedbackRows } from './ask-feedback-state';
 import { describeError, formatDateTime } from '@analytics/lib/labels';
 import type { WorkbenchContext } from './index';
 import { GoldenSuiteCard } from './golden-suite-card';
+import { AliasCompletionCard } from './alias-completion';
+import { ApiError } from '@analytics/api/client';
 import {
   autoPassedCount,
   publishChecks,
@@ -153,6 +155,11 @@ export function PublishPanel({
   });
 
   const [structureError, setStructureError] = useState<string | null>(null);
+  // 发布门的原话与错误码：别名审核没做完时发布页要就地给出补全入口。
+  const [structureFailure, setStructureFailure] = useState<{
+    code: string;
+    message: string;
+  } | null>(null);
   const [showPassed, setShowPassed] = useState(false);
   /** 待确认要切到哪一版；null 表示没有待确认的切换。 */
   const [switchingTo, setSwitchingTo] = useState<AnalyticsReleaseSummary | null>(null);
@@ -170,12 +177,16 @@ export function PublishPanel({
     mutationFn: () => validateRevision(projectId, revision.id),
     onSuccess: (next) => {
       setStructureError(null);
+      setStructureFailure(null);
       acceptRevision(next);
     },
     onError: (error) => {
       // 自动跑失败不弹 toast：进页面就甩一个红条，等于用报错代替了本来该好好显示的
       // 诊断列表。原因写进结构校验那一格。
       setStructureError(describeError(error));
+      setStructureFailure(
+        error instanceof ApiError ? { code: error.code, message: error.message } : null,
+      );
       diagnostics.refetch();
     },
   });
@@ -384,11 +395,25 @@ export function PublishPanel({
           </div>
 
           {/* 自动校验失败时原因不能只剩一个「未通过」——那等于把错误咽掉了。 */}
-          {structureError && (
-            <div className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
-              结构校验没通过：{structureError}
-            </div>
-          )}
+          {structureError &&
+            (structureFailure?.code === 'AI_MODELING_ALIAS_REVIEW_INCOMPLETE' && !readOnly ? (
+              <AliasCompletionCard
+                projectId={projectId}
+                revision={revision}
+                message={structureFailure.message}
+                onApplied={(next) => {
+                  acceptRevision(next);
+                  setStructureError(null);
+                  setStructureFailure(null);
+                  validate.mutate();
+                }}
+                onRevalidate={() => validate.mutate()}
+              />
+            ) : (
+              <div className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                结构校验没通过：{structureError}
+              </div>
+            ))}
         </div>
 
         {/* 二、只有人能拍板的 */}

@@ -40,6 +40,7 @@ from knowflow_analytics.modeling.catalog_contracts import (
     SqlVariableContract,
 )
 from knowflow_analytics.modeling.contracts import (
+    AliasCompletion,
     DimensionDictionaryPolicy,
     DimensionValueDecision,
     ModelingRunSource,
@@ -583,6 +584,15 @@ class SuggestAliasesRequest(_RequestModel):
     biz_name: str = Field(min_length=1, max_length=256)
     description: str = Field(default="", max_length=4_000)
     existing_aliases: tuple[str, ...] = Field(default=(), max_length=100)
+
+
+class SuggestAliasCompletionRequest(_RequestModel):
+    expected_etag: int = Field(ge=1)
+
+
+class ApplyAliasCompletionRequest(_RequestModel):
+    expected_etag: int = Field(ge=1)
+    drafts: tuple[SemanticAliasReview, ...] = Field(max_length=10_000)
 
 
 class SaveModelingProposalRequest(_RequestModel):
@@ -1881,6 +1891,42 @@ def create_api(
             # RAGFlow tenant ids are user ids, so the signed-in actor is the
             # tenant whose model configuration must serve this request.
             tenant_id=request_context.actor_id,
+        )
+
+    @app.post(
+        "/v1/analytics/projects/{project_id}/revisions/{revision_id}/alias-completion:suggest",
+        response_model=AliasCompletion,
+    )
+    def suggest_alias_completion(
+        project_id: str,
+        revision_id: str,
+        payload: SuggestAliasCompletionRequest,
+        request_context: Context,
+    ):
+        """发布页就地补全：只为还没做过别名审核的资源生成草稿。"""
+        require_project(project_id, request_context)
+        owned_revision(project_id, revision_id)
+        expensive(request_context)
+        return application.suggest_alias_completion(
+            revision_id=revision_id,
+            expected_etag=payload.expected_etag,
+            tenant_id=request_context.actor_id,
+        )
+
+    @app.post("/v1/analytics/projects/{project_id}/revisions/{revision_id}/alias-completion:apply")
+    def apply_alias_completion(
+        project_id: str,
+        revision_id: str,
+        payload: ApplyAliasCompletionRequest,
+        request_context: Context,
+    ):
+        """采用审过的补全草稿，并把这些资源记进别名审核记录。"""
+        require_project(project_id, request_context)
+        owned_revision(project_id, revision_id)
+        return application.apply_alias_completion(
+            revision_id=revision_id,
+            expected_etag=payload.expected_etag,
+            drafts=payload.drafts,
         )
 
     @app.post("/v1/analytics/projects/{project_id}/revisions/{revision_id}/modeling-jobs")

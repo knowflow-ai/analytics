@@ -35,6 +35,8 @@ from knowflow_analytics.modeling.analysis_topics import (
     AnalysisTopicProposal,
     AnalysisTopicProposer,
     _canonical_name,
+    canonical_default_count_metric_id,
+    default_count_metric_id,
     entity_name_dimension_name,
     scope_canonical_names,
     validate_analysis_topic_route,
@@ -306,11 +308,32 @@ class OneClickModelingArtifactService:
             validate_analysis_topic_route(release, route)
         return updated
 
+    def suggest_alias_drafts_for(
+        self,
+        revision: ModelingRevision,
+        *,
+        resources: Iterable[tuple[str, str]],
+        tenant_id: str = "",
+    ) -> tuple[SemanticAliasDraft, ...]:
+        """只为指定的几项生成别名草稿，其它资源不进模型。
+
+        发布页就地补全用：门指名了哪几项没审核，就只问这几项。
+        """
+
+        only = frozenset(resources)
+        if not only:
+            return ()
+        drafts = list(self._suggest_aliases(revision, tenant_id=tenant_id, only=only))
+        if any(resource_type == "dimension_value" for resource_type, _ in only):
+            drafts.extend(self._suggest_value_aliases(revision, tenant_id=tenant_id, only=only))
+        return tuple(drafts)
+
     def _suggest_aliases(
         self,
         revision: ModelingRevision,
         *,
         tenant_id: str = "",
+        only: frozenset[tuple[str, str]] | None = None,
     ) -> tuple[SemanticAliasDraft, ...]:
         if self._ai_modeller is None:
             raise SemanticValidationError(
@@ -336,6 +359,12 @@ class OneClickModelingArtifactService:
                 key=lambda value: (value[0], value[1].id),
             )
         )
+        if only is not None:
+            resources = tuple(
+                (resource_type, item)
+                for resource_type, item in resources
+                if (resource_type, item.id) in only
+            )
 
         # Aliases depend only on a resource's own metadata, so one request per
         # metric and per dimension turns a realistic schema into hundreds of model
@@ -415,8 +444,11 @@ class OneClickModelingArtifactService:
         revision: ModelingRevision,
         *,
         tenant_id: str = "",
+        only: frozenset[tuple[str, str]] | None = None,
     ) -> tuple[SemanticAliasDraft, ...]:
         values = self._catalog(revision).dimension_values
+        if only is not None:
+            values = tuple(item for item in values if ("dimension_value", item.id) in only)
         if not values:
             return ()
         if self._dimension_alias_suggester is None:
@@ -510,22 +542,28 @@ def ensure_default_count_metrics(
         if field.kind is FieldKind.IDENTIFIER and field.identifier_type == "primary":
             primary_by_model.setdefault(field.model_id, []).append(field)
 
-    desired_default_ids = {
-        _stable_id(
-            "metric",
-            "default_count",
-            model_id,
-            sorted(fields, key=lambda item: item.id)[0].id,
-        )
-        for model_id, fields in primary_by_model.items()
+    desired_by_model = {
+        model_id: default_count_metric_id(model_id) for model_id in primary_by_model
     }
-    compiler_owned_ids = {
-        item.id
-        for item in catalog.metrics
-        if isinstance(item.ext.get("knowflow"), dict)
-        and item.ext["knowflow"].get("role") == "default_count"
-    }
-    stale_default_ids = compiler_owned_ids - desired_default_ids
+    owned_by_model: dict[str, list[MetricContract]] = defaultdict(list)
+    for item in catalog.metrics:
+        if _is_default_count_metric(item):
+            owned_by_model[item.model_id].append(item)
+    # 按模型认领：同一模型只留一个默认计数。ID 不对的（旧格式带列名、或早先按
+    # 别的主标识派生的）改名到只跟模型走的 ID，名字、别名、描述、上下文全部跟着走；
+    # 模型没有主标识了才算失效。
+    renamed_default_ids: dict[str, str] = {}
+    stale_default_ids: set[str] = set()
+    for model_id, owned in owned_by_model.items():
+        wanted = desired_by_model.get(model_id)
+        if wanted is None:
+            stale_default_ids.update(item.id for item in owned)
+            continue
+        kept = next((item for item in owned if item.id == wanted), None)
+        if kept is None:
+            kept = sorted(owned, key=lambda item: item.id)[0]
+            renamed_default_ids[kept.id] = wanted
+        stale_default_ids.update(item.id for item in owned if item is not kept)
     if stale_default_ids:
         for metric in catalog.metrics:
             params = metric.metric_define_by_metric_params
@@ -593,12 +631,15 @@ def ensure_default_count_metrics(
             ).model_dump(mode="python")
         )
 
+    if renamed_default_ids:
+        catalog = _remap_metric_ids(catalog, renamed_default_ids)
+
     existing = {item.id: item for item in catalog.metrics}
     updated = catalog
     default_metrics: list[MetricContract] = []
     for model_id in sorted(primary_by_model):
         primary = sorted(primary_by_model[model_id], key=lambda item: item.id)[0]
-        metric_id = _stable_id("metric", "default_count", model_id, primary.id)
+        metric_id = desired_by_model[model_id]
         model = models[model_id]
         physical = fields_by_id[primary.id]
         canonical = MetricContract(
@@ -621,12 +662,14 @@ def ensure_default_count_metrics(
             },
         )
         if metric_id in existing:
-            metric = existing[metric_id]
-            _validate_existing_default_count(
-                metric,
+            metric = _rederive_default_count(
+                existing[metric_id],
                 canonical=canonical,
                 primary_field_id=primary.id,
             )
+            if metric is not existing[metric_id]:
+                updated = replace_catalog_item(updated, collection="metrics", item=metric)
+                existing[metric_id] = metric
             default_metrics.append(metric)
             continue
         metric = canonical
@@ -1160,6 +1203,115 @@ def qualify_cross_model_metric_aliases(
     )
 
 
+def _is_default_count_metric(metric: MetricContract) -> bool:
+    metadata = metric.ext.get("knowflow") if isinstance(metric.ext, dict) else None
+    return isinstance(metadata, dict) and metadata.get("role") == "default_count"
+
+
+def _remap_metric_ids(catalog: SemanticCatalog, mapping: dict[str, str]) -> SemanticCatalog:
+    """把指标改名到新 ID，并改掉目录里每一处对它的引用。"""
+
+    def one(metric_id: str) -> str:
+        return mapping.get(metric_id, metric_id)
+
+    metrics = []
+    for item in catalog.metrics:
+        params = item.metric_define_by_metric_params
+        if params is not None and any(dep.id in mapping for dep in params.metrics):
+            params = params.model_copy(
+                update={
+                    "metrics": tuple(
+                        dep.model_copy(update={"id": one(dep.id)}) for dep in params.metrics
+                    )
+                }
+            )
+            item = item.model_copy(update={"metric_define_by_metric_params": params})
+        if item.id in mapping:
+            item = item.model_copy(update={"id": one(item.id)})
+        metrics.append(item)
+    data_sets = tuple(
+        item.model_copy(
+            update={
+                "data_set_detail": item.data_set_detail.model_copy(
+                    update={
+                        "data_set_model_configs": tuple(
+                            config.model_copy(
+                                update={"metrics": tuple(one(m) for m in config.metrics)}
+                            )
+                            for config in item.data_set_detail.data_set_model_configs
+                        )
+                    }
+                )
+            }
+        )
+        for item in catalog.data_sets
+    )
+    terms = tuple(
+        item.model_copy(update={"metric_ids": tuple(one(m) for m in item.metric_ids)})
+        for item in catalog.terms
+    )
+    semantic_context = tuple(
+        item.model_copy(update={"target_id": one(item.target_id)})
+        if item.target_type == "metric"
+        else item
+        for item in catalog.semantic_context
+    )
+    routes = tuple(
+        item.model_copy(update={"default_count_metric_id": one(item.default_count_metric_id)})
+        if item.default_count_metric_id is not None
+        else item
+        for item in catalog.analysis_topic_routes
+    )
+    query_rules = tuple(
+        item.model_copy(
+            update={
+                "parameters": tuple(
+                    one(value) if isinstance(value, str) else value for value in item.parameters
+                ),
+                "outputs": tuple(one(value) for value in item.outputs),
+            }
+        )
+        for item in catalog.query_rules
+    )
+    return SemanticCatalog.model_validate(
+        catalog.model_copy(
+            update={
+                "metrics": tuple(metrics),
+                "data_sets": data_sets,
+                "terms": terms,
+                "semantic_context": semantic_context,
+                "analysis_topic_routes": routes,
+                "query_rules": query_rules,
+            }
+        ).model_dump(mode="python")
+    )
+
+
+def _rederive_default_count(
+    metric: MetricContract,
+    *,
+    canonical: MetricContract,
+    primary_field_id: str,
+) -> MetricContract:
+    """主标识换了列就按新列重派生表达式，名字、别名、描述这些审过的东西不动。
+
+    列没换则沿用原来的冲突校验：编译器保留的指标不许被改成别的东西。
+    """
+
+    metadata = metric.ext.get("knowflow") if isinstance(metric.ext, dict) else None
+    if isinstance(metadata, dict) and metadata.get("sourceFieldId") != primary_field_id:
+        return metric.model_copy(
+            update={
+                "model_id": canonical.model_id,
+                "metric_define_type": canonical.metric_define_type,
+                "metric_define_by_field_params": canonical.metric_define_by_field_params,
+                "ext": {**metric.ext, "knowflow": {**metadata, "sourceFieldId": primary_field_id}},
+            }
+        )
+    _validate_existing_default_count(metric, canonical=canonical, primary_field_id=primary_field_id)
+    return metric
+
+
 def _validate_existing_default_count(
     metric: MetricContract,
     *,
@@ -1247,6 +1399,75 @@ def apply_semantic_alias_drafts(
     return SemanticCatalog.model_validate(updated.model_dump(mode="python"))
 
 
+def missing_alias_reviews(
+    release: SemanticRelease,
+    *,
+    alias_drafts: Iterable[SemanticAliasDraft] | None = None,
+    alias_reviewed_resources: Iterable[str] | None = None,
+) -> list[tuple[str, str]]:
+    """可问的维度、指标、取值里，还没做过别名审核的那些（发布门和就地补全共用）。"""
+
+    reviewed = (
+        {(item.resource_type, item.resource_id) for item in alias_drafts}
+        if alias_drafts is not None
+        else {
+            _reviewed_resource_key(item) for item in alias_reviewed_resources or () if ":" in item
+        }
+    )
+    dimensions = {item.id: item for item in release.dimensions}
+    queryable_dimensions = {
+        ("dimension", item_id)
+        for dataset in release.datasets
+        for item_id in dataset.dimension_ids
+        if dimensions[item_id].semantic_type != "identifier"
+    }
+    queryable_metrics = {
+        ("metric", item_id) for dataset in release.datasets for item_id in dataset.metric_ids
+    }
+    queryable_values = {
+        ("dimension_value", item.id)
+        for item in release.dimension_values
+        if ("dimension", item.dimension_id) in queryable_dimensions
+    }
+    return sorted((queryable_dimensions | queryable_metrics | queryable_values) - reviewed)
+
+
+def _reviewed_resource_key(item: str) -> tuple[str, str]:
+    """审核记录 ``类型:ID`` → (类型, ID)；旧格式的默认计数 ID 归一到新 ID。"""
+
+    resource_type, _, resource_id = item.partition(":")
+    if resource_type == "metric":
+        resource_id = canonical_default_count_metric_id(resource_id)
+    return resource_type, resource_id
+
+
+def _describe_alias_review_gap(
+    release: SemanticRelease,
+    missing: list[tuple[str, str]],
+    *,
+    limit: int = 6,
+) -> str:
+    dimensions = {item.id: item for item in release.dimensions}
+    metrics = {item.id: item for item in release.metrics}
+    values = {item.id: item for item in release.dimension_values}
+    labels = []
+    for resource_type, resource_id in missing[:limit]:
+        if resource_type == "dimension" and resource_id in dimensions:
+            labels.append(f"维度「{dimensions[resource_id].name}」")
+        elif resource_type == "metric" and resource_id in metrics:
+            labels.append(f"指标「{metrics[resource_id].name}」")
+        elif resource_type == "dimension_value" and resource_id in values:
+            value = values[resource_id]
+            dimension = dimensions.get(value.dimension_id)
+            owner = f"{dimension.name}=" if dimension is not None else ""
+            labels.append(f"取值「{owner}{value.display_name}」")
+        else:
+            labels.append(resource_id)
+    if len(missing) > limit:
+        labels.append(f"等 {len(missing)} 项")
+    return "、".join(labels)
+
+
 def validate_ai_modeling_completeness(
     release: SemanticRelease,
     *,
@@ -1287,8 +1508,7 @@ def validate_ai_modeling_completeness(
         if field.kind is FieldKind.IDENTIFIER and field.identifier_type == "primary":
             primary_fields_by_model.setdefault(field.model_id, field)
     generated_count_ids = {
-        _stable_id("metric", "default_count", model_id, primary.id)
-        for model_id, primary in primary_fields_by_model.items()
+        default_count_metric_id(model_id) for model_id in primary_fields_by_model
     }
     business_metric_ids = {
         item.id for item in release.metrics if item.id not in generated_count_ids
@@ -1310,36 +1530,16 @@ def validate_ai_modeling_completeness(
 
     if alias_drafts is None and alias_reviewed_resources is None:
         return
-    reviewed = (
-        {(item.resource_type, item.resource_id) for item in alias_drafts}
-        if alias_drafts is not None
-        else {
-            tuple(item.split(":", maxsplit=1))
-            for item in alias_reviewed_resources or ()
-            if ":" in item
-        }
-    )
-    dimensions = {item.id: item for item in release.dimensions}
-    queryable_dimensions = {
-        ("dimension", item_id)
-        for dataset in release.datasets
-        for item_id in dataset.dimension_ids
-        if dimensions[item_id].semantic_type != "identifier"
-    }
-    queryable_metrics = {
-        ("metric", item_id) for dataset in release.datasets for item_id in dataset.metric_ids
-    }
-    queryable_values = {
-        ("dimension_value", item.id)
-        for item in release.dimension_values
-        if ("dimension", item.dimension_id) in queryable_dimensions
-    }
-    missing_alias_review = sorted(
-        (queryable_dimensions | queryable_metrics | queryable_values) - reviewed
+    missing_alias_review = missing_alias_reviews(
+        release,
+        alias_drafts=alias_drafts,
+        alias_reviewed_resources=alias_reviewed_resources,
     )
     if missing_alias_review:
         raise SemanticValidationError(
-            f"queryable resources have no reviewed alias draft: {missing_alias_review[:5]}",
+            f"有 {len(missing_alias_review)} 个可问的资源改动后还没做过别名审核："
+            f"{_describe_alias_review_gap(release, missing_alias_review)}。"
+            "在发布页点「补全缺失的别名」生成别名草稿并采用。",
             code="AI_MODELING_ALIAS_REVIEW_INCOMPLETE",
         )
 

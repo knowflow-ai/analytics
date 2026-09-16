@@ -26,6 +26,36 @@ from knowflow_analytics.contracts import (
 from knowflow_analytics.errors import SemanticValidationError
 from knowflow_analytics.modeling.rule_modeller import stable_id
 
+_DEFAULT_COUNT_PREFIX = "metric:default_count:"
+_LEGACY_DEFAULT_COUNT_MARKER = ":field:"
+
+
+def default_count_metric_id(model_id: str) -> str:
+    """默认计数指标的 ID 只跟模型走。
+
+    2026-09-16 现场：ID 里带着主标识列名，建模者换一次主标识它就换一个 ID，
+    已审核的别名、名字、上下文全部作废，发布被「没做别名审核」拦下。行数是
+    模型的属性，不是某一列的属性。
+    """
+
+    return stable_id("metric", "default_count", model_id)
+
+
+def canonical_default_count_metric_id(metric_id: str) -> str:
+    """把旧格式 ``metric:default_count:<模型>:field:<列>`` 归一到只跟模型走的 ID。
+
+    模型 ID 自己可能含冒号（``model:schema:table``），按第一个 ``:field:`` 切。
+    不是旧格式的原样返回。
+    """
+
+    if not metric_id.startswith(_DEFAULT_COUNT_PREFIX):
+        return metric_id
+    rest = metric_id[len(_DEFAULT_COUNT_PREFIX) :]
+    model_id, marker, _column = rest.partition(_LEGACY_DEFAULT_COUNT_MARKER)
+    if not marker or not model_id:
+        return metric_id
+    return default_count_metric_id(model_id)
+
 
 class AnalysisTopicExclusion(FrozenModel):
     element_id: str = Field(min_length=1, max_length=128)
@@ -402,8 +432,7 @@ class AnalysisTopicProposer:
             if field.kind is FieldKind.IDENTIFIER and field.identifier_type == "primary":
                 primary_fields_by_model.setdefault(field.model_id, field)
         generated_count_ids = {
-            model_id: stable_id("metric", "default_count", model_id, primary.id)
-            for model_id, primary in primary_fields_by_model.items()
+            model_id: default_count_metric_id(model_id) for model_id in primary_fields_by_model
         }
         business_metric_models = {
             metric.model_id
@@ -444,7 +473,7 @@ class AnalysisTopicProposer:
             exclusions.sort(key=lambda item: (item.reason_code, item.element_id))
             root_model = models[root_model_id]
             generated_count_metric_id = generated_count_ids.get(root_model_id)
-            default_count_metric_id = (
+            route_default_count_id = (
                 generated_count_metric_id
                 if generated_count_metric_id is not None and generated_count_metric_id in metric_ids
                 else None
@@ -509,7 +538,7 @@ class AnalysisTopicProposer:
             route = AnalysisTopicRouteSpec(
                 dataset_id=dataset_id,
                 root_model_id=root_model_id,
-                default_count_metric_id=default_count_metric_id,
+                default_count_metric_id=route_default_count_id,
                 paths=tuple(
                     AnalysisTopicPathSpec(
                         target_model_id=target_model_id,

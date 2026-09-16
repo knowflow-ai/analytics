@@ -60,6 +60,8 @@ from knowflow_analytics.ingest.uploads import (
 from knowflow_analytics.ingest.workbook import WorkbookError
 from knowflow_analytics.modeling.ai_artifacts import (
     OneClickModelingArtifactService,
+    apply_semantic_alias_drafts,
+    missing_alias_reviews,
     reconcile_query_scopes,
 )
 from knowflow_analytics.modeling.ai_modeller import (
@@ -100,6 +102,7 @@ from knowflow_analytics.modeling.catalog_contracts import (
 from knowflow_analytics.modeling.catalog_editor import upsert_model_aggregate
 from knowflow_analytics.modeling.contracts import (
     AiModelingArtifact,
+    AliasCompletion,
     DimensionDictionaryApplyResult,
     DimensionDictionaryEligibilityStatus,
     DimensionDictionaryPolicy,
@@ -1520,6 +1523,63 @@ class AnalyticsApplication:
         if persist:
             self.catalog.save_modeling_run(run)
         return run
+
+    def suggest_alias_completion(
+        self,
+        *,
+        revision_id: str,
+        expected_etag: int,
+        tenant_id: str = "",
+    ) -> AliasCompletion:
+        """发布页就地补全第一步：只为还没做过别名审核的资源生成草稿，不写版本。"""
+
+        revision = self.catalog.get_revision(revision_id)
+        if revision.etag != expected_etag:
+            raise RevisionConflictError("revision etag changed; reload before completing aliases")
+        self._require_semantic_catalog(revision)
+        missing = missing_alias_reviews(
+            revision.semantic_spec,
+            alias_reviewed_resources=revision.ai_alias_reviewed_resources,
+        )
+        if not missing:
+            return AliasCompletion(revision_etag=revision.etag, drafts=())
+        drafts = self._ai_artifact_service.suggest_alias_drafts_for(
+            revision,
+            resources=missing,
+            tenant_id=tenant_id,
+        )
+        return AliasCompletion(revision_etag=revision.etag, drafts=drafts)
+
+    def apply_alias_completion(
+        self,
+        *,
+        revision_id: str,
+        expected_etag: int,
+        drafts: tuple[SemanticAliasReview, ...],
+    ) -> ModelingRevision:
+        """发布页就地补全第二步：采用审过的草稿，并把这些资源记进别名审核记录。
+
+        审核记录只增不减：整包 AI 补全写过的仍然算数。
+        """
+
+        revision = self.catalog.get_revision(revision_id)
+        if revision.etag != expected_etag:
+            raise RevisionConflictError("revision etag changed; reload before applying aliases")
+        catalog = apply_semantic_alias_drafts(self._require_semantic_catalog(revision), drafts)
+        updated = self._revision_editor.replace_semantic_catalog(
+            revision,
+            expected_etag=expected_etag,
+            expected_schema_snapshot_hash=revision.schema_snapshot_hash,
+            semantic_catalog=reconcile_query_scopes(catalog),
+        )
+        reviewed = set(revision.ai_alias_reviewed_resources) | {
+            f"{item.resource_type}:{item.resource_id}" for item in drafts
+        }
+        updated = updated.model_copy(
+            update={"ai_alias_reviewed_resources": tuple(sorted(reviewed))}
+        )
+        self.catalog.update_revision(updated, previous_etag=revision.etag)
+        return updated
 
     def suggest_resource_aliases(
         self,

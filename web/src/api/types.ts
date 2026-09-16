@@ -597,6 +597,11 @@ export interface AnalyticsSemanticAliasReview {
   display_name?: string | null;
 }
 
+export interface AnalyticsAliasCompletion {
+  revision_etag: number;
+  drafts: Array<AnalyticsSemanticAliasReview & { resource_name: string }>;
+}
+
 export interface AnalyticsModelingProposal {
   id: string;
   project_id: string;

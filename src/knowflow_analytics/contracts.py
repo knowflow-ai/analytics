@@ -989,6 +989,9 @@ class OutputColumn(FrozenModel):
     # ratio 是期间比/占比这类比率列：值域与普通聚合不同（可负、可超 100%），
     # 下游据此决定百分比展示，不能与 calculation 混为一谈。
     kind: Literal["metric", "dimension", "calculation", "ratio"]
+    # 比率列是哪一种：share 是 0..1 的占比（按百分比展示），delta 是期间比增长率
+    # （带符号百分比）。两者值域不同，下游不能只凭 kind 判断怎么显示。
+    ratio_form: Literal["share", "delta"] | None = None
     # DATE_TRUNC 派生时间列的粒度。结果值是 timestamptz，按年分组也会带出
     # 「2026-01-01T00:00:00+08:00」，展示时应收敛到该粒度。
     time_grain: Literal["DAY", "WEEK", "MONTH", "QUARTER", "YEAR"] | None = None

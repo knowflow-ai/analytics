@@ -1971,7 +1971,8 @@ def _output_columns(statement: _QueryStatement) -> tuple[OutputColumn, ...]:
     single_counts = Counter(items[0] for items in semantic_ids_by_projection if len(items) == 1)
     # 比率投影的位置由解析阶段确定：同一查询里 SUM(指标) 与 RATIO_OVER(指标)
     # 引用同一个指标，只看表达式区分不出哪列是比率。
-    ratio_indexes = {call.projection_index for call in statement.ratio_calls}
+    ratio_calls_by_index = {call.projection_index: call for call in statement.ratio_calls}
+    ratio_indexes = set(ratio_calls_by_index)
     results: list[OutputColumn] = []
     used_ids: set[str] = set()
     for index, projection in enumerate(translated_select.expressions):
@@ -2000,8 +2001,15 @@ def _output_columns(statement: _QueryStatement) -> tuple[OutputColumn, ...]:
                 and all(pair[0] == "dimension" for pair in semantic_ids)
                 and original_projection.find(exp.AggFunc) is None
             )
+            ratio_form: str | None = None
             if index in ratio_indexes:
                 kind_value = "ratio"
+                operator = ratio_calls_by_index[index].operator.upper()
+                ratio_form = "share" if operator == "RATIO_TO_TOTAL" else "delta"
+            elif _share_shaped(original_projection):
+                # 模型现算的条件占比（受治理函数表达不了这种形状）。
+                kind_value = "ratio"
+                ratio_form = "share"
             elif derived_dimension:
                 kind_value = "dimension"
             else:
@@ -2029,6 +2037,7 @@ def _output_columns(statement: _QueryStatement) -> tuple[OutputColumn, ...]:
                         ),
                     ),
                     kind=kind_value,
+                    ratio_form=ratio_form,
                     time_grain=(
                         _projection_time_grain(original_projection) if derived_dimension else None
                     ),
@@ -2039,6 +2048,60 @@ def _output_columns(statement: _QueryStatement) -> tuple[OutputColumn, ...]:
 
 
 _RATIO_COLUMN_SUFFIX = {"RATIO_ROLL": "环比", "RATIO_OVER": "同比", "RATIO_TO_TOTAL": "占比"}
+
+
+def _unwrap(node: exp.Expression) -> exp.Expression:
+    while isinstance(node, exp.Paren):
+        node = node.this
+    return node
+
+
+def _zero_one_case(node: exp.Expression) -> bool:
+    """只返回数字常量的 CASE。外面套 SUM 之后它就是一个计数。"""
+
+    if not isinstance(node, exp.Case):
+        return False
+    results = [item.args.get("true") for item in node.args.get("ifs") or ()]
+    default = node.args.get("default")
+    if default is not None:
+        results.append(default)
+    return bool(results) and all(
+        isinstance(item, exp.Literal) and item.is_number for item in results
+    )
+
+
+def _counting_aggregate(node: exp.Expression) -> bool:
+    node = _unwrap(node)
+    # 允许乘一个常数：模型常写 COUNT(...) * 1.0 来避开整除。
+    while isinstance(node, exp.Mul):
+        left, right = _unwrap(node.this), _unwrap(node.expression)
+        if isinstance(right, exp.Literal) and right.is_number:
+            node = left
+        elif isinstance(left, exp.Literal) and left.is_number:
+            node = right
+        else:
+            return False
+        node = _unwrap(node)
+    if isinstance(node, exp.Count):
+        return True
+    if isinstance(node, exp.Sum):
+        return _zero_one_case(_unwrap(node.this))
+    return False
+
+
+def _share_shaped(projection: exp.Expression) -> bool:
+    """两个计数聚合相除 = 行的占比，取值必落在 0..1。
+
+    值域由表达式形状本身保证，不读问句也不猜列名。受治理的 RATIO_TO_TOTAL 表达不了
+    「满足某个指标条件的实体占比」，模型只能现算，此前这类列按普通数字显示成 0.21。
+    SUM(金额)/COUNT(订单) 这种每单均值不命中：分子不是计数。
+    """
+
+    node = projection.this if isinstance(projection, exp.Alias) else projection
+    node = _unwrap(node)
+    if not isinstance(node, exp.Div):
+        return False
+    return _counting_aggregate(node.this) and _counting_aggregate(node.expression)
 
 
 def _derived_column_name(

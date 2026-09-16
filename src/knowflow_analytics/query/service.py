@@ -4040,7 +4040,9 @@ class AnalyticsQueryService:
         # 是权威文本，出现即语义成立。
         upper = s2sql.upper()
         is_period_ratio = "RATIO_OVER(" in upper or "RATIO_ROLL(" in upper
-        is_share = "RATIO_TO_TOTAL(" in upper
+        is_share = "RATIO_TO_TOTAL(" in upper or any(
+            item.ratio_form == "share" for item in output_columns
+        )
         # QueryType.DETAIL represents field selection rather than an
         # aggregate chart query (common/.../pojo/enums/QueryType.java).
         if query.query_type.value == "detail":
@@ -4106,8 +4108,14 @@ class AnalyticsQueryService:
             y_units = [units.get(item.element_id) for item in value_columns]
             # 只有比率列按百分比展示。与它并列的 SUM(指标) 也是 calculation，
             # 若一并标成 delta，380 会显示成 +38000%。
+            # 逐列形态优先：同一个查询里可以既有期间比又有占比，只看查询级的
+            # RATIO_* 文本会把两者标成同一种。
             y_formats = [
-                "delta"
+                "percent"
+                if item.ratio_form == "share"
+                else "delta"
+                if item.ratio_form == "delta"
+                else "delta"
                 if item.kind == "ratio" and is_period_ratio
                 else "percent"
                 if item.kind == "ratio" and is_share

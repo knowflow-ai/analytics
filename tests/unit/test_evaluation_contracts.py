@@ -1115,3 +1115,31 @@ def test_relaxed_order_does_not_relax_row_content() -> None:
     assert not result.passed
     assert result.failure_stage == "result"
     assert "999" in result.message
+
+
+def test_calculated_answers_align_by_position_when_the_projection_is_wider_than_the_output():
+    """现场：「余额大于 2000 的账户占比」是 WITH 按账户聚合再算比例，语义投影里有指标和分组
+    维度两个成员，输出却只有一列合成表达式。按 id 对齐必然对不上，之前直接判「无法对齐」。
+    输出列全是合成名而宽度与期望行一致时，按位置比。"""
+
+    from knowflow_analytics.evaluation.evaluator import _align_rows
+
+    aligned = _align_rows(
+        actual_columns=("expression:0",),
+        actual_rows=((0.2155,),),
+        expected_columns=("dimension:acct", "metric:balance"),
+        expected_width=1,
+    )
+
+    assert aligned == ((0.2155,),)
+
+    # 宽度也对不上才是真的对不上
+    assert (
+        _align_rows(
+            actual_columns=("expression:0", "expression:1"),
+            actual_rows=((0.2155, 1),),
+            expected_columns=("metric:balance",),
+            expected_width=1,
+        )
+        is None
+    )

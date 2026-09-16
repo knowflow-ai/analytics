@@ -959,3 +959,15 @@ def test_s2sql_prompt_teaches_the_conditional_share_shape(sales_release) -> None
     assert "满足某个指标条件的实体占比" in system_prompt
     assert "COUNT(CASE WHEN" in system_prompt
     assert "RATIO_TO_TOTAL 不能表达" in system_prompt
+
+
+def test_s2sql_prompt_requires_an_alias_for_calculated_columns(sales_release) -> None:
+    """占比这类计算列没有别名时表头只剩「计算列1」，评测也认不出它。"""
+
+    gateway = _CapturingGateway({"thought": "占比", "sql": 'SELECT SUM("净收入") FROM "销售经营"'})
+
+    LlmS2SqlParser(gateway).parse(
+        question="净收入", release=sales_release, mapping=_all_mapping(), query_id="alias-rule"
+    )
+
+    assert "计算列必须用 AS" in gateway.requests[0]["messages"][0]["content"]

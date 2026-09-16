@@ -60,26 +60,30 @@ const CLARIFICATION_KIND = {
 
 function DataTable({
   data,
+  labels,
   columnName,
   exposeTechnical,
 }: {
   data: AnalyticsCompletedQueryResponse['data'];
+  /** 后端逐位给的展示名；计算列（占比等）只有它知道叫什么，id 末段是「0」。 */
+  labels?: string[];
   columnName: (id: string) => string;
   exposeTechnical: boolean;
 }) {
+  const headerOf = (column: string, index: number) => labels?.[index] || columnName(column);
   if (!data.rows.length) return <div className="py-3 text-xs text-slate-400">查询成功，但没有返回数据。</div>;
   return (
     <div className="overflow-x-auto rounded-md border border-slate-200">
       <table className="w-full text-left text-xs">
         <thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500">
           <tr>
-            {data.columns.map((column) => (
+            {data.columns.map((column, index) => (
               <th
                 key={column}
                 className="whitespace-nowrap px-3 py-2 font-medium"
-                title={exposeTechnical ? column : columnName(column)}
+                title={exposeTechnical ? column : headerOf(column, index)}
               >
-                {columnName(column)}
+                {headerOf(column, index)}
               </th>
             ))}
           </tr>
@@ -280,7 +284,12 @@ export function QueryAnswer({
           ))}
         </div>
       )}
-      <DataTable data={response.data} columnName={columnName} exposeTechnical={exposeTechnical} />
+      <DataTable
+        data={response.data}
+        labels={response.column_labels}
+        columnName={columnName}
+        exposeTechnical={exposeTechnical}
+      />
       {exposeTechnical && (
         <Collapsible title="查看 S2SQL 与物理 SQL">
           <pre className="whitespace-pre-wrap break-all font-mono text-[11px] text-slate-600">{response.corrected_s2sql}</pre>

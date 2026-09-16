@@ -448,3 +448,52 @@ describe('QueryAnswer diagnostic entry', () => {
     expect(html).not.toContain('一键诊断');
   });
 });
+
+describe('结果表头', () => {
+  it('计算列用后端给的展示名，不把 id 末段当表头', () => {
+    // 现场：「余额大于 2000 的账户占比」输出一列合成表达式，表头显示成「0」。
+    const response: QueryTurn['response'] = {
+      query_id: 'q-share',
+      state: 'COMPLETED',
+      trace: [],
+      release_id: 'rel-1',
+      spec_hash: 'sha256:spec',
+      index_snapshot_id: 'idx-1',
+      interpretation: {
+        dataset_id: 'dataset-internal-id',
+        query_type: 'aggregate',
+        metrics: ['账户余额'],
+        dimensions: ['账户号'],
+        filters: [],
+        applied_defaults: [],
+      },
+      semantic_query: {
+        dataset_id: 'dataset-internal-id',
+        query_type: 'aggregate',
+        metric_ids: ['metric-balance'],
+        aggregation_overrides: [],
+        dimension_ids: ['dimension-account'],
+        filters: [],
+        measure_filters: [],
+        metric_filters: [],
+        order_by: [],
+        limit: null,
+      },
+      parsed_s2sql: 'WITH a AS (...) SELECT ... AS _占比_ FROM a',
+      corrected_s2sql: 'WITH a AS (...) SELECT ... AS _占比_ FROM a',
+      physical_sql: null,
+      column_labels: ['占比'],
+      data: {
+        columns: ['expression:0'],
+        rows: [[0.2155]],
+        row_count: 1,
+        truncated: false,
+      },
+    };
+
+    const html = renderAnswer(response);
+
+    expect(html).toContain('>占比<');
+    expect(html).not.toContain('expression:0');
+  });
+});

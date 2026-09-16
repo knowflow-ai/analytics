@@ -375,14 +375,17 @@ def _result_diff(
 ) -> list[str]:
     if case.expected_rows is None:
         return []
+    expected_rows = case.expected_rows
     aligned = _align_rows(
         actual_columns=response.data.columns,
         actual_rows=response.data.rows,
         expected_columns=(*case.expected_dimension_ids, *case.expected_metric_ids),
+        # 期望行的宽度才是输出真正的列数：WITH 按实体聚合再算占比这类答案，语义投影里
+        # 有指标和分组维度两个成员，输出却只有一列合成表达式。
+        expected_width=len(expected_rows[0]) if expected_rows else None,
     )
     if aligned is None:
         return [f"结果列无法与期望对齐: 实际列 {_fmt_ids(response.data.columns)}"]
-    expected_rows = case.expected_rows
     if len(aligned) != len(expected_rows):
         return [f"行数: 期望 {len(expected_rows)} 行 → 实际 {len(aligned)} 行"]
     actual_view = aligned
@@ -422,16 +425,22 @@ def _align_rows(
     actual_columns: tuple[str, ...],
     actual_rows: tuple[tuple[Any, ...], ...],
     expected_columns: tuple[str, ...],
+    expected_width: int | None = None,
 ) -> tuple[tuple[Any, ...], ...] | None:
     """Align result tuples by stable semantic element id before comparison."""
 
-    if len(actual_columns) != len(expected_columns):
-        return None
     # 占比类查询的输出列是合成别名(如 _华南净收入占比_),不是语义 id——按 id
     # 必然对不上。列名与期望 id 完全不相交时按位置对齐;只要有一列能按 id
     # 对上(说明 id 命名在用),仍走严格对齐,防列序漂移的保护不放松。
+    # 按位置对齐时以期望行的宽度为准:语义投影的成员数可以比输出列多（WITH 里的
+    # 分组维度不进输出）。
     if not set(actual_columns) & set(expected_columns):
+        width = expected_width if expected_width is not None else len(expected_columns)
+        if len(actual_columns) != width:
+            return None
         return actual_rows
+    if len(actual_columns) != len(expected_columns):
+        return None
     available: dict[str, list[int]] = {}
     for index, column in enumerate(actual_columns):
         available.setdefault(column, []).append(index)

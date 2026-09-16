@@ -989,6 +989,8 @@ export interface AnalyticsCompletedQueryResponse
   parsed_s2sql: string;
   corrected_s2sql: string;
   physical_sql?: string | null;
+  /** 与 data.columns 逐位对齐的展示名；计算列的别名只有它知道。 */
+  column_labels?: string[];
   data: {
     columns: string[];
     rows: unknown[][];

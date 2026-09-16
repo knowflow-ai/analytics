@@ -939,3 +939,23 @@ def test_a_timeout_stops_the_retry_chain_instead_of_asking_the_same_slow_model_a
 
     assert gateway.calls == 1
     assert [item["error"] for item in raised.value.details["attempts"]] == ["ModelGatewayTimeout"]
+
+
+def test_s2sql_prompt_teaches_the_conditional_share_shape(sales_release) -> None:
+    """现场：「账户余额大于 2000 的账户占比」。提示词只教了 RATIO_TO_TOTAL 的两种形状，模型把
+    指标塞进第二个参数被拒；翻译器其实接受「WITH 按实体聚合，再 COUNT(CASE WHEN …)/COUNT(实体)」。
+    实验：按账户算 21.9%，按明细行算 21.5%，粒度那一步不能省。"""
+
+    gateway = _CapturingGateway({"thought": "占比", "sql": 'SELECT SUM("净收入") FROM "销售经营"'})
+
+    LlmS2SqlParser(gateway).parse(
+        question="净收入大于 2000 的客户占比",
+        release=sales_release,
+        mapping=_all_mapping(),
+        query_id="conditional-share",
+    )
+
+    system_prompt = gateway.requests[0]["messages"][0]["content"]
+    assert "满足某个指标条件的实体占比" in system_prompt
+    assert "COUNT(CASE WHEN" in system_prompt
+    assert "RATIO_TO_TOTAL 不能表达" in system_prompt

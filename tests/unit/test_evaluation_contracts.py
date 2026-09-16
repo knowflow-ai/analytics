@@ -1143,3 +1143,22 @@ def test_calculated_answers_align_by_position_when_the_projection_is_wider_than_
         )
         is None
     )
+
+
+def test_a_calculated_answer_passes_when_the_values_match():
+    """现场：「余额大于 2000 的账户占比」存成用例后重放，值一模一样却判「行内容不一致」。
+
+    判定用的对齐没有按期望行宽度放行，诊断消息那条路加了——于是判失败、消息却说不出
+    哪里不一致，落到末尾那句兜底文案。两条路必须用同一个对齐。
+    """
+
+    from knowflow_analytics.evaluation.evaluator import _align_rows
+
+    aligned = _align_rows(
+        actual_columns=("expression:0",),
+        actual_rows=((0.21551724137931033,),),
+        expected_columns=("dimension:acct", "metric:balance"),
+        expected_width=1,
+    )
+
+    assert aligned == ((0.21551724137931033,),)

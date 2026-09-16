@@ -463,10 +463,14 @@ def _completed_result_matches(
     if case.expected_rows is None:
         return None
     if projection_matches:
+        expected_rows = case.expected_rows
         actual_rows = _align_rows(
             actual_columns=response.data.columns,
             actual_rows=response.data.rows,
             expected_columns=(*case.expected_dimension_ids, *case.expected_metric_ids),
+            # 判定与诊断消息必须用同一个对齐：只有诊断加了宽度时，用例会判失败，
+            # 消息却逐值比都相等，落到末尾那句「行内容不一致」的兜底文案。
+            expected_width=len(expected_rows[0]) if expected_rows else None,
         )
     else:
         permutation = _semantic_slot_permutation(

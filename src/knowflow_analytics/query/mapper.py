@@ -397,9 +397,11 @@ class SemanticMapper:
             else MappingEvidenceChannel.DATABASE
         )
         matches: list[MappingEvidenceMatch] = []
+        exact_terms = _dictionary_term_texts(text, entries)
         for detected_text, (segment_dataset_ids, detected_spans) in segment_scopes.items():
             if not detected_text:
                 continue
+            numeric = _is_numeric_literal(detected_text)
             for entry in entries:
                 eligible = self._eligible_dataset_ids(
                     entry.dataset_ids,
@@ -407,6 +409,8 @@ class SemanticMapper:
                     eligible_dataset_ids,
                 )
                 if not eligible:
+                    continue
+                if numeric and entry.normalized_phrase != detected_text:
                     continue
                 if entry.normalized_phrase.startswith(
                     detected_text
@@ -417,7 +421,11 @@ class SemanticMapper:
                             entry,
                             eligible_dataset_ids=eligible,
                             channel=dictionary_channel,
-                            method=(MatchMethod.EXACT if score == 1.0 else MatchMethod.KEYWORD),
+                            method=(
+                                MatchMethod.EXACT
+                                if score == 1.0 and detected_text in exact_terms
+                                else MatchMethod.KEYWORD
+                            ),
                             score=score,
                             detected_text=detected_text,
                             origin_term_entry_id=origin_term_entry_id,
@@ -528,8 +536,11 @@ class SemanticMapper:
             normalized_segment = normalize_text(segment)
             if len(normalized_segment) <= 1:
                 continue
+            numeric_segment = _is_numeric_literal(normalized_segment)
             for entry in entries:
                 if entry.element_type is SemanticElementType.DATASET:
+                    continue
+                if numeric_segment and entry.normalized_phrase != normalized_segment:
                     continue
                 eligible = self._eligible_dataset_ids(
                     entry.dataset_ids,
@@ -577,19 +588,19 @@ class SemanticMapper:
             for item in detected_items:
                 by_phrase[item.normalized_phrase].append(item)
 
-            prefix = sorted(
-                (
-                    phrase
-                    for phrase in by_phrase
-                    if phrase.startswith(normalize_text(detected_text))
-                ),
-                key=recall_order_key,
-            )[: self.config.detection_max_size]
-            suffix = sorted(
-                (phrase for phrase in by_phrase if phrase.endswith(normalize_text(detected_text))),
-                key=recall_order_key,
-            )[: self.config.detection_max_size]
-            recalled = tuple(dict.fromkeys((*prefix, *suffix)))
+            normalized_detected = normalize_text(detected_text)
+            if _is_numeric_literal(normalized_detected):
+                recalled = (normalized_detected,) if normalized_detected in by_phrase else ()
+            else:
+                prefix = sorted(
+                    (phrase for phrase in by_phrase if phrase.startswith(normalized_detected)),
+                    key=recall_order_key,
+                )[: self.config.detection_max_size]
+                suffix = sorted(
+                    (phrase for phrase in by_phrase if phrase.endswith(normalized_detected)),
+                    key=recall_order_key,
+                )[: self.config.detection_max_size]
+                recalled = tuple(dict.fromkeys((*prefix, *suffix)))
             ranked = sorted(
                 (
                     (
@@ -629,7 +640,9 @@ class SemanticMapper:
                             item.model_copy(
                                 update={
                                     "method": (
-                                        MatchMethod.EXACT if score == 1.0 else MatchMethod.KEYWORD
+                                        MatchMethod.EXACT
+                                        if score == 1.0 and item.method is MatchMethod.EXACT
+                                        else MatchMethod.KEYWORD
                                     ),
                                     "score": score,
                                 }
@@ -931,6 +944,7 @@ class SemanticMapper:
             entries_by_phrase[entry.normalized_phrase].append(entry)
 
         dictionary_matches: list[SchemaMatch] = []
+        exact_terms = _dictionary_term_texts(question, entries)
         for detected_text in segments:
             selected = self._select_dictionary_round(
                 detected_text=detected_text,
@@ -938,7 +952,11 @@ class SemanticMapper:
                 mode=mode,
             )
             for normalized_phrase, score in selected:
-                method = MatchMethod.EXACT if score == 1.0 else MatchMethod.KEYWORD
+                method = (
+                    MatchMethod.EXACT
+                    if score == 1.0 and detected_text in exact_terms
+                    else MatchMethod.KEYWORD
+                )
                 for entry in sorted(
                     entries_by_phrase[normalized_phrase],
                     key=lambda item: (item.element_type, item.element_id, item.id),
@@ -1056,15 +1074,20 @@ class SemanticMapper:
         def search_key(phrase: str) -> tuple[int, str]:
             return recall_order_key(phrase)
 
-        prefix = sorted(
-            (phrase for phrase in entries_by_phrase if phrase.startswith(detected_text)),
-            key=search_key,
-        )[: self.config.detection_max_size]
-        suffix = sorted(
-            (phrase for phrase in entries_by_phrase if phrase.endswith(detected_text)),
-            key=search_key,
-        )[: self.config.detection_max_size]
-        recalled = tuple(dict.fromkeys((*prefix, *suffix)))
+        if _is_numeric_literal(detected_text):
+            recalled: tuple[str, ...] = (
+                (detected_text,) if detected_text in entries_by_phrase else ()
+            )
+        else:
+            prefix = sorted(
+                (phrase for phrase in entries_by_phrase if phrase.startswith(detected_text)),
+                key=search_key,
+            )[: self.config.detection_max_size]
+            suffix = sorted(
+                (phrase for phrase in entries_by_phrase if phrase.endswith(detected_text)),
+                key=search_key,
+            )[: self.config.detection_max_size]
+            recalled = tuple(dict.fromkeys((*prefix, *suffix)))
         ranked = sorted(
             ((phrase, _edit_similarity(phrase, detected_text)) for phrase in recalled),
             key=lambda item: (-item[1], -len(item[0]), item[0]),
@@ -1699,6 +1722,48 @@ def _hangul_jamo_role(character: str) -> str | None:
     return None
 
 
+_ASCII_TOKEN_CHAR = re.compile(r"[a-z0-9_$]")
+_NUMERIC_LITERAL = re.compile(r"[+-]?\d+(?:\.\d+)?")
+
+
+def _cuts_ascii_token(text: str, start: int, end: int) -> bool:
+    """片段起止落在字母数字串中间，例如「2000」里的「20」。
+
+    问题里的数字是字面量（阈值、年份、数量），字母串是代码。词表整词切分
+    本来就有这条边界规则，碎片枚举没有，于是「2000」切出的「20」撞上字典里的
+    取值「20」被当成精确命中，一个数字碎片拥有了否决事实根的权力。
+    """
+
+    if start >= end:
+        return False
+    head = _ASCII_TOKEN_CHAR.fullmatch(text[start]) is not None
+    tail = _ASCII_TOKEN_CHAR.fullmatch(text[end - 1]) is not None
+    cuts_head = head and start > 0 and _ASCII_TOKEN_CHAR.fullmatch(text[start - 1]) is not None
+    cuts_tail = tail and end < len(text) and _ASCII_TOKEN_CHAR.fullmatch(text[end]) is not None
+    return cuts_head or cuts_tail
+
+
+def _is_numeric_literal(text: str) -> bool:
+    """纯数字只认整体相等：「2000」和「20000」相似 0.8 没有任何意义。"""
+
+    return _NUMERIC_LITERAL.fullmatch(text) is not None
+
+
+def _dictionary_term_texts(
+    question: str,
+    entries: tuple[SemanticIndexEntry, ...],
+) -> frozenset[str]:
+    """词表整词切分从这个问题里切出来的词（归一化后）。「精确」只有这一个出处。"""
+
+    coordinates = _surface_coordinates(question)
+    if not coordinates.normalized:
+        return frozenset()
+    return frozenset(
+        normalize_text(term.word)
+        for term in HanlpCustomDictionary(entries).segment(coordinates.normalized)
+    )
+
+
 def _dictionary_segments(
     question: str,
     entries: tuple[SemanticIndexEntry, ...],
@@ -1745,6 +1810,8 @@ def _dictionary_segment_spans(
                 segment = normalize_text(normalized[trimmed_start:trimmed_end])
                 if len(segment) > maximum_phrase_length:
                     break
+                if _cuts_ascii_token(normalized, trimmed_start, trimmed_end):
+                    continue
                 if segment and any(segment in phrase for phrase in phrases):
                     segments.setdefault(segment, []).append((trimmed_start, trimmed_end))
         start += registered_offsets.get(start, 1)

@@ -656,6 +656,10 @@ def reconcile_query_scopes(catalog: SemanticCatalog) -> SemanticCatalog:
         # A Scope-sensitive edit may retire a member before downstream Dataset
         # references are reconciled.  Structural compilation is the recovery
         # path; `_apply_topics` removes the compiler-owned stale projection.
+        # 数据集清空后，指向它们的作用域上下文也要一起离开这份临时目录，否则
+        # 校验器会在这里就以「targets an unknown query_scope」拒绝。上下文本身
+        # 没有丢：`_apply_topics` 拿的是完整的 `counted`，按新作用域重新挂回去，
+        # 只有事实根真的退役时才清掉。
         structural = counted.model_copy(
             update={
                 "data_sets": (),
@@ -663,6 +667,9 @@ def reconcile_query_scopes(catalog: SemanticCatalog) -> SemanticCatalog:
                 "dimension_values": (),
                 "analysis_topic_routes": (),
                 "query_rules": (),
+                "semantic_context": tuple(
+                    item for item in counted.semantic_context if item.target_type != "query_scope"
+                ),
             }
         )
         projection = compile_semantic_catalog(

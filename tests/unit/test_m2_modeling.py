@@ -616,6 +616,35 @@ def test_relation_delete_reconciles_scopes_and_invalidated_query_rules_in_previe
     )
 
 
+def test_relation_delete_preview_survives_a_reviewed_query_scope_context() -> None:
+    """现场 500：有作用域上下文时预览删除关系，规划器在结构恢复里抛 ValidationError。"""
+
+    catalog = reconcile_query_scopes(_catalog())
+    context = SemanticContextEntry(
+        id="context-sales-scope",
+        target_type="query_scope",
+        target_id="dataset_sales",
+        kind="scope",
+        text="以订单为事实根的受治理分析主题",
+        source_type="catalog_description",
+    )
+    catalog = SemanticCatalog.model_validate(
+        catalog.model_copy(update={"semantic_context": (context,)}).model_dump(mode="python")
+    )
+
+    impact = CatalogDeletionPlanner().preview(
+        catalog,
+        resource_kind=ResourceKind.RELATION,
+        resource_id="relation_orders_customers",
+    )
+
+    assert impact.resource_id == "relation_orders_customers"
+    assert all(
+        not (item.resource_kind is ResourceKind.SEMANTIC_CONTEXT and item.resource_id == context.id)
+        for item in impact.effects
+    )
+
+
 def test_authenticated_relation_delete_returns_the_reconciled_query_rule_impact() -> None:
     catalog = reconcile_query_scopes(_catalog())
     invalidated_rule = QueryRuleContract(

@@ -125,6 +125,44 @@ def test_structural_count_compile_preserves_reviewed_query_scope_context() -> No
     assert reconciled.semantic_context == (context,)
 
 
+def test_structural_recovery_keeps_reviewed_scope_context_when_a_routed_relation_goes() -> None:
+    """现场：删掉路由正在用的关系 → 直接编译失败 → 结构恢复的临时目录清空了数据集，
+    却留着指向它的作用域上下文，pydantic 当场拒绝，删除接口返回 500。"""
+
+    catalog = reconcile_query_scopes(_catalog())
+    context = SemanticContextEntry(
+        id="context-orders-scope",
+        target_type="query_scope",
+        target_id="dataset_sales",
+        kind="scope",
+        text="以订单为事实根的受治理分析主题",
+        source_type="catalog_description",
+    )
+    contextual = SemanticCatalog.model_validate(
+        catalog.model_copy(update={"semantic_context": (context,)}).model_dump(mode="python")
+    )
+    routed_relation_ids = {
+        relation_id
+        for route in contextual.analysis_topic_routes
+        for path in route.paths
+        for relation_id in path.relation_ids
+    }
+    assert routed_relation_ids, "fixture 的路由必须用到关系，否则走不到结构恢复"
+    without_relation = contextual.model_copy(
+        update={
+            "model_relations": tuple(
+                item for item in contextual.model_relations if item.id not in routed_relation_ids
+            ),
+            "query_rules": (),
+        }
+    )
+
+    reconciled = reconcile_query_scopes(without_relation)
+
+    assert "dataset_sales" in {item.id for item in reconciled.data_sets}
+    assert context in reconciled.semantic_context
+
+
 def test_query_scope_reconciliation_recovers_rules_after_structural_compile() -> None:
     catalog = reconcile_query_scopes(_catalog())
     reviewed_orders_scope = next(item for item in catalog.data_sets if item.id == "dataset_sales")

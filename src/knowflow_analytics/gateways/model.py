@@ -210,7 +210,10 @@ class HttpModelGateway:
                 payload.get("code") if isinstance(payload, dict) else None,
                 upstream_message or "unspecified upstream error",
             )
-            raise ModelGatewayError("model gateway rejected the request")
+            raise ModelGatewayError(
+                "model gateway rejected the request: "
+                f"{upstream_message or 'unspecified upstream error'}"
+            )
         data = payload.get("data")
         structured = data.get("structured") if isinstance(data, dict) else None
         if not isinstance(structured, dict):

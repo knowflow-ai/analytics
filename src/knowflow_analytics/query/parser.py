@@ -367,6 +367,23 @@ class LlmS2SqlParser:
             rejection=rejection,
         )
 
+        # 每次尝试模型回了什么、为什么被拒，都要能从诊断里看到。现场三次调用都被判
+        # 「模型未返回合法的语义查询」，记录里却只有这一句，根本无从判断是超时、上游
+        # 没给出合法 JSON、还是 SQL 本身不合规。
+        payloads: dict[int, object] = {}
+        failures: list[dict[str, object]] = []
+
+        def _record_failure(attempt: int, exc: Exception) -> None:
+            failures.append(
+                {
+                    "attempt": attempt,
+                    "error": type(exc).__name__,
+                    "code": getattr(exc, "code", None),
+                    "message": str(exc)[:800],
+                    "output": _payload_snippet(payloads.get(attempt)),
+                }
+            )
+
         def _infer(attempt: int, prompt: list[dict[str, str]]) -> _LlmS2SqlOutput:
             """一次生成 + 校验。治理级错误直接上抛,其余交给调用方决定重试或弃票。"""
 
@@ -384,6 +401,7 @@ class LlmS2SqlParser:
                     "tenant_id": tenant_id,
                 },
             )
+            payloads[attempt] = payload
             candidate = _LlmS2SqlOutput.model_validate(payload)
             candidate = candidate.model_copy(
                 update={"sql": _normalize_identifier_quotes(candidate.sql)}
@@ -453,6 +471,8 @@ class LlmS2SqlParser:
                         errors[attempt] = exc
             if governance:
                 raise governance[min(governance)]
+            for attempt in sorted(errors):
+                _record_failure(attempt, errors[attempt])
             if errors:
                 last_error = errors[max(errors)]
             ballots = [results[attempt] for attempt in sorted(results)]
@@ -482,14 +502,18 @@ class LlmS2SqlParser:
                 except AnalyticsError as exc:
                     if exc.code in GOVERNANCE_BLOCKING_S2SQL_CODES:
                         raise
+                    _record_failure(attempt, exc)
                     last_error = exc
                     output = None
                 except (KeyError, TypeError, ValueError) as exc:
+                    _record_failure(attempt, exc)
                     last_error = exc
                     output = None
         if output is None:
             raise SemanticParsingError(
-                "模型未返回合法的语义查询", code="LLM_S2SQL_INVALID"
+                "模型未返回合法的语义查询",
+                code="LLM_S2SQL_INVALID",
+                details={"attempts": failures},
             ) from last_error
         candidate_id = (
             "candidate_"
@@ -1365,6 +1389,18 @@ def _resolves_elsewhere(
 # 不归一会让落地校验报出方向全错的"模型遗漏约束"。只动单引号字符串外的字符,
 # 字面量里的 「」 原样保留。'' 转义翻转两次,净效果不变。
 _IDENT_QUOTE_MAP = str.maketrans({c: '"' for c in "「」『』“”＂"})
+
+
+def _payload_snippet(payload: object, *, limit: int = 1500) -> str | None:
+    """模型返回的结构体截断成一段文本，进诊断，不进普通 wire。"""
+
+    if payload is None:
+        return None
+    try:
+        text = json.dumps(payload, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        text = repr(payload)
+    return text[:limit]
 
 
 def _normalize_identifier_quotes(sql: str) -> str:

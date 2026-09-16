@@ -468,7 +468,12 @@ class CandidateOrchestrator:
             except AnalyticsError as exc:
                 emit(
                     "llm_parse_failed",
-                    {"code": exc.code, "stage": exc.stage, "message": str(exc)},
+                    {
+                        "code": exc.code,
+                        "stage": exc.stage,
+                        "message": str(exc),
+                        **({"details": exc.details} if exc.details else {}),
+                    },
                 )
                 if exc.code in GOVERNANCE_BLOCKING_S2SQL_CODES:
                     raise
@@ -587,7 +592,12 @@ class CandidateOrchestrator:
             except AnalyticsError as exc:
                 emit(
                     "all_llm_parse_failed",
-                    {"code": exc.code, "stage": exc.stage, "message": str(exc)},
+                    {
+                        "code": exc.code,
+                        "stage": exc.stage,
+                        "message": str(exc),
+                        **({"details": exc.details} if exc.details else {}),
+                    },
                 )
                 if exc.code in GOVERNANCE_BLOCKING_S2SQL_CODES:
                     raise

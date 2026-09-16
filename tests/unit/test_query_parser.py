@@ -845,3 +845,50 @@ def test_a_dimension_only_structured_query_stays_detail(sales_release) -> None:
     )
 
     assert corrected.semantic_query.query_type is SemanticQueryType.DETAIL
+
+
+class _RejectingGateway:
+    """上游把模型原文判成不合法 JSON，网关只带回一句拒绝原因。"""
+
+    def generate_json(self, **kwargs):
+        from knowflow_analytics.gateways.model import ModelGatewayError
+
+        raise ModelGatewayError(
+            "model gateway rejected the request: model output is not valid JSON: "
+            "好的，占比可以这样算：SELECT ...",
+        )
+
+
+def test_invalid_model_output_keeps_every_attempt_in_the_error_details(sales_release) -> None:
+    """现场：三次调用都被判「模型未返回合法的语义查询」，诊断里却没有模型到底回了什么。"""
+
+    gateway = _CapturingGateway({"thought": "占比", "sql": 12345})
+
+    with pytest.raises(SemanticParsingError) as raised:
+        LlmS2SqlParser(gateway, max_attempts=2).parse(
+            question="账户余额大于 2000 的占比多少",
+            release=sales_release,
+            mapping=_all_mapping(),
+            query_id="invalid-output",
+        )
+
+    assert raised.value.code == "LLM_S2SQL_INVALID"
+    attempts = raised.value.details["attempts"]
+    assert [item["attempt"] for item in attempts] == [1, 2]
+    assert all(item["error"] for item in attempts)
+    assert '"sql": 12345' in attempts[0]["output"]
+
+
+def test_upstream_rejection_reason_survives_into_the_error_details(sales_release) -> None:
+    with pytest.raises(SemanticParsingError) as raised:
+        LlmS2SqlParser(_RejectingGateway(), max_attempts=1).parse(
+            question="账户余额大于 2000 的占比多少",
+            release=sales_release,
+            mapping=_all_mapping(),
+            query_id="rejected-output",
+        )
+
+    attempts = raised.value.details["attempts"]
+    assert len(attempts) == 1
+    assert "not valid JSON" in attempts[0]["message"]
+    assert "占比可以这样算" in attempts[0]["message"]

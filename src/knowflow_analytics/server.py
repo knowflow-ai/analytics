@@ -45,6 +45,7 @@ def create_app() -> FastAPI:
         llm_id=settings.llm_id,
         timeout_seconds=settings.model_gateway_timeout_seconds,
         modeling_timeout_seconds=settings.model_gateway_modeling_timeout_seconds,
+        query_timeout_seconds=settings.model_gateway_query_timeout_seconds,
     )
     knowledge_gateway = HttpKnowledgeGateway(
         base_url=settings.ragflow_base_url,

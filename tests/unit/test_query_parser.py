@@ -892,3 +892,50 @@ def test_upstream_rejection_reason_survives_into_the_error_details(sales_release
     assert len(attempts) == 1
     assert "not valid JSON" in attempts[0]["message"]
     assert "占比可以这样算" in attempts[0]["message"]
+
+
+class _TimingOutGateway:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def generate_json(self, **kwargs):
+        from knowflow_analytics.gateways.model import ModelGatewayTimeout
+
+        self.calls += 1
+        raise ModelGatewayTimeout("model gateway timed out")
+
+
+def test_s2sql_prompt_asks_for_a_short_thought_and_caps_output(sales_release) -> None:
+    """实测这台模型 20 token/s：thought 写几百字就把 30 秒吃光。答案只要 SQL 和一句话。"""
+
+    gateway = _CapturingGateway({"thought": "占比", "sql": 'SELECT SUM("净收入") FROM "销售经营"'})
+
+    LlmS2SqlParser(gateway).parse(
+        question="净收入",
+        release=sales_release,
+        mapping=_all_mapping(),
+        query_id="short-thought",
+    )
+
+    system_prompt = gateway.requests[0]["messages"][0]["content"]
+    assert "thought 不超过 80 字" in system_prompt
+    assert gateway.requests[0]["trace"]["max_tokens_hint"] == "1536"
+
+
+def test_a_timeout_stops_the_retry_chain_instead_of_asking_the_same_slow_model_again(
+    sales_release,
+) -> None:
+    """现场：三次 30 秒超时才退到兜底。超时不是「SQL 写错了」，再问两次只是白等 60 秒。"""
+
+    gateway = _TimingOutGateway()
+
+    with pytest.raises(SemanticParsingError) as raised:
+        LlmS2SqlParser(gateway, max_attempts=3).parse(
+            question="账户余额大于 2000 的占比多少",
+            release=sales_release,
+            mapping=_all_mapping(),
+            query_id="timeout-once",
+        )
+
+    assert gateway.calls == 1
+    assert [item["error"] for item in raised.value.details["attempts"]] == ["ModelGatewayTimeout"]

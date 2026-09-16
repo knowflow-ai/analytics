@@ -532,3 +532,63 @@ def test_model_gateway_timeout_is_a_distinct_error():
             trace={"tenant_id": "tenant-1"},
         )
     assert isinstance(excinfo.value, ModelGatewayError)
+
+
+def test_query_purpose_timeout_is_configurable_per_deployment():
+    """现场这台模型生成一条 SQL 要 25 到 35 秒，写死的 30 秒把它卡在线上。"""
+
+    default = HttpModelGateway(
+        base_url="http://ragflow.invalid", service_token="service-token", llm_id="m@p"
+    )
+    assert default._timeout_for("analytics.s2sql") == 30.0
+    assert default._timeout_for("analytics.s2sql.corrector") == 30.0
+
+    slow = HttpModelGateway(
+        base_url="http://ragflow.invalid",
+        service_token="service-token",
+        llm_id="m@p",
+        timeout_seconds=240.0,
+        query_timeout_seconds=90.0,
+    )
+    assert slow._timeout_for("analytics.s2sql") == 90.0
+    assert slow._timeout_for("analytics.physical_sql.corrector") == 90.0
+    # 改写、歧义、解读这几档不跟着放大
+    assert slow._timeout_for("analytics.multi_turn_rewrite") == 20.0
+
+
+def test_model_call_records_carry_output_size():
+    """诊断里只有耗时，分不清是模型慢还是它写多了。"""
+
+    from knowflow_analytics.gateways.calls import capture_calls
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "code": 0,
+                "data": {
+                    "structured": {"sql": "SELECT 1"},
+                    "output_chars": 321,
+                    "total_tokens": 987,
+                },
+            },
+        )
+
+    gateway = HttpModelGateway(
+        base_url="http://ragflow.invalid",
+        service_token="service-token",
+        llm_id="model@provider",
+        client=httpx.Client(
+            base_url="http://ragflow.invalid", transport=httpx.MockTransport(handler)
+        ),
+    )
+    with capture_calls() as calls:
+        gateway.generate_json(
+            purpose="analytics.s2sql",
+            messages=[{"role": "user", "content": "query"}],
+            response_schema={"type": "object"},
+            trace={"attempt": "1", "tenant_id": "tenant-1"},
+        )
+
+    assert calls[0]["output_chars"] == 321
+    assert calls[0]["total_tokens"] == 987

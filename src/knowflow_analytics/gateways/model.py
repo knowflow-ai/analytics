@@ -46,10 +46,12 @@ _MODELING_PURPOSE_PREFIXES = (
     "analytics.alias_suggestion",
     "analytics.dimension_value_aliases",
 )
+# 生成 / 校正 SQL 这三档按部署配置（默认 30 秒）：现场自建模型写一条 SQL 要 25 到
+# 35 秒，写死的 30 秒把它卡在线上。其余轻量用途仍封顶 20 秒。
+_SQL_PURPOSES = frozenset(
+    {"analytics.s2sql", "analytics.s2sql.corrector", "analytics.physical_sql.corrector"}
+)
 _PURPOSE_TIMEOUT_CAPS: dict[str, float] = {
-    "analytics.s2sql": 30.0,
-    "analytics.s2sql.corrector": 30.0,
-    "analytics.physical_sql.corrector": 30.0,
     "analytics.multi_turn_rewrite": 20.0,
     "analytics.mapping_ambiguity": 20.0,
     "analytics.result_interpretation": 20.0,
@@ -74,6 +76,7 @@ class HttpModelGateway:
         llm_id: str,
         timeout_seconds: float = 60.0,
         modeling_timeout_seconds: float = 180.0,
+        query_timeout_seconds: float = 30.0,
         client: httpx.Client | None = None,
     ) -> None:
         self._owns_client = client is None
@@ -84,11 +87,15 @@ class HttpModelGateway:
         self._llm_id = llm_id
         self._timeout_seconds = timeout_seconds
         self._modeling_timeout_seconds = modeling_timeout_seconds
+        self._query_timeout_seconds = query_timeout_seconds
 
     def _timeout_for(self, purpose: str) -> float:
         if purpose.startswith(_MODELING_PURPOSE_PREFIXES):
             # 存量部署可能把全局超时调到 240 给 AI 补全用，建模取两者中较大的
             return max(self._modeling_timeout_seconds, self._timeout_seconds)
+        if purpose in _SQL_PURPOSES:
+            # 不越过全局：运营把全局压到 10 秒时，SQL 这档也只能是 10 秒。
+            return min(self._timeout_seconds, self._query_timeout_seconds)
         return min(self._timeout_seconds, _PURPOSE_TIMEOUT_CAPS.get(purpose, self._timeout_seconds))
 
     def _post_with_backoff(self, body: dict[str, Any], *, purpose: str) -> Any:
@@ -190,13 +197,18 @@ class HttpModelGateway:
                 error=type(exc).__name__,
             )
             raise
+        envelope = payload if isinstance(payload, dict) else {}
+        data = envelope.get("data") if isinstance(envelope.get("data"), dict) else {}
         record_call(
             kind="model",
             purpose=purpose,
             attempt=attempt,
             elapsed_ms=int((time.monotonic() - started) * 1000),
             prompt_chars=prompt_chars,
-            ok=isinstance(payload, dict) and payload.get("code") == 0,
+            ok=envelope.get("code") == 0,
+            # 有耗时没规模，分不清是模型慢还是它写多了。
+            output_chars=data.get("output_chars"),
+            total_tokens=data.get("total_tokens"),
         )
         if not isinstance(payload, dict) or payload.get("code") != 0:
             upstream_message = (

@@ -1070,7 +1070,9 @@ def _executable_sql_key(key: str) -> bool:
     }
 
 
-def _bounded_detail(value: Any, *, max_bytes: int = 8 * 1024) -> Any:
+# 单个阶段的明细上限。FINAL_PARSING 带着完整映射和逐次尝试的模型输出，8 KB 一超就只剩
+# 一段预览，恰好把「模型到底回了什么、为什么被拒」截掉；整个产物另有 512 KB 总上限。
+def _bounded_detail(value: Any, *, max_bytes: int = 32 * 1024) -> Any:
     safe = _sanitize_value(value, string_limit=20_000, collection_limit=100)
     encoded = json.dumps(
         safe,

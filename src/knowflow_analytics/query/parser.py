@@ -382,7 +382,7 @@ class LlmS2SqlParser:
                     "attempt": attempt,
                     "error": type(exc).__name__,
                     "code": getattr(exc, "code", None),
-                    "message": str(exc)[:800],
+                    "message": str(exc)[:400],
                     "output": _payload_snippet(payloads.get(attempt)),
                 }
             )
@@ -1402,7 +1402,7 @@ def _resolves_elsewhere(
 _IDENT_QUOTE_MAP = str.maketrans({c: '"' for c in "「」『』“”＂"})
 
 
-def _payload_snippet(payload: object, *, limit: int = 1500) -> str | None:
+def _payload_snippet(payload: object, *, limit: int = 600) -> str | None:
     """模型返回的结构体截断成一段文本，进诊断，不进普通 wire。"""
 
     if payload is None:

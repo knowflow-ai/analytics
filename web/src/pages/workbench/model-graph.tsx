@@ -23,6 +23,7 @@ import { Button } from '@analytics/components/ui';
 import { packedFallbackPositions, tidyLayout, unplacedModelIds } from '@analytics/lib/graph-layout';
 import { CARDINALITY_LABELS } from '@analytics/lib/labels';
 import { FIELD_ROLE_TEXT_CLASS, fieldRoleVisual } from '@analytics/lib/field-role';
+import { fieldHandleMode, relationAnchoredFieldIds, type FieldHandleMode } from './relation-anchors';
 
 interface ModelNodeData extends Record<string, unknown> {
   name: string;
@@ -37,7 +38,7 @@ interface ModelNodeData extends Record<string, unknown> {
     role: string;
     roleClass: string;
     pending: boolean;
-    linkable: boolean;
+    handleMode: FieldHandleMode | null;
   }>;
   onOpen: () => void;
 }
@@ -80,22 +81,28 @@ function ModelNodeView({ data, selected }: NodeProps<ModelNode>) {
             key={field.id}
             className="relative flex items-center justify-between bg-white px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50"
           >
-            {field.linkable && (
+            {field.handleMode && (
               <Handle
                 id={`field-target:${field.id}`}
                 type="target"
                 position={Position.Left}
-                className="!h-3 !w-3 !border-2 !border-white !bg-emerald-500"
+                isConnectable={field.handleMode === 'connectable'}
+                className={`!h-3 !w-3 !border-2 !border-white ${
+                  field.handleMode === 'connectable' ? '!bg-emerald-500' : '!bg-slate-400'
+                }`}
               />
             )}
             <span className="min-w-0 flex-1 truncate">{field.name}</span>
             <span className={`ml-2 shrink-0 ${field.roleClass}`}>{field.role}</span>
-            {field.linkable && (
+            {field.handleMode && (
               <Handle
                 id={`field-source:${field.id}`}
                 type="source"
                 position={Position.Right}
-                className="!h-3 !w-3 !border-2 !border-white !bg-emerald-500"
+                isConnectable={field.handleMode === 'connectable'}
+                className={`!h-3 !w-3 !border-2 !border-white ${
+                  field.handleMode === 'connectable' ? '!bg-emerald-500' : '!bg-slate-400'
+                }`}
               />
             )}
           </div>
@@ -209,6 +216,8 @@ export function ModelGraph({
     [fieldCounts, spec.models],
   );
 
+  const anchoredFieldIds = useMemo(() => relationAnchoredFieldIds(spec.relations), [spec.relations]);
+
   const graphNodes = useMemo<ModelNode[]>(
     () =>
       spec.models.map((model) => {
@@ -230,14 +239,15 @@ export function ModelGraph({
               role: fieldRoleVisual(field).label,
               roleClass: FIELD_ROLE_TEXT_CLASS[fieldRoleVisual(field).tone],
               pending: field.kind === 'field',
-              // Only identifiers may anchor a relation; the contract rejects others.
-              linkable: field.kind === 'identifier',
+              // 主标识可拉新关系；已有关系挂着的字段降级后也要保留连接点，
+              // 否则边会凭空消失而关系还在目录里。
+              handleMode: fieldHandleMode(field, anchoredFieldIds),
             })),
             onOpen: () => onOpenModel(model.id),
           },
         };
       }),
-    [fallbackPositions, onOpenModel, savedPositions, spec],
+    [anchoredFieldIds, fallbackPositions, onOpenModel, savedPositions, spec],
   );
   const [nodes, setNodes, onNodesChange] = useNodesState(graphNodes);
   useEffect(() => setNodes(graphNodes), [graphNodes, setNodes]);

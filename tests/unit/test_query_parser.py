@@ -991,3 +991,24 @@ def test_s2sql_prompt_teaches_subqueries_and_set_operations(sales_release) -> No
     system_prompt = gateway.requests[0]["messages"][0]["content"]
     assert "标量子查询" in system_prompt
     assert "UNION" in system_prompt
+
+
+def test_s2sql_prompt_teaches_within_group_comparison(sales_release) -> None:
+    """组内占比、组内排名、与组内均值比都要分区窗口。
+
+    RATIO_TO_TOTAL 只能表达「占整个结果集」，表达不了「占本组」。实测这三种分区窗口
+    形态翻译器全部接受，缺的只是提示词没教。
+    """
+
+    gateway = _CapturingGateway({"thought": "占位", "sql": 'SELECT SUM("净收入") FROM "销售经营"'})
+
+    LlmS2SqlParser(gateway).parse(
+        question="每个渠道占本区域的比例",
+        release=sales_release,
+        mapping=_all_mapping(),
+        query_id="within-group",
+    )
+
+    system_prompt = gateway.requests[0]["messages"][0]["content"]
+    assert "PARTITION BY" in system_prompt
+    assert "占本组" in system_prompt

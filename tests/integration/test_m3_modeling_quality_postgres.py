@@ -129,3 +129,30 @@ def test_relation_coverage_counts_null_join_keys_as_unmatched_rows(sales_release
     assert relation.orphan_left_rows == 1
     assert relation.left_join_coverage == 0.75
     assert relation.status is QualityStatus.WARNING
+
+
+@pytest.mark.postgres
+def test_row_preview_reads_the_governed_source_against_postgres(sales_release):
+    """样例行走真库：受治理来源里有什么，建模者就看到什么。"""
+
+    database_url = os.getenv("KNOWFLOW_ANALYTICS_TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("KNOWFLOW_ANALYTICS_TEST_DATABASE_URL is not configured")
+    create_sales_fixture(database_url)
+    engine = create_engine(database_url)
+    executor = SqlExecutor(database_url)
+    profiler = ModelingQualityProfiler(engine, executor)
+    model = next(item for item in sales_release.models if item.id == "orders")
+    try:
+        preview = profiler.preview_model_rows(model, sales_release, limit=2)
+        whole = profiler.preview_model_rows(model, sales_release)
+    finally:
+        executor.close()
+        engine.dispose()
+
+    assert "net_amount" in preview.columns
+    assert len(preview.rows) == 2
+    assert preview.truncated is True
+    # 夹具是三行，一屏装得下，就不该说「还有更多」。
+    assert len(whole.rows) == 3
+    assert whole.truncated is False

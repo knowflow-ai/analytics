@@ -971,3 +971,23 @@ def test_s2sql_prompt_requires_an_alias_for_calculated_columns(sales_release) ->
     )
 
     assert "计算列必须用 AS" in gateway.requests[0]["messages"][0]["content"]
+
+
+def test_s2sql_prompt_teaches_subqueries_and_set_operations(sales_release) -> None:
+    """翻译器实测支持相关子查询与 UNION，提示词却从没提过，模型自然不会用。
+
+    治理层不窄，窄的是教学：这两样和窗口、CASE、WITH 一样早就合法。
+    """
+
+    gateway = _CapturingGateway({"thought": "占位", "sql": 'SELECT SUM("净收入") FROM "销售经营"'})
+
+    LlmS2SqlParser(gateway).parse(
+        question="净收入高于平均的区域",
+        release=sales_release,
+        mapping=_all_mapping(),
+        query_id="subquery-rule",
+    )
+
+    system_prompt = gateway.requests[0]["messages"][0]["content"]
+    assert "标量子查询" in system_prompt
+    assert "UNION" in system_prompt

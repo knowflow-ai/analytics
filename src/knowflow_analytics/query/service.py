@@ -4043,11 +4043,17 @@ class AnalyticsQueryService:
         is_share = "RATIO_TO_TOTAL(" in upper or any(
             item.ratio_form == "share" for item in output_columns
         )
+        # 占比单值：输出里只有一个占比列、没有分组维度列。不能用语义投影里的
+        # dimension_ids 判断——「先按账户聚合再算占比」的分组维度在 WITH 里，不进输出，
+        # 用它判会把单值占比判成柱图，单值卡于是不走百分比（现场实测仍显示 0.21）。
+        share_single_value = any(item.ratio_form == "share" for item in output_columns) and not any(
+            item.kind == "dimension" for item in output_columns
+        )
         # QueryType.DETAIL represents field selection rather than an
         # aggregate chart query (common/.../pojo/enums/QueryType.java).
         if query.query_type.value == "detail":
             chart = "table"
-        elif not query.dimension_ids and is_share:
+        elif (not query.dimension_ids and is_share) or share_single_value:
             # 组内占比且无分组：单个 0..1 比例值。输出列仍叫指标原名
             # （「净金额」），下游无法从列名或数值可靠判定占比。
             chart = "ratio"

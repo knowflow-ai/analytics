@@ -70,7 +70,14 @@ def test_a_share_column_is_displayed_as_a_percentage(sales_release) -> None:
 
     visualization = AnalyticsQueryService._visualization(
         sales_release,
-        SemanticQuery(dataset_id="sales_dataset", metric_ids=("net_revenue",)),
+        # 语义投影里带着分组维度：占比是先按实体聚合再算的，那个维度在 WITH 里，
+        # 不进输出。用它判断「有没有分组」会把单值占比判成柱图，单值卡就不走百分比了
+        # （现场实测：界面仍显示 0.21）。
+        SemanticQuery(
+            dataset_id="sales_dataset",
+            metric_ids=("net_revenue",),
+            dimension_ids=("region",),
+        ),
         'SELECT SUM(CASE WHEN "区域" = \'华东\' THEN 1 ELSE 0 END) * 1.0 / COUNT("区域")'
         ' AS _占比_ FROM "销售经营"',
         columns,

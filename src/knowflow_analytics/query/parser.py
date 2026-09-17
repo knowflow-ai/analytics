@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextvars
 import json
 import random
 import re
@@ -460,8 +461,12 @@ class LlmS2SqlParser:
             errors: dict[int, Exception] = {}
             governance: dict[int, AnalyticsError] = {}
             with ThreadPoolExecutor(max_workers=min(len(prompts), _MAX_PARALLEL_BALLOTS)) as pool:
+                # 线程不继承 ContextVar。不带上下文的话,这几票会悄悄用部署默认
+                # 模型而不是助手选的那个,整问预算与调用记录也一并丢失。
+                # 每票各复制一份:同一个 Context 不能被两个线程同时进入,共用一份
+                # 会在并发时抛 "cannot enter context"——三票本来就是同时在飞的。
                 futures = {
-                    pool.submit(_infer, attempt, prompt): attempt
+                    pool.submit(contextvars.copy_context().run, _infer, attempt, prompt): attempt
                     for attempt, prompt in enumerate(prompts, start=1)
                 }
                 for future in as_completed(futures):

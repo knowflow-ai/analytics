@@ -15,10 +15,22 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import Any
 
 _CALLS: ContextVar[list[dict[str, Any]] | None] = ContextVar("analytics_calls", default=None)
 _DEADLINE: ContextVar[float | None] = ContextVar("analytics_deadline", default=None)
+@dataclass(frozen=True)
+class ModelOverrides:
+    """这一轮问数要用哪个模型、要不要让它思考。每项为空 = 跟随部署配置。"""
+
+    llm_id: str | None = None
+    thinking_enabled: bool | None = None
+
+
+_OVERRIDES: ContextVar[ModelOverrides | None] = ContextVar(
+    "analytics_model_overrides", default=None
+)
 
 
 @contextmanager
@@ -61,3 +73,29 @@ def remaining_seconds() -> float | None:
 
     deadline = _DEADLINE.get()
     return None if deadline is None else deadline - time.monotonic()
+
+
+@contextmanager
+def model_overrides(overrides: ModelOverrides) -> Iterator[None]:
+    """把这一轮问数的模型选择开在上下文里，让网关自己去读。
+
+    逐请求的配置本来靠「每个建 trace 的调用点记得带上」，于是 ``llm_id`` 只有一处
+    记得了——助手选的模型对问答一直不起作用。建 trace 的地方有六七处且还会增加，
+    忘记的成本比隐式传递高，所以与整问预算一样改走 ContextVar：入口设一次，调用点
+    一个都不用改。代价是看网关那段代码看不出值可能来自别处，由注释与合同测试钉住。
+
+    ContextVar 不跨线程继承：在线程池里跑的自洽投票必须用
+    ``contextvars.copy_context().run(...)`` 提交，否则那几票会悄悄用部署默认模型。
+    """
+
+    token = _OVERRIDES.set(overrides)
+    try:
+        yield
+    finally:
+        _OVERRIDES.reset(token)
+
+
+def current_model_overrides() -> ModelOverrides | None:
+    """本轮问数的模型选择；不在问数上下文里（如 AI 建模）时为 None。"""
+
+    return _OVERRIDES.get()

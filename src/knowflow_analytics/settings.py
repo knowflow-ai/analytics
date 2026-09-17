@@ -27,6 +27,11 @@ class AnalyticsSettings(BaseSettings):
     llm_id: str = Field(default="", max_length=256)
     # Empty delegates to the tenant's default embedding model, matching llm_id.
     embedding_id: str = Field(default="", max_length=256)
+    # 推理模型默认不为问数/建模思考。这两档要的是受治理的结构化输出，形态由符号表、
+    # 路由和六道治理关确定性校验，思维链不改变答案只增加延迟——实测同一道 S2SQL 题，
+    # Qwen3-235B 思考开 10.5 秒（810 token 里 1451 字是思维链）、关 0.8 秒。现场正是
+    # 因此每次试问都撞上 60 秒超时。换成靠推理才写得对复杂 SQL 的模型时打开它。
+    model_thinking_enabled: bool = False
     # Governed defaults: both LLM correctors are opt-in.
     s2sql_corrector_enabled: bool = False
     # 自洽投票次数。1 = 单次生成(上游默认,线上不加开销);调大后同一问题独立生成

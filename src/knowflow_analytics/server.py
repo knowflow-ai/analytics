@@ -46,6 +46,7 @@ def create_app() -> FastAPI:
         timeout_seconds=settings.model_gateway_timeout_seconds,
         modeling_timeout_seconds=settings.model_gateway_modeling_timeout_seconds,
         query_timeout_seconds=settings.model_gateway_query_timeout_seconds,
+        thinking_enabled=settings.model_thinking_enabled,
     )
     knowledge_gateway = HttpKnowledgeGateway(
         base_url=settings.ragflow_base_url,
@@ -127,6 +128,7 @@ def create_app() -> FastAPI:
             "physical_sql_corrector_enabled": settings.physical_sql_corrector_enabled,
             "multi_turn_enabled": settings.multi_turn_enabled,
             "dry_run_before_execute": settings.dry_run_before_execute,
+            "thinking_enabled": settings.model_thinking_enabled,
         },
         expensive_requests_per_minute=settings.expensive_requests_per_minute,
     )

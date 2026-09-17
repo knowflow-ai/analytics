@@ -627,6 +627,11 @@ class QueryOptions(FrozenModel):
     # 会让"失败后跳出重复无效输出"的递进失效。
     temperature: float | None = Field(default=None, ge=0.0, le=1.0)
     max_tokens: int | None = Field(default=None, ge=1, le=8_192)
+    # 推理模型要不要先写一遍思考过程。空 = 跟随部署配置（默认不思考）。问数要的是
+    # 受治理的结构化输出，形态由符号表、路由与六道治理关确定性校验，思维链不改变
+    # 答案只增加延迟（实测同一道 S2SQL 题：开 10.5 秒、关 0.8 秒）。换成靠推理才
+    # 写得对复杂 SQL 的模型时打开它。
+    thinking_enabled: bool | None = None
     # 一次问数返回多少行。空 = 跟随数据集发布配置；允许高于发布值（见 RowLimits）。
     default_rows: int | None = Field(default=None, ge=1, le=100_000)
     max_rows: int | None = Field(default=None, ge=1, le=100_000)

@@ -7,7 +7,11 @@ from typing import Any, Protocol
 import httpx
 
 from knowflow_analytics.errors import AnalyticsError
-from knowflow_analytics.gateways.calls import record_call, remaining_seconds
+from knowflow_analytics.gateways.calls import (
+    current_model_overrides,
+    record_call,
+    remaining_seconds,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -79,6 +83,7 @@ class HttpModelGateway:
         timeout_seconds: float = 60.0,
         modeling_timeout_seconds: float = 180.0,
         query_timeout_seconds: float = 60.0,
+        thinking_enabled: bool = False,
         client: httpx.Client | None = None,
     ) -> None:
         self._owns_client = client is None
@@ -90,6 +95,12 @@ class HttpModelGateway:
         self._timeout_seconds = timeout_seconds
         self._modeling_timeout_seconds = modeling_timeout_seconds
         self._query_timeout_seconds = query_timeout_seconds
+        # 问数与建模要的是一段受治理的结构化输出，形态由符号表、路由与六道治理关
+        # 确定性校验；推理模型把思考过程写出来不改变答案，只改变延迟（实测同一道
+        # S2SQL 题：思考开 10.5 秒、关 0.8 秒）。默认关，换成靠推理才写得对复杂 SQL
+        # 的模型时由运营打开。网关只如实表达这次需不需要思考，不猜模型支不支持——
+        # 那是端点协议的事，由 RAGFlow 侧按端点落地。
+        self._thinking_enabled = thinking_enabled
 
     def _timeout_for(self, purpose: str) -> float:
         if purpose.startswith(_MODELING_PURPOSE_PREFIXES):
@@ -187,8 +198,17 @@ class HttpModelGateway:
         max_tokens = _bounded_int(
             trace.pop("max_tokens_hint", None), default=4096, lo=512, hi=16_384
         )
+        # 助手选的模型与思考开关按请求经 ContextVar 传入(见 calls.model_overrides);
+        # 空 = 跟随部署配置。不在问数上下文里的调用(AI 建模)拿到 None,行为不变。
+        overrides = current_model_overrides()
+        llm_id = self._llm_id
+        thinking = self._thinking_enabled
+        if overrides is not None:
+            llm_id = overrides.llm_id or self._llm_id
+            if overrides.thinking_enabled is not None:
+                thinking = overrides.thinking_enabled
         body = {
-            "model": {"tenant_id": tenant_id, "llm_id": self._llm_id},
+            "model": {"tenant_id": tenant_id, "llm_id": llm_id},
             "purpose": purpose,
             "messages": messages,
             "response_schema": {
@@ -200,6 +220,7 @@ class HttpModelGateway:
             "model_params": {
                 "temperature": _TEMPERATURE_BY_ATTEMPT.get(attempt, 0.6),
                 "max_tokens": max_tokens,
+                "enable_thinking": thinking,
             },
             "trace": trace,
         }

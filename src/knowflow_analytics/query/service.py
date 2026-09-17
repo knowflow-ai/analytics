@@ -35,7 +35,12 @@ from knowflow_analytics.contracts import (
 from knowflow_analytics.errors import AnalyticsError
 from knowflow_analytics.execution.dialect import SqlDialect
 from knowflow_analytics.execution.targets import ExecutionTargetProvider
-from knowflow_analytics.gateways.calls import capture_calls, question_budget
+from knowflow_analytics.gateways.calls import (
+    ModelOverrides,
+    capture_calls,
+    model_overrides,
+    question_budget,
+)
 from knowflow_analytics.hashing import content_hash
 from knowflow_analytics.query.ambiguity import (
     SemanticDecisionObligation,
@@ -320,7 +325,16 @@ class AnalyticsQueryService:
         """一轮问数。外面这层只做一件事：把这一轮里每次模型 / 向量调用的耗时收起来，
         挂到最后一个阶段的 detail 里（诊断产物可见，普通 wire 不出）。"""
 
-        with capture_calls() as calls, question_budget(self._question_budget_seconds):
+        with (
+            capture_calls() as calls,
+            question_budget(self._question_budget_seconds),
+            model_overrides(
+                ModelOverrides(
+                    llm_id=request.options.llm_id,
+                    thinking_enabled=request.options.thinking_enabled,
+                )
+            ),
+        ):
             response = self._query(request, actor_id=actor_id, on_trace=on_trace, now=now)
         return _attach_model_calls(response, calls)
 

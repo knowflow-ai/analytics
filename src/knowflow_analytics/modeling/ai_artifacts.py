@@ -23,6 +23,7 @@ from typing import Literal
 from knowflow_analytics.contracts import (
     AnalysisTopicRouteSpec,
     DatasetSpec,
+    DimensionSpec,
     DimensionValueSpec,
     FieldKind,
     FrozenModel,
@@ -38,6 +39,7 @@ from knowflow_analytics.modeling.analysis_topics import (
     default_count_metric_id,
     entity_name_dimension_name,
     fact_root_model_ids,
+    is_hidden_identifier,
     scope_canonical_names,
     validate_analysis_topic_route,
 )
@@ -319,17 +321,12 @@ class OneClickModelingArtifactService:
         release = revision.semantic_spec
         catalog = self._catalog(revision)
         models = {item.id: item for item in release.models}
-        fields = {item.id: item for item in release.fields}
         dimensions = {item.id: item for item in catalog.dimensions}
         metrics = {item.id: item for item in catalog.metrics}
         resources = tuple(
             sorted(
                 (
-                    *(
-                        ("dimension", item)
-                        for item in release.dimensions
-                        if fields[item.field_id].kind is not FieldKind.IDENTIFIER
-                    ),
+                    *(("dimension", item) for item in queryable_alias_dimensions(release)),
                     *(("metric", item) for item in release.metrics),
                 ),
                 key=lambda value: (value[0], value[1].id),
@@ -1399,6 +1396,26 @@ def apply_semantic_alias_drafts(
             )
             updated = replace_catalog_item(updated, collection="dimension_values", item=item)
     return SemanticCatalog.model_validate(updated.model_dump(mode="python"))
+
+
+def queryable_alias_dimensions(release: SemanticRelease) -> tuple[DimensionSpec, ...]:
+    """需要别名草稿的维度：就是作用域会开放出去的那些。
+
+    判据与编译作用域共用 ``is_hidden_identifier``。此前这里写的是「字段不是标识列」，
+    与校验端的「语义类型不是 identifier」是两个判据——标识列进不了作用域的年代两者结果
+    一致，谁都没发现。外部标识可分组之后分歧立刻现形：可问的维度没有别名草稿，
+    整轮 AI 建模被自己的完备性校验以 AI_MODELING_ALIAS_REVIEW_INCOMPLETE 拒掉
+    （2026-09-17 现场）。
+
+    能被问到就得有名字——用户说得出口的说法必须能落到某个成员上。
+    """
+
+    fields = {item.id: item for item in release.fields}
+    return tuple(
+        item
+        for item in release.dimensions
+        if item.field_id in fields and not is_hidden_identifier(fields[item.field_id], item)
+    )
 
 
 def _queryable_resources(release: SemanticRelease) -> set[tuple[str, str]]:

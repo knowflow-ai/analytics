@@ -50,7 +50,7 @@ class SqlExecutor:
                 self._configure_transaction(connection)
                 result = connection.execute(text(query.sql), query.parameters)
                 fetched = tuple(
-                    tuple(_normalize_cell(cell) for cell in row) for row in result.fetchall()
+                    tuple(normalize_cell(cell) for cell in row) for row in result.fetchall()
                 )
                 truncated = len(fetched) > query.result_limit
                 rows = fetched[: query.result_limit]
@@ -108,7 +108,7 @@ class SqlExecutor:
         self._engine.dispose()
 
 
-def _normalize_cell(value: Any) -> Any:
+def normalize_cell(value: Any) -> Any:
     """AVG(NUMERIC) 返回满刻度 Decimal（0.30000000000000000000），原样透传会把
     尾零一路带到前端。只删无意义的尾零，不动数值；整数值取整数刻度，避免
     ``normalize()`` 在 100.00 上给出 1E+2 的科学计数法。非有限值（NaN）原样保留。

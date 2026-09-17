@@ -19,12 +19,15 @@ from knowflow_analytics.contracts import (
 )
 from knowflow_analytics.errors import AnalyticsError, TranslationError
 from knowflow_analytics.execution.dialect import SqlDialect, to_dialect_sql
-from knowflow_analytics.execution.executor import SqlExecutor
+from knowflow_analytics.execution.executor import SqlExecutor, normalize_cell
 from knowflow_analytics.hashing import content_hash, semantic_evidence_hash
 from knowflow_analytics.modeling.contracts import ModelingRevision
 from knowflow_analytics.modeling.source_query import compile_governed_model_source
 from knowflow_analytics.semantic.join_planner import JoinPlanner
 from knowflow_analytics.semantic.translator import SemanticTranslator
+
+# 样例行只为「人看一眼」，不是导出。超过这个数就该去问数了。
+MODEL_ROWS_PREVIEW_LIMIT = 50
 
 
 class QualityStatus(StrEnum):
@@ -85,6 +88,13 @@ class MetricPreview(FrozenModel):
     error_code: str | None = None
     message: str = ""
     review_note: str = Field(default="", max_length=2_000)
+
+
+class ModelRowsPreview(FrozenModel):
+    model_id: str
+    columns: tuple[str, ...] = ()
+    rows: tuple[tuple[Any, ...], ...] = ()
+    truncated: bool = False
 
 
 class MetricPreviewDecision(FrozenModel):
@@ -258,83 +268,83 @@ class ModelingQualityProfiler:
         started: float,
     ) -> tuple[ModelGrainProfile, ...]:
         profiles: list[ModelGrainProfile] = []
-        fields_by_model: dict[str, list[Any]] = {}
-        for field in release.fields:
-            fields_by_model.setdefault(field.model_id, []).append(field)
         for model in sorted(release.models, key=lambda item: item.id):
             self._check_deadline(started)
-            identifiers = tuple(
-                item
-                for item in fields_by_model.get(model.id, [])
-                if item.identifier_type == "primary"
-            )
-            if not identifiers:
-                profiles.append(
-                    ModelGrainProfile(
-                        model_id=model.id,
-                        identifier_field_ids=(),
-                        total_rows=0,
-                        null_rows=0,
-                        distinct_non_null_keys=0,
-                        duplicate_rows=0,
-                        uniqueness_rate=0.0,
-                        null_rate=0.0,
-                        status=QualityStatus.WARNING,
-                        message="模型未配置主标识，无法用数据证明事实粒度。",
-                    )
-                )
-                continue
-            source_sql, parameters = self._model_source(model, release)
-            # 提示里指名道姓：建模者看到「主标识有 4 万条重复」时得知道该改哪一列
-            identifier_label = " + ".join(
-                f"{item.name}（{item.column}）" if item.name != item.column else item.column
-                for item in identifiers
-            )
-            columns = [_quote_identifier(item.column) for item in identifiers]
-            null_predicate = " OR ".join(f"{item} IS NULL" for item in columns)
-            non_null_predicate = " AND ".join(f"{item} IS NOT NULL" for item in columns)
-            distinct_expr = columns[0] if len(columns) == 1 else f"({', '.join(columns)})"
-            query = text(
-                f"""
-                WITH source AS ({source_sql})
-                SELECT
-                    COUNT(*)::bigint AS total_rows,
-                    COUNT(*) FILTER (WHERE {null_predicate})::bigint AS null_rows,
-                    COUNT(DISTINCT {distinct_expr})
-                        FILTER (WHERE {non_null_predicate})::bigint AS distinct_keys
-                FROM source
-                """
-            )
-            row = self._execute_one(query, parameters)
-            total_rows = int(row[0])
-            null_rows = int(row[1])
-            distinct_keys = int(row[2])
-            non_null_rows = total_rows - null_rows
-            duplicate_rows = max(0, non_null_rows - distinct_keys)
-            uniqueness_rate = distinct_keys / non_null_rows if non_null_rows else 1.0
-            null_rate = null_rows / total_rows if total_rows else 0.0
-            blocking = null_rows > 0 or duplicate_rows > 0
-            profiles.append(
-                ModelGrainProfile(
-                    model_id=model.id,
-                    identifier_field_ids=tuple(item.id for item in identifiers),
-                    total_rows=total_rows,
-                    null_rows=null_rows,
-                    distinct_non_null_keys=distinct_keys,
-                    duplicate_rows=duplicate_rows,
-                    uniqueness_rate=uniqueness_rate,
-                    null_rate=null_rate,
-                    status=QualityStatus.BLOCKING if blocking else QualityStatus.PASSED,
-                    message=(
-                        f"主标识 {identifier_label} 存在 {null_rows} 条 NULL、"
-                        f"{duplicate_rows} 条重复记录（共 {total_rows} 行）。"
-                        "换一个在数据里唯一的列做主标识，或取消它的主标识角色。"
-                        if blocking
-                        else f"主标识 {identifier_label} 在当前数据中非空且唯一。"
-                    ),
-                )
-            )
+            profiles.append(self.profile_grain(model, release))
         return tuple(profiles)
+
+    def profile_grain(self, model: Any, release: SemanticRelease) -> ModelGrainProfile:
+        """用真实数据核对一个模型的事实粒度：主标识是否非空且唯一。
+
+        一次一个模型，发布前的整版报告与建模页的单次核对走同一条语句。
+        """
+
+        identifiers = tuple(
+            item
+            for item in release.fields
+            if item.model_id == model.id and item.identifier_type == "primary"
+        )
+        if not identifiers:
+            return ModelGrainProfile(
+                model_id=model.id,
+                identifier_field_ids=(),
+                total_rows=0,
+                null_rows=0,
+                distinct_non_null_keys=0,
+                duplicate_rows=0,
+                uniqueness_rate=0.0,
+                null_rate=0.0,
+                status=QualityStatus.WARNING,
+                message="模型未配置主标识，无法用数据证明事实粒度。",
+            )
+        source_sql, parameters = self._model_source(model, release)
+        # 提示里指名道姓：建模者看到「主标识有 4 万条重复」时得知道该改哪一列
+        identifier_label = " + ".join(
+            f"{item.name}（{item.column}）" if item.name != item.column else item.column
+            for item in identifiers
+        )
+        columns = [_quote_identifier(item.column) for item in identifiers]
+        null_predicate = " OR ".join(f"{item} IS NULL" for item in columns)
+        non_null_predicate = " AND ".join(f"{item} IS NOT NULL" for item in columns)
+        distinct_expr = columns[0] if len(columns) == 1 else f"({', '.join(columns)})"
+        query = text(
+            f"""
+            WITH source AS ({source_sql})
+            SELECT
+                COUNT(*)::bigint AS total_rows,
+                COUNT(*) FILTER (WHERE {null_predicate})::bigint AS null_rows,
+                COUNT(DISTINCT {distinct_expr})
+                    FILTER (WHERE {non_null_predicate})::bigint AS distinct_keys
+            FROM source
+            """
+        )
+        row = self._execute_one(query, parameters)
+        total_rows = int(row[0])
+        null_rows = int(row[1])
+        distinct_keys = int(row[2])
+        non_null_rows = total_rows - null_rows
+        duplicate_rows = max(0, non_null_rows - distinct_keys)
+        uniqueness_rate = distinct_keys / non_null_rows if non_null_rows else 1.0
+        null_rate = null_rows / total_rows if total_rows else 0.0
+        blocking = null_rows > 0 or duplicate_rows > 0
+        return ModelGrainProfile(
+            model_id=model.id,
+            identifier_field_ids=tuple(item.id for item in identifiers),
+            total_rows=total_rows,
+            null_rows=null_rows,
+            distinct_non_null_keys=distinct_keys,
+            duplicate_rows=duplicate_rows,
+            uniqueness_rate=uniqueness_rate,
+            null_rate=null_rate,
+            status=QualityStatus.BLOCKING if blocking else QualityStatus.PASSED,
+            message=(
+                f"主标识 {identifier_label} 存在 {null_rows} 条 NULL、"
+                f"{duplicate_rows} 条重复记录（共 {total_rows} 行）。"
+                "换一个在数据里唯一的列做主标识，或取消它的主标识角色。"
+                if blocking
+                else f"主标识 {identifier_label} 在当前数据中非空且唯一。"
+            ),
+        )
 
     def _profile_relations(
         self,
@@ -342,130 +352,131 @@ class ModelingQualityProfiler:
         *,
         started: float,
     ) -> tuple[RelationDataProfile, ...]:
-        model_by_id = {item.id: item for item in release.models}
-        field_by_id = {item.id: item for item in release.fields}
         profiles: list[RelationDataProfile] = []
         for relation in sorted(release.relations, key=lambda item: item.id):
             self._check_deadline(started)
-            left_model = model_by_id[relation.left_model_id]
-            right_model = model_by_id[relation.right_model_id]
-            left_source, left_parameters = self._model_source(left_model, release, prefix="l_")
-            right_source, right_parameters = self._model_source(right_model, release, prefix="r_")
-            left_columns = [
-                _quote_identifier(field_by_id[item.left_field_id].column)
-                for item in relation.conditions
-            ]
-            right_columns = [
-                _quote_identifier(field_by_id[item.right_field_id].column)
-                for item in relation.conditions
-            ]
-            left_select = ", ".join(
-                f"{column} AS k{index}" for index, column in enumerate(left_columns)
-            )
-            right_select = ", ".join(
-                f"{column} AS k{index}" for index, column in enumerate(right_columns)
-            )
-            left_non_null = " AND ".join(f"{column} IS NOT NULL" for column in left_columns)
-            right_non_null = " AND ".join(f"{column} IS NOT NULL" for column in right_columns)
-            equality = " AND ".join(
-                f"l.k{index} = r.k{index}" for index in range(len(left_columns))
-            )
-            query = text(
-                f"""
-                WITH left_source AS ({left_source}),
-                right_source AS ({right_source}),
-                left_keys AS (
-                    SELECT {left_select}, COUNT(*)::bigint AS row_count
-                    FROM left_source
-                    WHERE {left_non_null}
-                    GROUP BY {", ".join(f"k{index}" for index in range(len(left_columns)))}
-                ),
-                right_keys AS (
-                    SELECT {right_select}, COUNT(*)::bigint AS row_count
-                    FROM right_source
-                    WHERE {right_non_null}
-                    GROUP BY {", ".join(f"k{index}" for index in range(len(right_columns)))}
-                ),
-                left_stats AS (
-                    SELECT COUNT(*)::bigint AS total_rows FROM left_source
-                ),
-                right_stats AS (
-                    SELECT COUNT(*)::bigint AS total_rows FROM right_source
-                ),
-                joined_keys AS (
-                    SELECT l.row_count AS left_count, r.row_count AS right_count
-                    FROM left_keys l
-                    FULL OUTER JOIN right_keys r ON {equality}
-                ),
-                joined_stats AS (
-                    SELECT
-                        COALESCE(
-                            SUM(left_count) FILTER (WHERE right_count IS NOT NULL),
-                            0
-                        )::bigint AS matched_left_rows,
-                        COALESCE(
-                            SUM(right_count) FILTER (WHERE left_count IS NOT NULL),
-                            0
-                        )::bigint AS matched_right_rows,
-                        COALESCE(MAX(left_count), 0)::bigint AS max_left_key_multiplicity,
-                        COALESCE(MAX(right_count), 0)::bigint AS max_right_key_multiplicity,
-                        COALESCE(
-                            SUM(left_count * right_count) FILTER (
-                                WHERE left_count IS NOT NULL AND right_count IS NOT NULL
-                            ),
-                            0
-                        )::bigint AS joined_rows
-                    FROM joined_keys
-                )
-                SELECT
-                    left_stats.total_rows,
-                    right_stats.total_rows,
-                    joined_stats.matched_left_rows,
-                    joined_stats.matched_right_rows,
-                    joined_stats.max_left_key_multiplicity,
-                    joined_stats.max_right_key_multiplicity,
-                    joined_stats.joined_rows
-                FROM left_stats
-                CROSS JOIN right_stats
-                CROSS JOIN joined_stats
-                """
-            )
-            row = self._execute_one(query, {**left_parameters, **right_parameters})
-            left_rows, right_rows, matched_left, matched_right, left_max, right_max, joined = (
-                int(value) for value in row
-            )
-            observed = _observed_cardinality(left_max, right_max)
-            status, message = _relation_status(
-                declared=relation.cardinality,
-                observed=observed,
-                left_rows=left_rows,
-                right_rows=right_rows,
-                matched_left=matched_left,
-                matched_right=matched_right,
-            )
-            profiles.append(
-                RelationDataProfile(
-                    relation_id=relation.id,
-                    left_rows=left_rows,
-                    right_rows=right_rows,
-                    matched_left_rows=matched_left,
-                    matched_right_rows=matched_right,
-                    orphan_left_rows=max(0, left_rows - matched_left),
-                    orphan_right_rows=max(0, right_rows - matched_right),
-                    left_join_coverage=matched_left / left_rows if left_rows else 1.0,
-                    right_join_coverage=matched_right / right_rows if right_rows else 1.0,
-                    max_left_key_multiplicity=left_max,
-                    max_right_key_multiplicity=right_max,
-                    joined_rows=joined,
-                    left_fanout_factor=joined / matched_left if matched_left else 0.0,
-                    right_fanout_factor=joined / matched_right if matched_right else 0.0,
-                    declared_cardinality=relation.cardinality,
-                    observed_cardinality=observed,
-                    status=status,
-                    message=message,
-                )
-            )
+            profiles.append(self.profile_relation(relation, release))
         return tuple(profiles)
+
+    def profile_relation(self, relation: Any, release: SemanticRelease) -> RelationDataProfile:
+        """用真实数据核对一条关系：两端命中率、实测基数与扇出倍数。"""
+
+        model_by_id = {item.id: item for item in release.models}
+        field_by_id = {item.id: item for item in release.fields}
+        left_model = model_by_id[relation.left_model_id]
+        right_model = model_by_id[relation.right_model_id]
+        left_source, left_parameters = self._model_source(left_model, release, prefix="l_")
+        right_source, right_parameters = self._model_source(right_model, release, prefix="r_")
+        left_columns = [
+            _quote_identifier(field_by_id[item.left_field_id].column)
+            for item in relation.conditions
+        ]
+        right_columns = [
+            _quote_identifier(field_by_id[item.right_field_id].column)
+            for item in relation.conditions
+        ]
+        left_select = ", ".join(
+            f"{column} AS k{index}" for index, column in enumerate(left_columns)
+        )
+        right_select = ", ".join(
+            f"{column} AS k{index}" for index, column in enumerate(right_columns)
+        )
+        left_non_null = " AND ".join(f"{column} IS NOT NULL" for column in left_columns)
+        right_non_null = " AND ".join(f"{column} IS NOT NULL" for column in right_columns)
+        equality = " AND ".join(f"l.k{index} = r.k{index}" for index in range(len(left_columns)))
+        query = text(
+            f"""
+            WITH left_source AS ({left_source}),
+            right_source AS ({right_source}),
+            left_keys AS (
+                SELECT {left_select}, COUNT(*)::bigint AS row_count
+                FROM left_source
+                WHERE {left_non_null}
+                GROUP BY {", ".join(f"k{index}" for index in range(len(left_columns)))}
+            ),
+            right_keys AS (
+                SELECT {right_select}, COUNT(*)::bigint AS row_count
+                FROM right_source
+                WHERE {right_non_null}
+                GROUP BY {", ".join(f"k{index}" for index in range(len(right_columns)))}
+            ),
+            left_stats AS (
+                SELECT COUNT(*)::bigint AS total_rows FROM left_source
+            ),
+            right_stats AS (
+                SELECT COUNT(*)::bigint AS total_rows FROM right_source
+            ),
+            joined_keys AS (
+                SELECT l.row_count AS left_count, r.row_count AS right_count
+                FROM left_keys l
+                FULL OUTER JOIN right_keys r ON {equality}
+            ),
+            joined_stats AS (
+                SELECT
+                    COALESCE(
+                        SUM(left_count) FILTER (WHERE right_count IS NOT NULL),
+                        0
+                    )::bigint AS matched_left_rows,
+                    COALESCE(
+                        SUM(right_count) FILTER (WHERE left_count IS NOT NULL),
+                        0
+                    )::bigint AS matched_right_rows,
+                    COALESCE(MAX(left_count), 0)::bigint AS max_left_key_multiplicity,
+                    COALESCE(MAX(right_count), 0)::bigint AS max_right_key_multiplicity,
+                    COALESCE(
+                        SUM(left_count * right_count) FILTER (
+                            WHERE left_count IS NOT NULL AND right_count IS NOT NULL
+                        ),
+                        0
+                    )::bigint AS joined_rows
+                FROM joined_keys
+            )
+            SELECT
+                left_stats.total_rows,
+                right_stats.total_rows,
+                joined_stats.matched_left_rows,
+                joined_stats.matched_right_rows,
+                joined_stats.max_left_key_multiplicity,
+                joined_stats.max_right_key_multiplicity,
+                joined_stats.joined_rows
+            FROM left_stats
+            CROSS JOIN right_stats
+            CROSS JOIN joined_stats
+            """
+        )
+        row = self._execute_one(query, {**left_parameters, **right_parameters})
+        left_rows, right_rows, matched_left, matched_right, left_max, right_max, joined = (
+            int(value) for value in row
+        )
+        observed = _observed_cardinality(left_max, right_max)
+        status, message = _relation_status(
+            declared=relation.cardinality,
+            observed=observed,
+            left_rows=left_rows,
+            right_rows=right_rows,
+            matched_left=matched_left,
+            matched_right=matched_right,
+        )
+        return RelationDataProfile(
+            relation_id=relation.id,
+            left_rows=left_rows,
+            right_rows=right_rows,
+            matched_left_rows=matched_left,
+            matched_right_rows=matched_right,
+            orphan_left_rows=max(0, left_rows - matched_left),
+            orphan_right_rows=max(0, right_rows - matched_right),
+            left_join_coverage=matched_left / left_rows if left_rows else 1.0,
+            right_join_coverage=matched_right / right_rows if right_rows else 1.0,
+            max_left_key_multiplicity=left_max,
+            max_right_key_multiplicity=right_max,
+            joined_rows=joined,
+            left_fanout_factor=joined / matched_left if matched_left else 0.0,
+            right_fanout_factor=joined / matched_right if matched_right else 0.0,
+            declared_cardinality=relation.cardinality,
+            observed_cardinality=observed,
+            status=status,
+            message=message,
+        )
 
     def _preview_metrics(
         self,
@@ -482,35 +493,70 @@ class ModelingQualityProfiler:
                         "metric preview count exceeds the configured limit",
                         code="MODELING_QUALITY_SCOPE_TOO_LARGE",
                     )
-                preview_id = f"metric_preview_{uuid.uuid4().hex}"
-                try:
-                    physical = self._translator.translate(
-                        release=release,
-                        query=SemanticQuery(dataset_id=dataset.id, metric_ids=(metric_id,)),
-                    )
-                    result = self._executor.execute(query=physical, release=release)
-                    previews.append(
-                        MetricPreview(
-                            id=preview_id,
-                            dataset_id=dataset.id,
-                            metric_id=metric_id,
-                            columns=result.columns,
-                            rows=result.rows,
-                            message="请与认证报表或业务负责人核对该指标样本值。",
-                        )
-                    )
-                except AnalyticsError as exc:
-                    previews.append(
-                        MetricPreview(
-                            id=preview_id,
-                            dataset_id=dataset.id,
-                            metric_id=metric_id,
-                            status=QualityStatus.BLOCKING,
-                            error_code=exc.code,
-                            message=str(exc),
-                        )
-                    )
+                previews.append(self.preview_metric(dataset.id, metric_id, release))
         return tuple(previews)
+
+    def preview_metric(
+        self,
+        dataset_id: str,
+        metric_id: str,
+        release: SemanticRelease,
+    ) -> MetricPreview:
+        """取一个指标的样本值。翻译或执行失败同样是结论，装进 preview 而不是抛出。"""
+
+        preview_id = f"metric_preview_{uuid.uuid4().hex}"
+        try:
+            physical = self._translator.translate(
+                release=release,
+                query=SemanticQuery(dataset_id=dataset_id, metric_ids=(metric_id,)),
+            )
+            result = self._executor.execute(query=physical, release=release)
+        except AnalyticsError as exc:
+            return MetricPreview(
+                id=preview_id,
+                dataset_id=dataset_id,
+                metric_id=metric_id,
+                status=QualityStatus.BLOCKING,
+                error_code=exc.code,
+                message=str(exc),
+            )
+        return MetricPreview(
+            id=preview_id,
+            dataset_id=dataset_id,
+            metric_id=metric_id,
+            columns=result.columns,
+            rows=result.rows,
+            message="请与认证报表或业务负责人核对该指标样本值。",
+        )
+
+    def preview_model_rows(
+        self,
+        model: Any,
+        release: SemanticRelease,
+        *,
+        limit: int = 20,
+    ) -> ModelRowsPreview:
+        """按受治理来源取几行真实数据。
+
+        建模者判断一列是不是账号、一个数值是不是档位，看一眼原始行比读任何统计量都快。
+        走的是模型的受治理来源（含行级过滤），不是裸表——预览里出现的行，问数时也能查到。
+        """
+
+        if not 1 <= limit <= MODEL_ROWS_PREVIEW_LIMIT:
+            raise ModelingQualityError(
+                f"row preview limit must be between 1 and {MODEL_ROWS_PREVIEW_LIMIT}",
+                code="MODELING_QUALITY_SCOPE_TOO_LARGE",
+            )
+        source_sql, parameters = self._model_source(model, release)
+        # 多取一行只为判断「还有更多」，不返回给调用方。
+        query = text(f"WITH source AS ({source_sql}) SELECT * FROM source LIMIT {limit + 1}")
+        columns, fetched = self._execute_rows(query, parameters)
+        return ModelRowsPreview(
+            model_id=model.id,
+            columns=columns,
+            rows=fetched[:limit],
+            truncated=len(fetched) > limit,
+        )
 
     @staticmethod
     def _reachability_matrix(
@@ -592,6 +638,21 @@ class ModelingQualityProfiler:
         发布前质量报告一条都跑不出来。
         """
 
+        return self._run(query, parameters, lambda result: tuple(result.one()))
+
+    def _execute_rows(
+        self, query: Any, parameters: dict[str, Any]
+    ) -> tuple[tuple[str, ...], tuple[tuple[Any, ...], ...]]:
+        """同一条只读通路，取多行。数值按执行器那套规则归一，免得尾零进到界面。"""
+
+        def fetch(result: Any) -> tuple[tuple[str, ...], tuple[tuple[Any, ...], ...]]:
+            columns = tuple(map(str, result.keys()))
+            rows = tuple(tuple(normalize_cell(cell) for cell in row) for row in result.fetchall())
+            return columns, rows
+
+        return self._run(query, parameters, fetch)
+
+    def _run(self, query: Any, parameters: dict[str, Any], fetch: Any) -> Any:
         statement = text(to_dialect_sql(str(query), self._dialect))
         try:
             with self._engine.connect() as connection, connection.begin():
@@ -599,8 +660,7 @@ class ModelingQualityProfiler:
                     statement_timeout_ms=self._statement_timeout_ms, lock_timeout_ms=2_000
                 ):
                     connection.exec_driver_sql(item)
-                row = connection.execute(statement, parameters).one()
-                return tuple(row)
+                return fetch(connection.execute(statement, parameters))
         except SQLAlchemyError as exc:
             raise ModelingQualityError(
                 f"{self._dialect.value} quality profile query failed"

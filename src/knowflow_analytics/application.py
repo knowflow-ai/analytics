@@ -2704,7 +2704,12 @@ class AnalyticsApplication:
         self, snapshot: SchemaSnapshot, *, project_id: str
     ) -> dict[tuple[str, str], TableProfile]:
         """S1 画像。没配 profiler 或某张表失败时返回空/跳过：画像是证据不是门禁，
-        规则会退回类型 + 列名。"""
+        规则会退回类型 + 列名。
+
+        算完顺手落库。唯一率、基数、采样值本来算完即丢，建模页想拿只能再扫一次客户
+        库——而主标识选错、档位列被当成账号，用的都是这里已经量出来的数。画像绑 schema
+        快照，目录怎么编辑都不会让它失效。
+        """
 
         column_profiler = self._source(project_id).column_profiler
         if column_profiler is None:
@@ -2720,6 +2725,17 @@ class AnalyticsApplication:
                 continue
             if profile.error is None:
                 profiles[(table.schema_name, table.name)] = profile
+        if profiles:
+            try:
+                self.catalog.save_table_profiles(
+                    project_id=project_id,
+                    schema_snapshot_hash=snapshot.content_hash,
+                    profiles=tuple(profiles.values()),
+                )
+            except Exception:  # noqa: BLE001 — 落库失败同样不能阻断建模
+                logging.getLogger(__name__).exception(
+                    "table profile persist failed project=%s", project_id
+                )
         return profiles
 
     def _preset_new_dimension_values(

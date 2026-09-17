@@ -47,8 +47,10 @@ from knowflow_analytics.modeling.contracts import (
 )
 from knowflow_analytics.modeling.domain import DomainGovernance, DomainLifecycle
 from knowflow_analytics.modeling.drift import SchemaDriftReport
+from knowflow_analytics.modeling.fact_checks import FactCheckRecord
 from knowflow_analytics.modeling.layout import ModelGraphLayout
 from knowflow_analytics.modeling.product import ModelingPlan, ModelingPlanStatus
+from knowflow_analytics.modeling.profile import TableProfile
 from knowflow_analytics.modeling.quality import (
     ModelingQualityReport,
     ModelingQualityReportStatus,
@@ -126,6 +128,33 @@ schema_snapshots = Table(
     Column("content_hash", String(128), nullable=False),
     Column("payload", JSON, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
+)
+
+table_profiles = Table(
+    "analytics_table_profile",
+    metadata,
+    Column("id", String(128), primary_key=True),
+    Column("project_id", String(128), nullable=False, index=True),
+    # 画像绑 schema 快照而不是版本：目录怎么编辑都不会让它失效，只有库变了才失效。
+    Column("schema_snapshot_hash", String(128), nullable=False, index=True),
+    Column("schema_name", String(256), nullable=False),
+    Column("table_name", String(256), nullable=False),
+    Column("payload", JSON, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
+
+fact_check_results = Table(
+    "analytics_fact_check",
+    metadata,
+    Column("id", String(128), primary_key=True),
+    Column("project_id", String(128), nullable=False, index=True),
+    Column("kind", String(32), nullable=False),
+    Column("subject_id", String(256), nullable=False),
+    # 内容寻址：对象一变键就变，旧结果查不到，不需要「改完标灰」的比对。
+    Column("subject_hash", String(128), nullable=False, index=True),
+    Column("status", String(32), nullable=False),
+    Column("payload", JSON, nullable=False),
+    Column("computed_at", DateTime(timezone=True), nullable=False),
 )
 
 revisions = Table(
@@ -481,6 +510,21 @@ def _schema_snapshot_storage_id(project_id: str, snapshot_id: str) -> str:
 
     digest = uuid.uuid5(uuid.NAMESPACE_URL, f"knowflow-analytics:{project_id}:{snapshot_id}").hex
     return f"schema_scope_{digest}"
+
+
+def _table_profile_storage_id(project_id: str, schema_snapshot_hash: str, table: str) -> str:
+    digest = uuid.uuid5(
+        uuid.NAMESPACE_URL,
+        f"knowflow-analytics:profile:{project_id}:{schema_snapshot_hash}:{table}",
+    ).hex
+    return f"table_profile_{digest}"
+
+
+def _fact_check_storage_id(project_id: str, subject_hash: str) -> str:
+    digest = uuid.uuid5(
+        uuid.NAMESPACE_URL, f"knowflow-analytics:fact-check:{project_id}:{subject_hash}"
+    ).hex
+    return f"fact_check_{digest}"
 
 
 def _model_graph_layout_id(project_id: str, revision_id: str) -> str:
@@ -1105,6 +1149,88 @@ class CatalogStore:
         if payload is None:
             raise CatalogError("schema snapshot was not found", code="SNAPSHOT_NOT_FOUND")
         return SchemaSnapshot.model_validate(payload)
+
+    def save_table_profiles(
+        self,
+        *,
+        project_id: str,
+        schema_snapshot_hash: str,
+        profiles: tuple[TableProfile, ...],
+    ) -> None:
+        """留住 AI 建模第一步算过的列画像。
+
+        唯一率、基数、采样值全量算过一遍，此前用完即丢，建模页想拿只能再扫一次库。
+        """
+
+        self.get_project(project_id)
+        now = datetime.now(UTC)
+        with self._engine.begin() as connection:
+            for profile in profiles:
+                qualified = f"{profile.schema_name}.{profile.table}"
+                storage_id = _table_profile_storage_id(project_id, schema_snapshot_hash, qualified)
+                connection.execute(delete(table_profiles).where(table_profiles.c.id == storage_id))
+                connection.execute(
+                    insert(table_profiles).values(
+                        id=storage_id,
+                        project_id=project_id,
+                        schema_snapshot_hash=schema_snapshot_hash,
+                        schema_name=profile.schema_name,
+                        table_name=profile.table,
+                        payload=profile.model_dump(mode="json"),
+                        created_at=now,
+                    )
+                )
+
+    def load_table_profiles(
+        self, *, project_id: str, schema_snapshot_hash: str
+    ) -> tuple[TableProfile, ...]:
+        with self._engine.connect() as connection:
+            rows = connection.execute(
+                select(table_profiles.c.payload)
+                .where(
+                    table_profiles.c.project_id == project_id,
+                    table_profiles.c.schema_snapshot_hash == schema_snapshot_hash,
+                )
+                .order_by(table_profiles.c.schema_name, table_profiles.c.table_name)
+            ).scalars()
+            return tuple(TableProfile.model_validate(item) for item in rows)
+
+    def save_fact_check(self, *, project_id: str, record: FactCheckRecord) -> None:
+        self.get_project(project_id)
+        storage_id = _fact_check_storage_id(project_id, record.subject_hash)
+        with self._engine.begin() as connection:
+            connection.execute(
+                delete(fact_check_results).where(fact_check_results.c.id == storage_id)
+            )
+            connection.execute(
+                insert(fact_check_results).values(
+                    id=storage_id,
+                    project_id=project_id,
+                    kind=record.kind.value,
+                    subject_id=record.subject_id,
+                    subject_hash=record.subject_hash,
+                    status=record.status.value,
+                    payload=record.model_dump(mode="json"),
+                    computed_at=record.computed_at,
+                )
+            )
+
+    def load_fact_checks(
+        self, *, project_id: str, subject_hashes: tuple[str, ...]
+    ) -> dict[str, FactCheckRecord]:
+        """按内容键取缓存。查不到的键就是「这个对象还没核对过」，不是错误。"""
+
+        if not subject_hashes:
+            return {}
+        with self._engine.connect() as connection:
+            rows = connection.execute(
+                select(fact_check_results.c.payload).where(
+                    fact_check_results.c.project_id == project_id,
+                    fact_check_results.c.subject_hash.in_(set(subject_hashes)),
+                )
+            ).scalars()
+            records = [FactCheckRecord.model_validate(item) for item in rows]
+        return {item.subject_hash: item for item in records}
 
     def save_revision(self, revision: ModelingRevision) -> None:
         self._require_catalog_revision(revision)

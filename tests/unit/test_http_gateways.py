@@ -514,7 +514,7 @@ def test_model_gateway_gives_modeling_purposes_their_own_longer_timeout():
     assert seen["analytics.dimension_value_aliases"] == 180.0
     assert seen["analytics.alias_suggestion"] == 180.0
     assert seen["analytics.modeling.naming"] == 180.0
-    assert seen["analytics.s2sql"] == 30.0  # 问数链路的上限不变
+    assert seen["analytics.s2sql"] == 60.0  # 问数链路走自己那档，不吃建模的 180
     assert seen["analytics.result_interpretation"] == 20.0
 
 
@@ -535,13 +535,16 @@ def test_model_gateway_timeout_is_a_distinct_error():
 
 
 def test_query_purpose_timeout_is_configurable_per_deployment():
-    """现场这台模型生成一条 SQL 要 25 到 35 秒，写死的 30 秒把它卡在线上。"""
+    """现场这台模型生成一条 SQL 要 25 到 35 秒，写死的 30 秒把它卡在线上。
+
+    默认已抬到 60：超时这一档不重试，卡在边上就是整条问不出来。
+    """
 
     default = HttpModelGateway(
         base_url="http://ragflow.invalid", service_token="service-token", llm_id="m@p"
     )
-    assert default._timeout_for("analytics.s2sql") == 30.0
-    assert default._timeout_for("analytics.s2sql.corrector") == 30.0
+    assert default._timeout_for("analytics.s2sql") == 60.0
+    assert default._timeout_for("analytics.s2sql.corrector") == 60.0
 
     slow = HttpModelGateway(
         base_url="http://ragflow.invalid",
@@ -554,6 +557,15 @@ def test_query_purpose_timeout_is_configurable_per_deployment():
     assert slow._timeout_for("analytics.physical_sql.corrector") == 90.0
     # 改写、歧义、解读这几档不跟着放大
     assert slow._timeout_for("analytics.multi_turn_rewrite") == 20.0
+
+    # 只调 SQL 那一档没有用：全局压着它。诊断里的建议文案必须把这条说出来。
+    capped = HttpModelGateway(
+        base_url="http://ragflow.invalid",
+        service_token="service-token",
+        llm_id="m@p",
+        query_timeout_seconds=300.0,
+    )
+    assert capped._timeout_for("analytics.s2sql") == 60.0
 
 
 def test_model_call_records_carry_output_size():

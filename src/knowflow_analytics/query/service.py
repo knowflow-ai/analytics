@@ -4966,8 +4966,9 @@ def _error_diagnosis(exc: AnalyticsError) -> QueryDiagnosis:
             severity="error",
             summary="模型在读超时内没有写完这条查询",
             recommendation=(
-                "调大 KNOWFLOW_ANALYTICS_MODEL_GATEWAY_QUERY_TIMEOUT_SECONDS，"
-                "或给问数换一个更快的模型。"
+                "调大 KNOWFLOW_ANALYTICS_MODEL_GATEWAY_QUERY_TIMEOUT_SECONDS；"
+                "它被 KNOWFLOW_ANALYTICS_MODEL_GATEWAY_TIMEOUT_SECONDS 压着，"
+                "要超过后者就两项一起调。或给问数换一个更快的模型。"
             ),
             user_hint="模型这次没能在规定时间内作答，没有结果可以给你。请稍后重试。",
         )

@@ -108,8 +108,8 @@ class TestTimeoutPolicy:
         gateway, client = _gateway([_OK, _OK], timeout_seconds=240.0)
         _call(gateway, "analytics.s2sql")
         _call(gateway, "analytics.modeling")
-        # 问数链路 30s 封顶；建模沿用全局（AI 补全要跑很久）。
-        assert [item["timeout"] for item in client.calls] == [30.0, 240.0]
+        # 问数链路 60s 封顶；建模沿用全局（AI 补全要跑很久）。
+        assert [item["timeout"] for item in client.calls] == [60.0, 240.0]
 
     def test_the_cap_never_raises_a_smaller_global_timeout(self) -> None:
         gateway, client = _gateway([_OK], timeout_seconds=10.0)

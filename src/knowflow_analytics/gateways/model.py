@@ -76,7 +76,7 @@ class HttpModelGateway:
         llm_id: str,
         timeout_seconds: float = 60.0,
         modeling_timeout_seconds: float = 180.0,
-        query_timeout_seconds: float = 30.0,
+        query_timeout_seconds: float = 60.0,
         client: httpx.Client | None = None,
     ) -> None:
         self._owns_client = client is None

@@ -51,9 +51,12 @@ class AnalyticsSettings(BaseSettings):
     # 它与 model_gateway_timeout_seconds 中较大者；
     # 自建 vLLM 上一批维度值别名常超过 60 秒（2026-09-16 现场）。
     model_gateway_modeling_timeout_seconds: float = Field(default=180.0, ge=1.0, le=600.0)
-    # 生成 / 校正 SQL 的读超时。自建慢模型写一条 SQL 要 25 到 35 秒时调大它；改写、歧义、
-    # 解读这几档不跟着放大。
-    model_gateway_query_timeout_seconds: float = Field(default=30.0, ge=1.0, le=600.0)
+    # 生成 / 校正 SQL 的读超时；改写、歧义、解读这几档不跟着放大。
+    #
+    # 2026-09-16 起默认 60（原 30）：现场自建模型写一条带 CTE 的条件占比查询要 25 到 35 秒，
+    # 30 秒常年卡在边上，而超时这一档**不重试**——一次超时就是整条问不出来。
+    # 实际生效值是 min(本项, model_gateway_timeout_seconds)，所以要给到 60 以上时两项都得抬。
+    model_gateway_query_timeout_seconds: float = Field(default=60.0, ge=1.0, le=600.0)
     # One-click modeling fans out per table and per business entity. Free model
     # tiers reject that burst (Groq 429 on tokens-per-minute, Gemini 503) while
     # answering the same calls serially, so the fan-out has to match the

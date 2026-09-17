@@ -89,6 +89,33 @@ class _ExemplarVectorSnapshot:
     vectors: tuple[tuple[float, ...], ...]
 
 
+
+def _projection_describes_the_reviewed_answer(case: GoldenCase, query: SemanticQuery) -> bool:
+    """Report whether the stored projection can stand in for the reviewed answer.
+
+    Without ``expected_s2sql`` the prompt renders the projection instead
+    (``serialize_s2sql``), and that fabricated statement is presented to the model
+    as a human-reviewed example. ``semantic_query`` is an inspector projection —
+    it carries no CTE, no aggregate over one, and no predicate on a derived
+    alias — so for those answers the fabrication teaches the wrong query under a
+    label claiming somebody checked it. The case's own question is its nearest
+    neighbour, so it is always the exemplar that wins.
+
+    The reviewed rows are evidence the projection cannot argue with: a projection
+    selects one column per dimension and per metric, so a different width proves
+    it does not describe what the reviewer approved. (Necessary, not sufficient —
+    equal widths can still have lost a filter. The durable fix is storing
+    ``corrected_s2sql`` at review time; this only keeps existing cases honest.)
+    """
+
+    rows = case.expected_rows
+    if not rows:
+        # A reviewed empty result proves nothing about the projection's shape,
+        # and an unverifiable example is worse than none.
+        return False
+    return len(rows[0]) == len(query.dimension_ids) + len(query.metric_ids)
+
+
 class GoldenSuiteExemplarProvider:
     """Recall explicit reviewed examples from the existing GoldenSuite authority.
 
@@ -151,6 +178,8 @@ class GoldenSuiteExemplarProvider:
                         )
                     except AnalyticsError:
                         continue
+                elif not _projection_describes_the_reviewed_answer(case, query):
+                    continue
                 identity = (" ".join(case.question.split()).casefold(), query.dataset_id)
                 if identity in seen:
                     continue

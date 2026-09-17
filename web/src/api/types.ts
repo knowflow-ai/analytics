@@ -1158,6 +1158,8 @@ export interface AnalyticsGoldenCase {
   expected_order_by?: AnalyticsQueryOrder[];
   expected_limit?: number;
   expected_s2sql?: string;
+  /** 那次答案真正有哪几列;缺席是升级前存的用例,比对退回从语义投影反推。 */
+  expected_columns?: string[];
   expected_rows?: unknown[][];
   row_order_matters: boolean;
   numeric_tolerance: string;

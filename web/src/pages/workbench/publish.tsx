@@ -695,7 +695,18 @@ function TrialQuestions({
             expected_limit: response.semantic_query.limit ?? undefined,
             // 契约要求 COMPLETED 用例必须带结果行(实测被拒才发现);没有显式
             // 排序时行序不稳定,不按序比对。
+            // 那次答案真正有哪几列。评测重跑的是同一个问题、同一条链路,两边都是
+            // 真实执行结果,存下来就能直接比;不存就只能从 semantic_query 反推列清单,
+            // 而投影是有损的——CTE 内部的分组维度也算投影成员,塌成一列的答案于是
+            // 「结果列无法与期望对齐」(实测:「账户余额大于 1000 的有多少人」)。
+            expected_columns: response.data.columns,
             expected_rows: response.data.rows,
+            // 自然语言路径的权威是 corrected_s2sql,不是 semantic_query——后者是只读
+            // 观察投影,表达不了 CTE、CTE 之上的聚合和落在派生别名上的过滤。不存它,
+            // 少样本渲染就会拿投影现编一条 SQL 冒充「人工确认的示例」,而这条示例与
+            // 原问题字字相同、相似度最高,必被选中,于是存一条答对的用例反倒教会模型
+            // 答错(实测:「账户余额大于 1000 的有多少人」存下后由 28 变 1.0)。
+            expected_s2sql: response.corrected_s2sql,
             // 行序只在 top-N 下有语义;无 limit 时行序随 ORDER BY 是否出现而波动。
             row_order_matters:
               (response.semantic_query.order_by?.length ?? 0) > 0 &&

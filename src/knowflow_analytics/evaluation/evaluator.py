@@ -376,15 +376,17 @@ def _result_diff(
     if case.expected_rows is None:
         return []
     expected_rows = case.expected_rows
-    aligned = _align_rows(
+    aligned = _aligned_actual_rows(
+        case=case,
         actual_columns=response.data.columns,
         actual_rows=response.data.rows,
-        expected_columns=(*case.expected_dimension_ids, *case.expected_metric_ids),
-        # 期望行的宽度才是输出真正的列数：WITH 按实体聚合再算占比这类答案，语义投影里
-        # 有指标和分组维度两个成员，输出却只有一列合成表达式。
-        expected_width=len(expected_rows[0]) if expected_rows else None,
     )
     if aligned is None:
+        if case.expected_columns is not None:
+            return [
+                f"结果列不同: 期望 {_fmt_ids(case.expected_columns)} "
+                f"→ 实际 {_fmt_ids(response.data.columns)}"
+            ]
         return [f"结果列无法与期望对齐: 实际列 {_fmt_ids(response.data.columns)}"]
     if len(aligned) != len(expected_rows):
         return [f"行数: 期望 {len(expected_rows)} 行 → 实际 {len(aligned)} 行"]
@@ -420,6 +422,52 @@ def _order_signature(orders: tuple[Any, ...]) -> tuple[tuple[str, str], ...]:
     return tuple((item.element_id, item.direction.value) for item in orders)
 
 
+def _aligned_actual_rows(
+    *,
+    case: GoldenCase,
+    actual_columns: tuple[str, ...],
+    actual_rows: tuple[tuple[Any, ...], ...],
+) -> tuple[tuple[Any, ...], ...] | None:
+    """Put this run's rows in the reviewed run's column order, or None if they differ.
+
+    Both sides are real results of the same question through the same pipeline, so
+    when the case recorded its own columns this is just a comparison. Aligning by
+    column identity (rather than by position) absorbs the one difference that is
+    not a difference: the model writing ``SELECT 指标, 维度`` one run and
+    ``SELECT 维度, 指标`` the next.
+
+    Cases saved before columns were recorded have only a semantic projection to
+    go on, so they fall back to deriving the column list from it. That derivation
+    is lossy — a CTE's inner grouping dimension is a projection member but never
+    an output column — which is why the recorded columns exist.
+    """
+
+    expected_columns = case.expected_columns
+    if expected_columns is None:
+        return _align_rows(
+            actual_columns=actual_columns,
+            actual_rows=actual_rows,
+            expected_columns=(*case.expected_dimension_ids, *case.expected_metric_ids),
+            expected_width=(
+                len(case.expected_rows[0]) if case.expected_rows else None
+            ),
+        )
+    if len(actual_columns) != len(expected_columns):
+        return None
+    available: dict[str, list[int]] = {}
+    for index, column in enumerate(actual_columns):
+        available.setdefault(column, []).append(index)
+    permutation: list[int] = []
+    for column in expected_columns:
+        indexes = available.get(column)
+        if not indexes:
+            return None
+        permutation.append(indexes.pop(0))
+    if any(len(row) != len(actual_columns) for row in actual_rows):
+        return None
+    return tuple(tuple(row[index] for index in permutation) for row in actual_rows)
+
+
 def _align_rows(
     *,
     actual_columns: tuple[str, ...],
@@ -434,13 +482,19 @@ def _align_rows(
     # 对上(说明 id 命名在用),仍走严格对齐,防列序漂移的保护不放松。
     # 按位置对齐时以期望行的宽度为准:语义投影的成员数可以比输出列多（WITH 里的
     # 分组维度不进输出）。
+    width = expected_width if expected_width is not None else len(expected_columns)
     if not set(actual_columns) & set(expected_columns):
-        width = expected_width if expected_width is not None else len(expected_columns)
         if len(actual_columns) != width:
             return None
         return actual_rows
     if len(actual_columns) != len(expected_columns):
-        return None
+        # 成员数多于输出列数时,重名不是「id 命名在用」的证据:塌成一列的
+        # COUNT("账号") 会被标回账号维度的语义 id,值却是个计数。判据只能是宽度——
+        # 人确认过的结果有几列是事实,投影比它多属于已知的有损。宽度也对不上才是
+        # 真的对不上。
+        if len(actual_columns) != width:
+            return None
+        return actual_rows
     available: dict[str, list[int]] = {}
     for index, column in enumerate(actual_columns):
         available.setdefault(column, []).append(index)
@@ -463,14 +517,12 @@ def _completed_result_matches(
     if case.expected_rows is None:
         return None
     if projection_matches:
-        expected_rows = case.expected_rows
-        actual_rows = _align_rows(
+        # 判定与诊断消息必须用同一个对齐：两边算法一旦分岔，用例会判失败，消息却
+        # 逐值比都相等，落到末尾那句「行内容不一致」的兜底文案。
+        actual_rows = _aligned_actual_rows(
+            case=case,
             actual_columns=response.data.columns,
             actual_rows=response.data.rows,
-            expected_columns=(*case.expected_dimension_ids, *case.expected_metric_ids),
-            # 判定与诊断消息必须用同一个对齐：只有诊断加了宽度时，用例会判失败，
-            # 消息却逐值比都相等，落到末尾那句「行内容不一致」的兜底文案。
-            expected_width=len(expected_rows[0]) if expected_rows else None,
         )
     else:
         permutation = _semantic_slot_permutation(

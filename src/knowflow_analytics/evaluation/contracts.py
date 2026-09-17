@@ -49,6 +49,11 @@ class GoldenCase(FrozenModel):
     expected_order_by: tuple[QueryOrder, ...] | None = None
     expected_limit: int | None = Field(default=None, ge=1, le=100_000)
     expected_s2sql: str | None = Field(default=None, min_length=1, max_length=100_000)
+    # 那次答案真正有哪几列。评测重跑的是同一个问题、同一条链路，两边都是真实执行
+    # 结果，存下来就能直接比；不存就只能从语义投影反推列清单，而投影是有损的——
+    # CTE 内部的分组维度也算投影成员，塌成一列的答案于是「对不齐」。
+    # None 是升级前存的用例，走兼容兜底。
+    expected_columns: tuple[str, ...] | None = None
     expected_rows: tuple[tuple[Any, ...], ...] | None = None
     row_order_matters: bool = True
     numeric_tolerance: Decimal = Decimal("0.000001")
@@ -72,6 +77,12 @@ class GoldenCase(FrozenModel):
             raise ValueError("completed golden case requires expected semantic projection")
         if self.expected_state is QueryState.COMPLETED and self.expected_rows is None:
             raise ValueError("completed golden case requires expected result rows")
+        if (
+            self.expected_columns is not None
+            and self.expected_rows
+            and any(len(row) != len(self.expected_columns) for row in self.expected_rows)
+        ):
+            raise ValueError("golden result rows must match the recorded columns")
         if self.expected_state is QueryState.FAILED and not self.expected_error_code:
             raise ValueError("failed golden case requires expected_error_code")
         if self.expected_state is QueryState.FAILED and self.expected_s2sql is not None:

@@ -27,6 +27,22 @@ from knowflow_analytics.modeling.type_system import (
 
 REVIEW_THRESHOLD = 0.8
 
+# 主标识的数据判据：一个键必须几乎每行不同，样本还得大到让「几乎」有意义。
+# 44224 行里 411 个取值（唯一率 0.9%）就是客户现场那根被标成主标识的列。
+PRIMARY_IDENTIFIER_MIN_RATIO = 0.95
+PRIMARY_IDENTIFIER_MIN_ROWS = 100
+
+
+def data_supports_primary_identifier(profile: ColumnProfile | None, row_count: int) -> bool | None:
+    """真实数据支不支持把这一列当主标识。None 表示证据不足，不下结论。
+
+    行数太少时唯一率没有说服力——40 行里 40 个取值证明不了它是键，只说明还没撞上。
+    """
+
+    if profile is None or row_count < PRIMARY_IDENTIFIER_MIN_ROWS:
+        return None
+    return profile.distinct_ratio >= PRIMARY_IDENTIFIER_MIN_RATIO
+
 
 class TableRole(StrEnum):
     FACT = "fact"
@@ -121,7 +137,7 @@ def _classify_column(
     if is_temporal_type(dtype):
         return out(FieldKind.TIME, 0.95, "时间类型", dimension_type="time")
     # 4 几乎每行不同：是键不是度量
-    if ratio is not None and ratio >= 0.95 and row_count >= 100:
+    if data_supports_primary_identifier(profile, row_count):
         return out(
             FieldKind.IDENTIFIER,
             0.9,

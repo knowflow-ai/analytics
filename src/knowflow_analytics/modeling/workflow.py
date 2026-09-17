@@ -14,6 +14,7 @@ import re
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from typing import Literal
 
 from pydantic import ValidationError
 
@@ -26,7 +27,10 @@ from knowflow_analytics.modeling.catalog_contracts import (
     SemanticColumnType,
     SemanticMetricContract,
 )
-from knowflow_analytics.modeling.classify import Prefill
+from knowflow_analytics.modeling.classify import (
+    Prefill,
+    data_supports_primary_identifier,
+)
 from knowflow_analytics.modeling.contracts import TableSnapshot
 from knowflow_analytics.modeling.profile import ColumnProfile, TableProfile
 from knowflow_analytics.modeling.prompts import (
@@ -376,10 +380,11 @@ class StagedTableModeler:
                     }
                 )
                 continue
+            identifier_type, veto_note = _identifier_type_for(kind, rule, profile, f.column)
             out[f.column] = Prefill(
                 column=f.column,
                 kind=kind,
-                identifier_type="primary" if kind is FieldKind.IDENTIFIER else None,
+                identifier_type=identifier_type,
                 dimension_type=(
                     "time"
                     if kind is FieldKind.TIME
@@ -391,7 +396,7 @@ class StagedTableModeler:
                 confidence=0.5,
                 judgment_zone=True,
                 disputed=True,
-                reason=_dispute_note(rule, kind, agg, item.reason),
+                reason=_dispute_note(rule, kind, agg, item.reason) + veto_note,
             )
         return out
 
@@ -513,6 +518,37 @@ class StagedTableModeler:
 
 def _normalize_column(name: str) -> str:
     return unicodedata.normalize("NFKC", name).strip().casefold()
+
+
+def _identifier_type_for(
+    kind: FieldKind,
+    rule: Prefill,
+    table: TableProfile | None,
+    column: str,
+) -> tuple[Literal["primary", "foreign"] | None, str]:
+    """模型说这是标识列时，由数据决定它是不是主标识。
+
+    一个错的主标识会静默重定义整张表的粒度，直到发布前的质量报告才炸；
+    错的外键是惰性的——粒度核对只读 primary，扇出判定读的是关系基数。
+    所以数据说不唯一时降成 foreign，没有数据时也不凭空发明 primary。
+    """
+
+    if kind is not FieldKind.IDENTIFIER:
+        return None, ""
+    profile = table.column(column) if table else None
+    supported = data_supports_primary_identifier(profile, table.row_count if table else 0)
+    if supported:
+        return "primary", ""
+    if supported is None:
+        return rule.identifier_type or "foreign", ""
+    assert profile is not None
+    note = (
+        f"；数据否决主标识：唯一率 {profile.distinct_ratio:.1%}"
+        f"（{profile.distinct_count}/{table.row_count} 行）"
+    )
+    if table.truncated:
+        note += "，统计来自抽样"
+    return "foreign", note
 
 
 def _dispute_note(

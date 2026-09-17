@@ -24,6 +24,7 @@ from knowflow_analytics.modeling.fact_checks import (
     FactCheckKind,
     metric_subject_id,
 )
+from knowflow_analytics.modeling.profile import ColumnProfile, TableProfile
 from knowflow_analytics.modeling.quality import (
     ModelGrainProfile,
     ModelingQualityError,
@@ -280,3 +281,39 @@ def test_the_two_routes_hand_the_page_what_it_needs(app) -> None:
         item for item in again.json()["entries"] if item["subject_hash"] == entry["subject_hash"]
     )
     assert hit["result"]["payload"]["duplicate_rows"] == 43813
+
+
+def test_the_column_profiles_measured_during_modeling_are_readable(app) -> None:
+    """一个只有 15 个取值、区间 -150 到 1000 的整数列会被 AI 命名成「账户号」。
+
+    人一眼就能看出它不是账号——只要他看得到这些数字。它们本来就量过。
+    """
+
+    application, revision, _ = app
+    application.catalog.save_table_profiles(
+        project_id="sales",
+        schema_snapshot_hash=revision.schema_snapshot_hash,
+        profiles=(
+            TableProfile(
+                schema_name="public",
+                table="acct",
+                row_count=149,
+                columns=(
+                    ColumnProfile(
+                        column="acct",
+                        row_count=149,
+                        non_null_count=149,
+                        distinct_count=15,
+                        min_value="-150",
+                        max_value="1000",
+                        sample_values=("-150", "-120", "1000"),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    profiles = application.list_column_profiles(revision_id="revision-fact")
+
+    assert [item.table for item in profiles] == ["acct"]
+    assert profiles[0].column("acct").distinct_count == 15

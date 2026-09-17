@@ -1,6 +1,6 @@
 import { useMutation } from '@tanstack/react-query';
 import { Clock, CornerDownRight, Lock } from 'lucide-react';
-import { Fragment, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
 import { deleteCatalogResource, newResourceId, previewCatalogDeletion, saveDimension, saveHierarchy, saveMetric, saveModel, versionOf } from '@analytics/api/analytics';
 import { MetricEditor, applyMetricEditorValues } from './metric-editor';
 import type { MetricDefinitionSources } from './metric-definition';
@@ -44,7 +44,8 @@ import {
   roleChangeBlockers,
 } from './field-lock';
 import { ContextualTermButton } from './business-dictionary';
-import { FactCheckControl } from './fact-check-control';
+import { FactCheckControl, ModelRowsPreview, useColumnProfiles } from './fact-check-control';
+import { describeColumnProfile, metricSubjectId } from './fact-check';
 
 type Kind = CatalogFieldRoleInput['kind'];
 type DeletionKind = 'dimensions' | 'metrics' | 'models' | 'hierarchies';
@@ -105,6 +106,14 @@ export function EntityEditor({ projectId, revision, modelId, readOnly, acceptRev
     [spec.dimensions],
   );
   const modelNameById = useMemo(() => new Map(spec.models.map((m) => [m.id, m.name])), [spec.models]);
+  // 同一个指标可能开放在多个主题里，取样固定用 id 最小的那个，免得两次点出两个数字。
+  const metricDataset = useCallback(
+    (metricId: string) =>
+      [...spec.datasets]
+        .sort((a, b) => a.id.localeCompare(b.id))
+        .find((dataset) => dataset.metric_ids.includes(metricId)),
+    [spec.datasets],
+  );
   // 口径表达式可引用的来源:本模型的受治理度量与物理列,以及可被组合的其它指标。
   const metricSources = useMemo<MetricDefinitionSources>(
     () => ({
@@ -385,9 +394,13 @@ export function EntityEditor({ projectId, revision, modelId, readOnly, acceptRev
       >
       <div className="flex h-full min-h-0 flex-col gap-4 text-xs">
         <section className="shrink-0">
-          <div className="mb-2 flex items-center justify-between">
+          <div className="mb-2 flex items-center justify-between gap-2">
             <div className="font-semibold text-slate-700">基本信息</div>
-            <span className="font-mono text-slate-400">{[model.schema_name, model.table].filter(Boolean).join('.')}</span>
+            <div className="flex items-center gap-2">
+              {/* 判断一列是不是账号，看一眼原始行比读任何统计量都快。 */}
+              <ModelRowsPreview projectId={projectId} revision={revision} modelId={modelId} />
+              <span className="font-mono text-slate-400">{[model.schema_name, model.table].filter(Boolean).join('.')}</span>
+            </div>
           </div>
           <div className="grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-3">
             <Field label="业务名称">
@@ -560,6 +573,7 @@ export function EntityEditor({ projectId, revision, modelId, readOnly, acceptRev
                       key={`${detail.field.id}:${editEpoch}`}
                       projectId={projectId}
                       revision={revision}
+                      modelTableName={model.table ?? ''}
                       field={detail.field}
                       blockers={blockersByField.get(detail.field.id) ?? []}
                       relations={relationReferences(detail.field, spec.relations).map((r) => {
@@ -692,6 +706,24 @@ export function EntityEditor({ projectId, revision, modelId, readOnly, acceptRev
                     }
                   />
                 )}
+
+                {detail.kind === 'metric' &&
+                  (metricDataset(detail.metric.id) ? (
+                    <FactCheckControl
+                      projectId={projectId}
+                      revision={revision}
+                      kind="metric"
+                      subjectId={metricSubjectId(metricDataset(detail.metric.id)!.id, detail.metric.id)}
+                      readOnly={readOnly}
+                      action="算一下"
+                      hint="用真实数据算一遍，和认证报表对一下"
+                    />
+                  ) : (
+                    // 取样要走翻译器，而翻译器需要一个分析主题来确定连接路径。
+                    <div className="text-[11px] text-slate-400">
+                      该指标还没有进入任何分析主题，暂时不能取样。
+                    </div>
+                  ))}
               </div>
             )}
           </aside>
@@ -739,6 +771,8 @@ export function EntityEditor({ projectId, revision, modelId, readOnly, acceptRev
 export function FieldEditor({
   projectId,
   revision,
+  /** 画像按物理表名索引 —— 模型 id 与表名不是一回事。 */
+  modelTableName,
   field,
   blockers,
   relations,
@@ -749,6 +783,7 @@ export function FieldEditor({
 }: {
   projectId: string;
   revision: AnalyticsRevision;
+  modelTableName: string;
   field: AnalyticsField;
   /** 改角色会被服务端编译拒绝的原因:MEASURE 型指标口径还引用着该 measure。 */
   blockers: AnalyticsCatalogMetric[];
@@ -760,6 +795,9 @@ export function FieldEditor({
   onSave: (input: CatalogFieldRoleInput) => void;
 }) {
   const locked = blockers.length > 0;
+  const columnProfile = describeColumnProfile(
+    useColumnProfiles(projectId, revision.id).get(`${modelTableName}.${field.column}`),
+  );
   const [form, setForm] = useState<CatalogFieldRoleInput>({
     name: field.name,
     kind: field.kind,
@@ -775,6 +813,13 @@ export function FieldEditor({
         <Field label="业务名称">
           <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
         </Field>
+        {/*
+          建模时量过的这一列：一个只有 15 个取值、区间 -150 到 1000 的整数列会被 AI
+          命名成「账户号」，而这些数字当时就在内存里。摆出来，人一眼就能否掉它。
+        */}
+        {columnProfile && (
+          <div className="-mt-1 font-mono text-[11px] text-slate-500">{columnProfile}</div>
+        )}
         <Field label="角色">
           <Select disabled={locked} value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value as Kind })}>
             {KIND_OPTIONS.map((k) => (

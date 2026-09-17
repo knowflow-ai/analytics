@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Database } from 'lucide-react';
-import { listFactChecks, runFactCheck, versionOf } from '@analytics/api/analytics';
+import { useState } from 'react';
+import { Database, Table } from 'lucide-react';
+import { listColumnProfiles, listFactChecks, runFactCheck, versionOf } from '@analytics/api/analytics';
 import type {
+  AnalyticsColumnProfile,
   AnalyticsFactCheckEntry,
   AnalyticsFactCheckKind,
   AnalyticsRevision,
@@ -104,6 +106,122 @@ export function FactCheckControl({
         <div className="text-[11px] text-slate-600">{summary.advice}</div>
       )}
       {entry && children?.(entry)}
+    </div>
+  );
+}
+
+
+/**
+ * 建模时量过的列画像，按「表.列」索引。纯读缓存，和核对状态一样只取一次。
+ */
+export function useColumnProfiles(projectId: string, revisionId: string) {
+  const query = useQuery({
+    queryKey: ['column-profiles', projectId, revisionId],
+    queryFn: () => listColumnProfiles(projectId, revisionId),
+    staleTime: 5 * 60_000,
+  });
+  const index = new Map<string, AnalyticsColumnProfile>();
+  for (const table of query.data?.profiles ?? []) {
+    for (const column of table.columns) index.set(`${table.table}.${column.column}`, column);
+  }
+  return index;
+}
+
+/**
+ * 样例行：判断一列是不是账号、一个数值是不是档位，看一眼原始行比读任何统计量都快。
+ *
+ * 取的是模型的**受治理来源**（含行级过滤），所以预览里出现的行，问数时也查得到。
+ */
+export function ModelRowsPreview({
+  projectId,
+  revision,
+  modelId,
+}: {
+  projectId: string;
+  revision: AnalyticsRevision;
+  modelId: string;
+}) {
+  const toast = useToast();
+  const queryClient = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const entry = useFactChecks(projectId, revision.id).get(factCheckKey('rows', modelId));
+  const payload = entry?.result?.payload as
+    | { columns?: string[]; rows?: unknown[][]; truncated?: boolean }
+    | undefined;
+
+  const run = useMutation({
+    mutationFn: () =>
+      runFactCheck(projectId, revision.id, versionOf(revision), { kind: 'rows', subject_id: modelId }),
+    onSuccess: ({ entry: fresh }) => {
+      queryClient.setQueryData(
+        factChecksKey(projectId, revision.id),
+        (previous: { entries: AnalyticsFactCheckEntry[] } | undefined) => {
+          const rest = (previous?.entries ?? []).filter(
+            (item) => !(item.kind === 'rows' && item.subject_id === modelId),
+          );
+          return { entries: [...rest, fresh] };
+        },
+      );
+      setOpen(true);
+    },
+    onError: (error) => toast.error(describeError(error)),
+  });
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center gap-2">
+        <Button
+          size="sm"
+          variant="ghost"
+          icon={<Table className="size-3.5" />}
+          loading={run.isPending}
+          onClick={() => (payload && !open ? setOpen(true) : run.mutate())}
+        >
+          {payload && !open ? '查看样例行' : '取样例行'}
+        </Button>
+        {open && payload && (
+          <button
+            type="button"
+            className="text-[11px] text-slate-400 hover:text-slate-600"
+            onClick={() => setOpen(false)}
+          >
+            收起
+          </button>
+        )}
+      </div>
+      {open && payload?.columns && (
+        <div className="overflow-x-auto rounded-md border border-slate-200">
+          <table className="min-w-full text-[11px]">
+            <thead className="bg-slate-50 text-slate-500">
+              <tr>
+                {payload.columns.map((column) => (
+                  <th key={column} className="whitespace-nowrap px-2 py-1 text-left font-medium">
+                    {column}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {(payload.rows ?? []).map((row, index) => (
+                <tr key={index} className="border-t border-slate-100">
+                  {row.map((cell, cellIndex) => (
+                    <td key={cellIndex} className="whitespace-nowrap px-2 py-1 text-slate-700">
+                      {cell === null || cell === undefined ? (
+                        <span className="text-slate-300">NULL</span>
+                      ) : (
+                        String(cell)
+                      )}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {open && payload?.truncated && (
+        <div className="text-[11px] text-slate-400">只取了前几行，不是全部数据。</div>
+      )}
     </div>
   );
 }

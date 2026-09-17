@@ -26,6 +26,7 @@ describe('FieldEditor', () => {
     const html = render({
       projectId: 'proj',
       revision,
+      modelTableName: 'score_model_acct',
       field: {
         id: 'field-platform-id',
         model_id: 'model-platform',
@@ -61,6 +62,7 @@ describe('FieldEditor', () => {
     const html = render({
       projectId: 'proj',
       revision,
+      modelTableName: 'score_model_acct',
       field: {
         id: 'score_model_acct.zhhao',
         model_id: 'score_model_acct',

@@ -646,6 +646,26 @@ export type AnalyticsQualityStatus =
   | 'confirmed'
   | 'rejected';
 
+/** 建模时量过的一列：唯一率、基数、区间与采样值。 */
+export interface AnalyticsColumnProfile {
+  column: string;
+  row_count: number;
+  non_null_count: number;
+  distinct_count: number;
+  min_value?: string | null;
+  max_value?: string | null;
+  sample_values: string[];
+}
+
+export interface AnalyticsTableProfile {
+  schema_name: string;
+  table: string;
+  row_count: number;
+  columns: AnalyticsColumnProfile[];
+  truncated: boolean;
+  error?: string | null;
+}
+
 export type AnalyticsFactCheckKind = 'grain' | 'relation' | 'metric' | 'rows';
 
 /**

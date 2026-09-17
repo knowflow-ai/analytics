@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AnalyticsFactCheckEntry } from '@analytics/api/types';
 import {
+  describeColumnProfile,
   describeFactCheck,
   observedCardinalityFix,
   percent,
@@ -177,5 +178,40 @@ describe('比例的读法', () => {
     expect(percent(0.999)).toBe('99.9%');
     expect(percent(1)).toBe('100%');
     expect(percent(0)).toBe('0%');
+  });
+});
+
+describe('列画像的读法', () => {
+  it('把档位列读成人一眼能否掉的样子', () => {
+    expect(
+      describeColumnProfile({
+        row_count: 149,
+        non_null_count: 149,
+        distinct_count: 15,
+        min_value: '-150',
+        max_value: '1000',
+        sample_values: ['-150', '-120', '1000', '900'],
+      }),
+    ).toBe('149 行 · 15 个取值 · 区间 -150 ~ 1000 · 例：-150、-120、1000');
+  });
+
+  it('没量过就什么都不说', () => {
+    expect(describeColumnProfile(undefined)).toBe('');
+    expect(
+      describeColumnProfile({ row_count: 0, non_null_count: 0, distinct_count: 0, sample_values: [] }),
+    ).toBe('');
+  });
+
+  it('有空值才提空值', () => {
+    const withNulls = describeColumnProfile({
+      row_count: 100,
+      non_null_count: 98,
+      distinct_count: 44,
+      sample_values: [],
+    });
+    expect(withNulls).toContain('空值 2%');
+    expect(
+      describeColumnProfile({ row_count: 100, non_null_count: 100, distinct_count: 44, sample_values: [] }),
+    ).not.toContain('空值');
   });
 });

@@ -132,3 +132,33 @@ export function observedCardinalityFix(
   if (!declared || !observed || declared === observed) return undefined;
   return { declared, observed };
 }
+
+/**
+ * 一列的画像读成一行：「149 行 · 15 个取值 · 区间 -150 ~ 1000 · 例：-150、-120」。
+ *
+ * 客户现场那根只有 15 个取值、区间 -150 到 1000 的整数列被 AI 命名成「账户号」。
+ * 这些数字在建模第一步就量出来了，人看一眼就知道它不是账号。
+ */
+export function describeColumnProfile(
+  profile:
+    | {
+        row_count: number;
+        non_null_count: number;
+        distinct_count: number;
+        min_value?: string | null;
+        max_value?: string | null;
+        sample_values: string[];
+      }
+    | undefined,
+): string {
+  if (!profile || profile.row_count === 0) return '';
+  const parts = [`${profile.row_count} 行`, `${profile.distinct_count} 个取值`];
+  const nulls = profile.row_count - profile.non_null_count;
+  if (nulls > 0) parts.push(`空值 ${percent(nulls / profile.row_count)}`);
+  if (profile.min_value != null && profile.max_value != null) {
+    parts.push(`区间 ${profile.min_value} ~ ${profile.max_value}`);
+  }
+  const samples = profile.sample_values.slice(0, 3);
+  if (samples.length > 0) parts.push(`例：${samples.join('、')}`);
+  return parts.join(' · ');
+}

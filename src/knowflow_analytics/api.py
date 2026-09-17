@@ -2276,6 +2276,18 @@ def create_api(
         owned_revision(project_id, revision_id)
         return {"entries": application.list_fact_checks(revision_id=revision_id)}
 
+    @app.get("/v1/analytics/projects/{project_id}/revisions/{revision_id}/column-profiles")
+    def list_column_profiles(
+        project_id: str,
+        revision_id: str,
+        request_context: Context,
+    ):
+        """建模时量过的列画像。**纯读缓存，不碰客户库**。"""
+
+        require_project(project_id, request_context)
+        owned_revision(project_id, revision_id)
+        return {"profiles": application.list_column_profiles(revision_id=revision_id)}
+
     @app.post("/v1/analytics/projects/{project_id}/revisions/{revision_id}/fact-checks")
     def run_fact_check(
         project_id: str,

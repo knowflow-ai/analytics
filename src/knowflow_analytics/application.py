@@ -3484,6 +3484,20 @@ class AnalyticsApplication:
             for kind, subject_id, subject_hash in subjects
         )
 
+    def list_column_profiles(self, *, revision_id: str) -> tuple[TableProfile, ...]:
+        """这份草稿背后那个库的列画像。**纯读缓存**。
+
+        AI 建模第一步就全量算过唯一率、基数、区间与采样值，此前算完即丢。把它交给
+        建模页，是因为「15 个取值、区间 -150 到 1000」这种事人一眼就能判断，而
+        AI 会把这样一列命名成「账户号」。
+        """
+
+        revision = self.catalog.get_revision(revision_id)
+        return self.catalog.load_table_profiles(
+            project_id=revision.project_id,
+            schema_snapshot_hash=revision.schema_snapshot_hash,
+        )
+
     def run_fact_check(
         self,
         *,

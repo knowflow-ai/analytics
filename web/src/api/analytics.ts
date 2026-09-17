@@ -32,6 +32,7 @@ import type {
   AnalyticsSemanticQuery,
   AnalyticsSuggestionDecision,
   AnalyticsTableCatalog,
+  AnalyticsTableProfile,
   AnalyticsTerm,
 } from './types';
 
@@ -352,6 +353,13 @@ export const reviewQualityReport = (
 export const listFactChecks = (projectId: string, revisionId: string) =>
   request<{ entries: AnalyticsFactCheckEntry[] }>(
     `${revisionPath(projectId, revisionId)}/fact-checks`,
+    { projectId },
+  );
+
+/** 建模时量过的列画像。纯读缓存。 */
+export const listColumnProfiles = (projectId: string, revisionId: string) =>
+  request<{ profiles: AnalyticsTableProfile[] }>(
+    `${revisionPath(projectId, revisionId)}/column-profiles`,
     { projectId },
   );
 

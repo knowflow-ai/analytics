@@ -310,38 +310,65 @@ def test_primary_entity_reachable_from_another_scope_still_requires_its_own_scop
     assert raised.value.code == "AI_MODELING_TOPIC_COVERAGE_INCOMPLETE"
 
 
-def test_ai_modeling_completeness_accepts_a_metric_scope_without_primary_or_default_count(
-    sales_release,
+def test_ai_modeling_completeness_accepts_every_model_with_its_own_default_count(
+    sales_catalog,
 ):
-    proposal = AnalysisTopicProposer().propose(sales_release)[0]
-    release = sales_release.model_copy(
+    """2026-09-16 起每个作用域都必须有默认计数——没有就意味着「有多少条」答不了。
+
+    这条取代了原先的「没有主标识的指标作用域可以没有默认计数」：那时没有主标识的
+    表根本进不了作用域，现在它有自己的行数作用域。
+    """
+
+    counted, _ = ensure_default_count_metrics(sales_catalog)
+    projection = compile_semantic_catalog(counted)
+    proposals = AnalysisTopicProposer().propose(projection)
+    release = projection.model_copy(
         update={
-            "datasets": (proposal.dataset,),
-            "analysis_topic_routes": (proposal.route,),
+            "datasets": tuple(item.dataset for item in proposals),
+            "analysis_topic_routes": tuple(item.route for item in proposals),
         }
     )
 
     validate_ai_modeling_completeness(release)
 
-    assert proposal.route.default_count_metric_id is None
+    assert {item.id for item in release.models} == {
+        item.root_model_id for item in release.analysis_topic_routes
+    }
+    assert all(item.default_count_metric_id for item in release.analysis_topic_routes)
 
 
-def test_ai_modeling_completeness_requires_every_business_metric_in_a_scope(sales_release):
-    proposal = AnalysisTopicProposer().propose(sales_release)[0]
-    omitted_metric_id = proposal.dataset.metric_ids[-1]
-    incomplete_dataset = proposal.dataset.model_copy(
+def test_ai_modeling_completeness_requires_every_business_metric_in_a_scope(sales_catalog):
+    counted, _ = ensure_default_count_metrics(sales_catalog)
+    projection = compile_semantic_catalog(counted)
+    proposals = AnalysisTopicProposer().propose(projection)
+    first = next(
+        item
+        for item in proposals
+        if any(
+            metric_id != item.route.default_count_metric_id for metric_id in item.dataset.metric_ids
+        )
+    )
+    # 拿掉一个业务指标——默认计数不算，它由编译器自己保证。
+    omitted_metric_id = next(
+        metric_id
+        for metric_id in first.dataset.metric_ids
+        if metric_id != first.route.default_count_metric_id
+    )
+    incomplete_dataset = first.dataset.model_copy(
         update={
             "metric_ids": tuple(
                 metric_id
-                for metric_id in proposal.dataset.metric_ids
+                for metric_id in first.dataset.metric_ids
                 if metric_id != omitted_metric_id
             )
         }
     )
-    release = sales_release.model_copy(
+    release = projection.model_copy(
         update={
-            "datasets": (incomplete_dataset,),
-            "analysis_topic_routes": (proposal.route,),
+            "datasets": tuple(
+                incomplete_dataset if item is first else item.dataset for item in proposals
+            ),
+            "analysis_topic_routes": tuple(item.route for item in proposals),
         }
     )
 
@@ -448,9 +475,12 @@ def test_query_scope_recompile_removes_only_obsolete_compiler_outputs(sales_cata
         routes=tuple(item.route for item in clean_proposals),
     )
 
-    assert customer_count.id not in {item.id for item in incremental.metrics}
-    assert "customers" not in {item.root_model_id for item in incremental.analysis_topic_routes}
-    assert customer_dataset_id not in {item.id for item in incremental.data_sets}
+    # 2026-09-16 起，没了主标识不再退役：计数改成数行，作用域留着——表照样可问，
+    # 只是数出来的是记录数而不是实体数。增量重算仍必须与干净重编译逐字一致。
+    rederived = next(item for item in incremental.metrics if item.id == customer_count.id)
+    assert rederived.metric_define_by_field_params.expr == "COUNT(*)"
+    assert "customers" in {item.root_model_id for item in incremental.analysis_topic_routes}
+    assert customer_dataset_id in {item.id for item in incremental.data_sets}
     assert incremental.metrics == clean.metrics
 
     def scope_manifest(catalog):

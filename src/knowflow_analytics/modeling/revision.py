@@ -461,7 +461,8 @@ class RevisionEditor:
     def _validate_metric_field_types(spec: SemanticRelease) -> None:
         fields = {item.id: item for item in spec.fields}
         for metric in spec.metrics:
-            if metric.kind is not MetricKind.ATOMIC:
+            if metric.kind is not MetricKind.ATOMIC or metric.counts_rows:
+                # 行数指标没有列，也就没有「这个聚合配不配这个列类型」可言。
                 continue
             field = fields[metric.field_id]  # reference validity is checked by SemanticRelease
             aggregation = metric.aggregation

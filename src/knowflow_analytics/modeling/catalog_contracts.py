@@ -425,7 +425,9 @@ class MetricParamContract(CatalogContract):
 
 
 class MetricDefineByFieldParamsContract(MetricDefineParamsContract):
-    fields: tuple[FieldParamContract, ...] = Field(min_length=1)
+    # 空只对 ``COUNT(*)`` 成立——它不引用任何列。表达式里真出现列而这里没声明，
+    # 编译期的 validate_field_metric_expression 仍会拒绝。
+    fields: tuple[FieldParamContract, ...] = ()
 
 
 class MetricDefineByMeasureParamsContract(MetricDefineParamsContract):

@@ -464,16 +464,21 @@ class MetricSpec(FrozenModel):
             or self.non_additive_dimension.dimension_id != dimension_id
         )
 
+    @property
+    def counts_rows(self) -> bool:
+        """数的是这张表的行，不是某一列的取值。"""
+
+        return self.kind is MetricKind.ATOMIC and self.field_id is None
+
     @model_validator(mode="after")
     def validate_definition(self) -> MetricSpec:
         if self.kind is MetricKind.ATOMIC:
-            if (
-                self.field_id is None
-                or self.aggregation is None
-                or self.formula is not None
-                or self.expression_sources
-            ):
+            if self.aggregation is None or self.formula is not None or self.expression_sources:
                 raise ValueError("atomic metric requires field_id and aggregation only")
+            # 行数指标数的是行本身，没有列可指。只有裸 COUNT 有这个读法：
+            # SUM 什么、AVG 什么、DISTINCT 什么，都答不上来。
+            if self.field_id is None and self.aggregation is not Aggregation.COUNT:
+                raise ValueError("only a plain COUNT metric may omit its field")
         elif self.formula is None or self.field_id is not None or self.aggregation is not None:
             raise ValueError("derived metric requires formula only")
         if self.expression_sources and self.define_type not in {"FIELD", "MEASURE"}:

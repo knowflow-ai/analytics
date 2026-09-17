@@ -775,7 +775,11 @@ def test_model_delete_retires_its_compiled_scope_in_the_reviewed_plan() -> None:
 
     _assert_scopes_are_fully_routed(updated)
     assert "dataset_sales" not in {item.id for item in updated.data_sets}
-    assert {item.root_model_id for item in updated.analysis_topic_routes} == {"model_customers"}
+    assert {item.root_model_id for item in updated.analysis_topic_routes} == {
+        "model_customers",
+        # 没有主标识的那张表也有自己的作用域，删订单表不该带走它。
+        "model_order_sql_contract",
+    }
     assert any(
         item.action == "delete"
         and item.resource_kind is ResourceKind.DATASET
@@ -784,7 +788,13 @@ def test_model_delete_retires_its_compiled_scope_in_the_reviewed_plan() -> None:
     )
 
 
-def test_deleting_the_last_business_metric_retires_a_root_without_a_primary_key() -> None:
+def test_deleting_the_last_business_metric_leaves_a_row_count_scope() -> None:
+    """删掉最后一个业务指标，作用域不再退役——它退成一个只能回答「有多少条」的范围。
+
+    2026-09-16 改过向：原先没有主标识且没有业务指标的模型整个退出作用域，整表字段
+    问不到。对齐 Cube 的条件性主键要求，独立一张表照样可查。
+    """
+
     catalog = _catalog()
     orders = next(item for item in catalog.models if item.id == "model_orders")
     orders_without_primary = orders.model_copy(
@@ -834,13 +844,18 @@ def test_deleting_the_last_business_metric_retires_a_root_without_a_primary_key(
     )
 
     _assert_scopes_are_fully_routed(updated)
-    assert orders_dataset_id not in {item.id for item in updated.data_sets}
-    assert any(
-        item.action == "delete"
-        and item.resource_kind is ResourceKind.DATASET
-        and item.resource_id == orders_dataset_id
+    assert orders_dataset_id in {item.id for item in updated.data_sets}
+    assert not any(
+        item.action == "delete" and item.resource_kind is ResourceKind.DATASET
         for item in impact.effects
     )
+    route = next(
+        item for item in updated.analysis_topic_routes if item.dataset_id == orders_dataset_id
+    )
+    count_metric = next(
+        item for item in updated.metrics if item.id == route.default_count_metric_id
+    )
+    assert count_metric.metric_define_by_field_params.expr == "COUNT(*)"
 
 
 def test_compiler_owned_query_scope_cannot_be_deleted_directly() -> None:

@@ -223,6 +223,36 @@ def _expands_rows(relation: RelationSpec, *, from_model_id: str) -> bool:
 ENTITY_NAME_DIMENSION_SUFFIX = "名称"
 
 
+def countable_model_ids(release: SemanticRelease) -> set[str]:
+    """带默认计数指标的模型。旧 Release 可能一个都没有。"""
+
+    metric_ids = {item.id for item in release.metrics}
+    return {model.id for model in release.models if default_count_metric_id(model.id) in metric_ids}
+
+
+def fact_root_model_ids(release: SemanticRelease) -> set[str]:
+    """哪些模型是事实根——即哪些模型能成为一次查询的出发点。
+
+    三个来源：拥有业务指标的、确认了主标识的、以及有默认计数的（2026-09-16 起
+    每张实表都有，至少能回答「有多少条」，它的字段也因此可问）。对齐 Cube：
+    独立一张表不需要主键就能查。
+
+    编译作用域和校验覆盖率读的是同一个函数——两处各写一份，漏的那处就是
+    「明明建了模却问不到」。
+    """
+
+    generated = {model.id: default_count_metric_id(model.id) for model in release.models}
+    business_metric_models = {
+        metric.model_id for metric in release.metrics if metric.id != generated.get(metric.model_id)
+    }
+    primary_models = {
+        field.model_id
+        for field in release.fields
+        if field.kind is FieldKind.IDENTIFIER and field.identifier_type == "primary"
+    }
+    return business_metric_models | primary_models | countable_model_ids(release)
+
+
 def entity_name_dimension_name(model_name: str) -> str:
     """The compiler-owned canonical name for an entity's name dimension."""
 
@@ -413,14 +443,9 @@ class AnalysisTopicProposer:
             if field.kind is FieldKind.IDENTIFIER and field.identifier_type == "primary":
                 primary_fields_by_model.setdefault(field.model_id, field)
         generated_count_ids = {
-            model_id: default_count_metric_id(model_id) for model_id in primary_fields_by_model
+            model.id: default_count_metric_id(model.id) for model in release.models
         }
-        business_metric_models = {
-            metric.model_id
-            for metric in release.metrics
-            if metric.id != generated_count_ids.get(metric.model_id)
-        }
-        roots = sorted(business_metric_models | set(primary_fields_by_model))
+        roots = sorted(fact_root_model_ids(release))
         models = {item.id: item for item in release.models}
         metrics = {item.id: item for item in release.metrics}
         dimensions = {item.id: item for item in release.dimensions}

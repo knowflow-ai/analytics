@@ -761,7 +761,12 @@ def _compile_metric(
         simple = simple_field_metric(params.expr)
         if simple is not None:
             field_name, aggregation = simple
-            field = _field_for_expr(fields, metric.model_id, field_name)
+            # COUNT(*) 没有列：行数指标。
+            field = (
+                _field_for_expr(fields, metric.model_id, field_name)
+                if field_name is not None
+                else None
+            )
             return MetricSpec(
                 id=metric.id,
                 name=metric.name,
@@ -770,7 +775,7 @@ def _compile_metric(
                 format=metric.data_format_type,
                 model_id=metric.model_id,
                 kind=MetricKind.ATOMIC,
-                field_id=field.id,
+                field_id=field.id if field is not None else None,
                 aggregation=Aggregation(aggregation),
                 define_type=metric.metric_define_type.value,
                 raw_filter_sql=params.filter_sql,

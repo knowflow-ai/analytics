@@ -37,6 +37,7 @@ from knowflow_analytics.modeling.analysis_topics import (
     _canonical_name,
     default_count_metric_id,
     entity_name_dimension_name,
+    fact_root_model_ids,
     scope_canonical_names,
     validate_analysis_topic_route,
 )
@@ -475,12 +476,17 @@ class OneClickModelingArtifactService:
 def ensure_default_count_metrics(
     catalog: SemanticCatalog,
 ) -> tuple[SemanticCatalog, tuple[MetricContract, ...]]:
-    """Create one deterministic row-count metric for every confirmed entity root.
+    """每个模型一个确定性的计数指标。
 
-    Reviewed decision: rather than letting the LLM emit a bare ``COUNT(*)``,
-    the count is bound to a governed metric.  A
-    database-confirmed primary identifier is the only allowed source, so the
-    function never guesses an entity key from names or question wording.
+    评审决定：不让模型自己写裸 ``COUNT(*)``，计数必须绑定到受治理指标上。
+
+    数什么由数据说了算——有数据库确认的主标识就数那把键（实体数），没有就数行
+    （这张表有多少条记录）。**两者都不猜实体键**：没有主标识时，指标说的是行数，
+    不声称自己是实体数。这是与 Cube 一致的条件性要求：独立一张表照样可查，只有
+    参与一对多连接且带可加度量时才必须有主键。
+
+    2026-09-16 之前只有主标识模型才有计数，连带后果是没有主标识的表整表问不到，
+    于是建模者被逼着给每张表指一个主标识——而 AI 总能指出一个来。
     """
 
     # A one-click proposal is allowed to complete metrics before DataSet/Term
@@ -508,9 +514,8 @@ def ensure_default_count_metrics(
         if field.kind is FieldKind.IDENTIFIER and field.identifier_type == "primary":
             primary_by_model.setdefault(field.model_id, []).append(field)
 
-    desired_by_model = {
-        model_id: default_count_metric_id(model_id) for model_id in primary_by_model
-    }
+    # 每个模型都要有：主标识决定数键还是数行，不决定有没有计数。
+    desired_by_model = {model_id: default_count_metric_id(model_id) for model_id in models}
     owned_by_model: dict[str, list[MetricContract]] = defaultdict(list)
     for item in catalog.metrics:
         if _is_default_count_metric(item):
@@ -603,26 +608,38 @@ def ensure_default_count_metrics(
     existing = {item.id: item for item in catalog.metrics}
     updated = catalog
     default_metrics: list[MetricContract] = []
-    for model_id in sorted(primary_by_model):
-        primary = sorted(primary_by_model[model_id], key=lambda item: item.id)[0]
+    for model_id in sorted(models):
+        primary = (
+            sorted(primary_by_model[model_id], key=lambda item: item.id)[0]
+            if model_id in primary_by_model
+            else None
+        )
         metric_id = desired_by_model[model_id]
         model = models[model_id]
-        physical = fields_by_id[primary.id]
+        if primary is not None:
+            physical = fields_by_id[primary.id]
+            params = MetricDefineByFieldParamsContract(
+                expr=f"COUNT({quote_sql_identifier(physical.column)})",
+                fields=(FieldParamContract(field_name=physical.column),),
+            )
+            description = f"按{model.name}主标识统计的记录数量"
+        else:
+            # 没有主标识就只数行，不假装这张表的一行等于一个实体。
+            params = MetricDefineByFieldParamsContract(expr="COUNT(*)", fields=())
+            description = f"{model.name}的记录行数（该模型未配置主标识，数的是行不是实体）"
+        # 名字两种情形保持一致：用户问「有多少条」的说法不随建模状态变。
         canonical = MetricContract(
             id=metric_id,
             name=f"{model.name}数量",
             biz_name=f"{model.biz_name[:220]}_count",
-            description=f"按{model.name}主标识统计的记录数量",
+            description=description,
             model_id=model_id,
             metric_define_type=MetricDefineType.FIELD,
-            metric_define_by_field_params=MetricDefineByFieldParamsContract(
-                expr=f"COUNT({quote_sql_identifier(physical.column)})",
-                fields=(FieldParamContract(field_name=physical.column),),
-            ),
+            metric_define_by_field_params=params,
             ext={
                 "knowflow": {
                     "role": "default_count",
-                    "sourceFieldId": primary.id,
+                    "sourceFieldId": primary.id if primary is not None else None,
                     "contractVersion": "governed-default-count-v1",
                 }
             },
@@ -631,18 +648,32 @@ def ensure_default_count_metrics(
             metric = _rederive_default_count(
                 existing[metric_id],
                 canonical=canonical,
-                primary_field_id=primary.id,
+                primary_field_id=primary.id if primary is not None else None,
             )
             if metric is not existing[metric_id]:
-                updated = replace_catalog_item(updated, collection="metrics", item=metric)
+                updated = _put_metric(updated, metric)
                 existing[metric_id] = metric
             default_metrics.append(metric)
             continue
         metric = canonical
-        updated = replace_catalog_item(updated, collection="metrics", item=metric)
+        updated = _put_metric(updated, metric)
         default_metrics.append(metric)
         existing[metric.id] = metric
     return updated, tuple(default_metrics)
+
+
+def _put_metric(catalog: SemanticCatalog, metric: MetricContract) -> SemanticCatalog:
+    """写入一个默认计数，不重新校验整份目录。
+
+    与上面那次结构化编译同一个理由：这一步跑在目录编辑之后、作用域重编译之前，
+    此时下游 Dataset 可能还指着已经删掉的指标。派生默认计数不该被那份待修复的
+    引用挡住——修复它正是紧接着 `reconcile_query_scopes` 要做的事。
+    """
+
+    replaced = tuple(item if item.id != metric.id else metric for item in catalog.metrics)
+    if all(item.id != metric.id for item in catalog.metrics):
+        replaced = (*replaced, metric)
+    return catalog.model_copy(update={"metrics": replaced})
 
 
 def reconcile_query_scopes(catalog: SemanticCatalog) -> SemanticCatalog:
@@ -1257,20 +1288,25 @@ def _rederive_default_count(
     metric: MetricContract,
     *,
     canonical: MetricContract,
-    primary_field_id: str,
+    primary_field_id: str | None,
 ) -> MetricContract:
-    """主标识换了列就按新列重派生表达式，名字、别名、描述这些审过的东西不动。
+    """主标识换了列就按新列重派生表达式，名字、别名这些审过的东西不动。
 
     列没换则沿用原来的冲突校验：编译器保留的指标不许被改成别的东西。
+
+    描述有一个例外：数键改成数行（或反过来）时必须跟着改。「按客户主标识统计的记录
+    数量」在一个改成数行的指标上是一句关于数据的假话，而描述会进模型提示词。
     """
 
     metadata = metric.ext.get("knowflow") if isinstance(metric.ext, dict) else None
     if isinstance(metadata, dict) and metadata.get("sourceFieldId") != primary_field_id:
+        basis_changed = (metadata.get("sourceFieldId") is None) != (primary_field_id is None)
         return metric.model_copy(
             update={
                 "model_id": canonical.model_id,
                 "metric_define_type": canonical.metric_define_type,
                 "metric_define_by_field_params": canonical.metric_define_by_field_params,
+                "description": canonical.description if basis_changed else metric.description,
                 "ext": {**metric.ext, "knowflow": {**metadata, "sourceFieldId": primary_field_id}},
             }
         )
@@ -1282,7 +1318,7 @@ def _validate_existing_default_count(
     metric: MetricContract,
     *,
     canonical: MetricContract,
-    primary_field_id: str,
+    primary_field_id: str | None,
 ) -> None:
     params = metric.metric_define_by_field_params
     canonical_params = canonical.metric_define_by_field_params
@@ -1397,26 +1433,23 @@ def validate_ai_modeling_completeness(
     有没有别名是召回好坏，不是能不能发（2026-09-16 用户评审）。
     """
 
-    primary_models = {
-        item.model_id
-        for item in release.fields
-        if item.kind is FieldKind.IDENTIFIER and item.identifier_type == "primary"
-    }
-    # Reviewed QueryScope contract (2026-08-27): a reachable primary entity does
-    # not share another fact grain for COUNT semantics. It keeps an independent
-    # root scope, while a metric-owning model without a primary remains queryable
-    # with no default COUNT binding.
+    # 2026-08-27 评审：可达的实体不与别的事实粒度共用 COUNT 语义，它保有独立的
+    # 根作用域。2026-09-16 起这条扩到每张有默认计数的实表——没有主标识的表同样有
+    # 自己的作用域，只是它的默认计数数的是行不是实体。事实根的判据与编译作用域
+    # 时用的是同一个函数。
     routed_roots = {item.root_model_id for item in release.analysis_topic_routes}
-    missing_topics = sorted(primary_models - routed_roots)
+    missing_topics = sorted(fact_root_model_ids(release) - routed_roots)
     if missing_topics:
         raise SemanticValidationError(
-            f"primary entities have no analysis topic: {missing_topics[:5]}",
+            f"fact roots have no analysis topic: {missing_topics[:5]}",
             code="AI_MODELING_TOPIC_COVERAGE_INCOMPLETE",
         )
+    # AI 产物必然跑过 ensure_default_count_metrics，所以每个作用域都该有默认计数：
+    # 没有就意味着「有多少条」答不了，而那是用户最常问的一句。
     missing_counts = sorted(
         item.dataset_id
         for item in release.analysis_topic_routes
-        if item.root_model_id in primary_models and item.default_count_metric_id is None
+        if item.default_count_metric_id is None
     )
     if missing_counts:
         raise SemanticValidationError(

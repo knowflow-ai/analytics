@@ -375,9 +375,12 @@ class ModelingDiagnosticsAnalyzer:
                 )
                 break
 
-        # 整张表进不了任何 Scope：它的字段全部不可问。既无主标识也无业务度量的
-        # 纯事件/桥接表会落到这里（音乐六表的 台湾金曲奖），用户问它时得到的是
-        # "请选择分析范围"，而选哪个都答不了。
+        # 整张表进不了任何 Scope：它的字段全部不可问。
+        #
+        # 2026-09-16 之前，既无主标识也无业务度量的纯事件/桥接表都落在这里（音乐
+        # 六表的 台湾金曲奖），用户问它时得到的是 "请选择分析范围"，而选哪个都答
+        # 不了。现在每张实表都有自己的行数作用域，所以这条只在真正不可达时才出现
+        # ——例如目录里有模型却没有为它编译作用域（旧 Release、或编译漂移）。
         scoped_model_ids = {
             model_id for dataset in release.datasets for model_id in dataset.model_ids
         }
@@ -400,8 +403,7 @@ class ModelingDiagnosticsAnalyzer:
                     decision_kind="configure_dataset_scope",
                     blocking=False,
                     recommended_action=(
-                        "确认该表的主标识，或把它的可聚合列配置为业务度量；"
-                        "若该表确实不需要被问到，可忽略。"
+                        "重新发布以按当前目录重编译作用域；若该表确实不需要被问到，可忽略。"
                     ),
                 )
             )

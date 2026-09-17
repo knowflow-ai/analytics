@@ -77,6 +77,15 @@ def validate_field_metric_expression(
             "FIELD metric expressions cannot contain window functions",
             code="FIELD_METRIC_EXPRESSION_INVALID",
         )
+    if isinstance(parsed, exp.Count) and isinstance(parsed.this, exp.Star):
+        # 行数是「不引用任何列」唯一说得通的形态。整棵树恰好是 COUNT(*) 才算，
+        # COUNT(*) + 1 或 SUM(1) 仍按无来源表达式拒绝。
+        if any(True for _ in selected_fields):
+            raise SemanticValidationError(
+                "COUNT(*) counts rows and cannot declare fields",
+                code="FIELD_METRIC_EXPRESSION_INVALID",
+            )
+        return ()
     return _validate_columns(
         parsed,
         available_fields=available_fields,
@@ -85,8 +94,10 @@ def validate_field_metric_expression(
     )
 
 
-def simple_field_metric(expression: str) -> tuple[str, str] | None:
+def simple_field_metric(expression: str) -> tuple[str | None, str] | None:
     """Return the field and aggregate when a FIELD expression is atomic.
+
+    ``COUNT(*)`` 是唯一没有列的原子形态，字段位返回 ``None``。
 
     This is an execution projection optimization only; the authoritative
     catalog continues to retain FIELD as its original define type.
@@ -94,6 +105,9 @@ def simple_field_metric(expression: str) -> tuple[str, str] | None:
 
     parsed = _parse_expression(expression, code="FIELD_METRIC_EXPRESSION_INVALID")
     columns = tuple(parsed.find_all(exp.Column))
+    if isinstance(parsed, exp.Count) and isinstance(parsed.this, exp.Star):
+        # 行数：没有列，数的是行本身。
+        return None, "count"
     if len(columns) != 1 or columns[0].table:
         return None
     aggregation = {

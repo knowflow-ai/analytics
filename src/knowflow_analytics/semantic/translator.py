@@ -723,6 +723,11 @@ class _ReleaseIndexes:
         return model_ids
 
     def detail_metric_sql(self, metric: MetricSpec, aliases: dict[str, str]) -> str:
+        if metric.counts_rows:
+            raise TranslationError(
+                "count metrics have no row-level value in a detail query",
+                code="COUNT_METRIC_IN_DETAIL_QUERY",
+            )
         if metric.kind is not MetricKind.ATOMIC or metric.field_id is None:
             raise TranslationError(
                 "detail query requires an atomic metric",
@@ -881,7 +886,12 @@ class _ReleaseIndexes:
             return f"CASE WHEN {' AND '.join(predicates)} THEN {expression} END"
 
         if metric.kind is MetricKind.ATOMIC:
-            field = scoped(self.field_sql(metric.field_id or "", aliases), scope)
+            if metric.counts_rows:
+                # 星号进不了 CASE WHEN，带口径时改数 1；两者都是「满足条件的行各计一次」。
+                counted = scoped("1", scope)
+                field = "*" if counted == "1" else counted
+            else:
+                field = scoped(self.field_sql(metric.field_id or "", aliases), scope)
             aggregation = aggregation_override or metric.aggregation
             if aggregation is Aggregation.COUNT_DISTINCT:
                 return f"COUNT(DISTINCT {field})"

@@ -51,7 +51,12 @@ def _with_orders_composite_primary(catalog: SemanticCatalog) -> SemanticCatalog:
 def test_default_count_metric_id_follows_the_model_not_the_identifier_column() -> None:
     _, created = ensure_default_count_metrics(_catalog())
 
-    assert {item.id for item in created} == {CUSTOMERS_COUNT, ORDERS_COUNT}
+    # 第三个是没有主标识的那张表：它数的是行，ID 同样只跟模型走。
+    assert {item.id for item in created} == {
+        CUSTOMERS_COUNT,
+        ORDERS_COUNT,
+        "metric:default_count:model_order_sql_contract",
+    }
 
 
 def test_changing_the_primary_identifier_keeps_the_reviewed_default_count() -> None:

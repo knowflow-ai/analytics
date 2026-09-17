@@ -310,7 +310,12 @@ class ModelingQualityProfiler:
                 uniqueness_rate=0.0,
                 null_rate=0.0,
                 status=QualityStatus.WARNING,
-                message="模型未配置主标识，无法用数据证明事实粒度。",
+                message=(
+                    "模型未配置主标识，无法用数据证明事实粒度。"
+                    "这张表仍然可以被问到（默认计数按行统计），但它参与一对多连接时，"
+                    "跨表求和会被重复计数放大——那种查询会被拒绝。"
+                    "需要跨表聚合就确认一个在数据里唯一的主标识。"
+                ),
             )
         source_sql, parameters = self._model_source(model, release)
         # 提示里指名道姓：建模者看到「主标识有 4 万条重复」时得知道该改哪一列

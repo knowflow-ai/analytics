@@ -25,6 +25,29 @@ def _catalog() -> SemanticCatalog:
     return SemanticCatalog.model_validate(json.loads(_FIXTURE.read_text(encoding="utf-8")))
 
 
+def _manifest_without_ids(catalog: SemanticCatalog) -> tuple:
+    """作用域的成员构成，不含 Dataset ID。
+
+    增量重算沿用已审核资源的 ID，干净重编译从零生成——两者的**内容**必须一致，
+    身份不必。
+    """
+
+    release = compile_semantic_catalog(catalog)
+    datasets = {item.id: item for item in release.datasets}
+    return tuple(
+        sorted(
+            (
+                route.root_model_id,
+                datasets[route.dataset_id].model_ids,
+                datasets[route.dataset_id].metric_ids,
+                datasets[route.dataset_id].dimension_ids,
+                route.default_count_metric_id,
+            )
+            for route in release.analysis_topic_routes
+        )
+    )
+
+
 def _manifest(catalog: SemanticCatalog) -> tuple:
     release = compile_semantic_catalog(catalog)
     return (
@@ -221,6 +244,8 @@ def test_query_scope_reconciliation_recovers_rules_after_structural_compile() ->
     assert {item.id for item in recovered.data_sets} == {
         "dataset_sales",
         customer_dataset_id,
+        # 没有主标识的那张表也有自己的作用域（数行），结构恢复不该把它丢掉。
+        "dataset:topic:model_order_sql_contract",
     }
     assert recovered.query_rules == (order_rule, customer_rule)
     assert (
@@ -236,6 +261,58 @@ def test_query_scope_reconciliation_recovers_rules_after_structural_compile() ->
         mode="python", exclude={"data_set_detail"}
     ) == reviewed_orders_scope.model_dump(mode="python", exclude={"data_set_detail"})
     assert reconcile_query_scopes(recovered).query_rules == recovered.query_rules
+
+
+def test_losing_the_primary_identifier_keeps_the_scope_and_its_rules() -> None:
+    """没了主标识不再退役：它变成一个数行的作用域，指向它的规则照常有效。
+
+    这条 2026-09-16 改过向：原先没有主标识且没有业务指标的模型整个退出作用域，
+    整表字段问不到，于是建模者被逼着给每张表指一个主标识。
+    """
+
+    catalog = reconcile_query_scopes(_catalog())
+    orders = next(item for item in catalog.models if item.id == "model_orders")
+    order_rule = _rule(
+        "rule-orders-root-dimensions",
+        dataset_id="dataset_sales",
+        parameter="dimension_channel",
+        output="dimension_order_time",
+    )
+    demoted = catalog.model_copy(
+        update={
+            "models": tuple(
+                item.model_copy(
+                    update={
+                        "model_detail": item.model_detail.model_copy(
+                            update={
+                                "identifiers": tuple(
+                                    entry
+                                    for entry in item.model_detail.identifiers
+                                    if entry.type.value != "primary"
+                                )
+                            }
+                        )
+                    }
+                )
+                if item.id == orders.id
+                else item
+                for item in catalog.models
+            ),
+            "metrics": tuple(item for item in catalog.metrics if item.model_id != orders.id),
+            "query_rules": (order_rule,),
+        }
+    )
+
+    reconciled = reconcile_query_scopes(demoted)
+
+    route = next(
+        item for item in reconciled.analysis_topic_routes if item.root_model_id == "model_orders"
+    )
+    count_metric = next(
+        item for item in reconciled.metrics if item.id == route.default_count_metric_id
+    )
+    assert count_metric.metric_define_by_field_params.expr == "COUNT(*)"
+    assert reconciled.query_rules == (order_rule,)
 
 
 def test_structural_reconciliation_removes_only_rules_for_a_retired_scope() -> None:
@@ -257,33 +334,23 @@ def test_structural_reconciliation_removes_only_rules_for_a_retired_scope() -> N
         parameter="dimension_customer_name",
         output="dimension_customer_name",
     )
-    orders = next(item for item in catalog.models if item.id == "model_orders")
-    orders_without_primary = orders.model_copy(
-        update={
-            "model_detail": orders.model_detail.model_copy(
-                update={
-                    "identifiers": tuple(
-                        item
-                        for item in orders.model_detail.identifiers
-                        if item.type.value != "primary"
-                    )
-                }
-            )
-        }
-    )
+    # 现在只有删掉模型本身才会退役一个作用域：每张实表都至少能回答「有多少条」。
+    # 下游 Dataset 还指着它——修复那份引用正是 reconcile_query_scopes 的职责。
     retired = catalog.model_copy(
         update={
-            "models": tuple(
-                orders_without_primary if item.id == orders.id else item for item in catalog.models
+            "models": tuple(item for item in catalog.models if item.id != "model_orders"),
+            "metrics": tuple(item for item in catalog.metrics if item.model_id != "model_orders"),
+            "dimensions": tuple(
+                item for item in catalog.dimensions if item.model_id != "model_orders"
             ),
-            "metrics": tuple(item for item in catalog.metrics if item.model_id != orders.id),
+            "model_relations": (),
             "query_rules": (order_rule, customer_rule),
         }
     )
 
     reconciled = reconcile_query_scopes(retired)
 
-    assert {item.dataset_id for item in reconciled.analysis_topic_routes} == {customer_dataset_id}
+    assert "dataset_sales" not in {item.dataset_id for item in reconciled.analysis_topic_routes}
     assert reconciled.query_rules == (customer_rule,)
     assert compile_semantic_catalog(reconciled).query_rules == (
         QueryRuleSpec.model_validate(customer_rule.model_dump(mode="python")),
@@ -324,9 +391,23 @@ def test_query_scope_reconciliation_matches_a_clean_recompile_after_root_retirem
         SemanticCatalog.model_validate(clean_input.model_dump(mode="python"))
     )
 
-    assert _manifest(incrementally_reconciled) == _manifest(clean_recompile)
+    # 两条路径的成员、路径、默认计数必须一致；只有作用域的 ID 不同——增量重算沿用
+    # 旧 Dataset ID（已审核的资源不该换身份），干净重编译没有旧 ID 可沿用。
+    assert _manifest_without_ids(incrementally_reconciled) == _manifest_without_ids(clean_recompile)
     roots = {item.root_model_id for item in incrementally_reconciled.analysis_topic_routes}
-    assert "model_orders" not in roots
+    # 丢了主标识不再退役：它成为一个数行的作用域。
+    assert "model_orders" in roots
+    orders_route = next(
+        item
+        for item in incrementally_reconciled.analysis_topic_routes
+        if item.root_model_id == "model_orders"
+    )
+    orders_count = next(
+        item
+        for item in incrementally_reconciled.metrics
+        if item.id == orders_route.default_count_metric_id
+    )
+    assert orders_count.metric_define_by_field_params.expr == "COUNT(*)"
 
 
 def test_scope_sensitive_atomic_catalog_write_reconciles_query_scopes() -> None:

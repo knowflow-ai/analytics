@@ -836,7 +836,7 @@ class _OntologyQueryParser:
             ]
             inner_sql = " UNION ALL ".join(branches)
         else:
-            inner_sql = f"SELECT {', '.join(projections)} FROM {from_sql}{where_sql}"
+            inner_sql = f"SELECT {_projection_list(projections)} FROM {from_sql}{where_sql}"
         inner_query = sqlglot.parse_one(inner_sql, read="postgres")
         ontology_cte = exp.CTE(
             this=inner_query,
@@ -949,6 +949,17 @@ class _OntologyQueryParser:
         )
 
 
+def _projection_list(projections: list[str]) -> str:
+    """受治理投影；一列都没有时补一个常量。
+
+    「这张表有多少条」用不到任何字段，投影因此是空的：``SELECT FROM t`` 在
+    PostgreSQL 上是合法的零列结果，在 MySQL 上直接是语法错。补一列常量，两边
+    都得到同样的行集，``COUNT(*)`` 数出来的仍是这张表的行。
+    """
+
+    return ", ".join(projections) if projections else '1 AS "__kf_row"'
+
+
 def _ontology_inner_for_scope(
     statement: _QueryStatement,
     *,
@@ -1034,9 +1045,11 @@ def _ontology_inner_for_scope(
             else (fixed_filter_sets[0] if fixed_filter_sets else ())
         )
     ]
-    inner_select = ", ".join(
-        f"{indexes.field_sql(field_id, aliases)} AS {_quote(token)}"
-        for token, field_id in field_tokens.items()
+    inner_select = _projection_list(
+        [
+            f"{indexes.field_sql(field_id, aliases)} AS {_quote(token)}"
+            for token, field_id in field_tokens.items()
+        ]
     )
     inner_sql = f"SELECT {inner_select} FROM {from_sql}"
     if fixed_conditions:
@@ -1508,15 +1521,25 @@ def _metric_expression(
     metric = metrics[metric_id]
     scope = _deduplicate_fixed_filters((*inherited_filters, *metric.filters))
     if metric.kind is MetricKind.ATOMIC:
-        raw = _metric_axis_scoped(
-            statement,
-            _metric_scoped_expression(
+        if metric.counts_rows:
+            # 行数没有列。星号进不了 CASE WHEN，所以先按「数 1」走一遍口径与时间轴，
+            # 谁都没包它才换回星号。
+            counted = _metric_axis_scoped(
                 statement,
-                _field_token_expression(statement, metric.field_id or ""),
-                scope,
-            ),
-            metric,
-        )
+                _metric_scoped_expression(statement, exp.Literal.number(1), scope),
+                metric,
+            )
+            raw: exp.Expression = exp.Star() if isinstance(counted, exp.Literal) else counted
+        else:
+            raw = _metric_axis_scoped(
+                statement,
+                _metric_scoped_expression(
+                    statement,
+                    _field_token_expression(statement, metric.field_id or ""),
+                    scope,
+                ),
+                metric,
+            )
         # 上游 MetricExpressionParser 把指标替换成「治理聚合(表达式)」而不是裸
         # 物理列;指标定义期已强制表达式自带聚合,所以展开后必然含聚合函数。
         # 我们此前在明细形态下退化成 field_id,计数指标的 field 恰是主键,

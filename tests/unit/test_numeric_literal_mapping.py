@@ -80,8 +80,16 @@ def test_scan_never_cuts_into_a_number() -> None:
 
 
 def test_a_threshold_in_the_question_is_not_a_dictionary_value(sales_release) -> None:
+    """阈值不是取值——**包括它恰好等于字典里某个取值的时候**。
+
+    这条测试原来问的是「大于 2000」，而夹具里的取值是 20 / 1000 / 20000：2000 谁都不等于，
+    于是它证明的其实只是「2000 切不出 20」，与上一条测试同一件事。真正的窟窿——数字整体
+    等于某个取值——空着，2026-09-17 现场就是从这里漏出去的（「大于 1000」命中了另一张表的
+    账户代码 = 1000）。换成 1000 才算真的在测它。
+    """
+
     _release, index = _with_numeric_segments(sales_release)
-    question = "净收入大于 2000 的占比多少"
+    question = "净收入大于 1000 的占比多少"
 
     for mode in (MapMode.STRICT, MapMode.MODERATE, MapMode.ALL):
         mapping = SemanticMapper().map(

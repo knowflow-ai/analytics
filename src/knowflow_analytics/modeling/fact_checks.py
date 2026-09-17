@@ -27,6 +27,13 @@ from knowflow_analytics.modeling.quality import QualityStatus
 # 连接路径不同，数字也可能不同。
 METRIC_SUBJECT_SEPARATOR = "::"
 
+# 数据会漂移：键没变不代表数字还是昨天那个。超过这个时长仍然显示，但标注"可能已过时"。
+FACT_CHECK_TTL_HOURS = 24
+
+# 建模页点一下就得有反应。发布前那次完整跑允许 30 秒，这里不行——量不完就直说，
+# 不要让人对着转圈等。
+FACT_CHECK_STATEMENT_TIMEOUT_MS = 8_000
+
 
 class FactCheckKind(StrEnum):
     GRAIN = "grain"
@@ -48,6 +55,16 @@ class FactCheckRecord(FrozenModel):
     status: QualityStatus
     payload: dict[str, Any] = {}
     computed_at: datetime
+
+
+class FactCheckEntry(FrozenModel):
+    """一个可核对对象的当前状态：键是什么、有没有量过、量的还算不算新。"""
+
+    kind: FactCheckKind
+    subject_id: str
+    subject_hash: str
+    result: FactCheckRecord | None = None
+    expired: bool = False
 
 
 class FactCheckSubjectError(AnalyticsError):
@@ -209,3 +226,35 @@ def _model_source_fingerprint(model: ModelSpec, release: SemanticRelease) -> Any
             for item in model.filters
         ],
     }
+
+
+def fact_check_subjects(
+    release: SemanticRelease, *, schema_snapshot_hash: str
+) -> tuple[tuple[FactCheckKind, str, str], ...]:
+    """草稿里所有可以用数据核对的对象，连同它们此刻的内容键。
+
+    样例行不在其列：它没有结论，只是给人看的，按需要才取。
+    """
+
+    subjects: list[tuple[FactCheckKind, str]] = [
+        (FactCheckKind.GRAIN, model.id) for model in release.models
+    ]
+    subjects += [(FactCheckKind.RELATION, relation.id) for relation in release.relations]
+    subjects += [
+        (FactCheckKind.METRIC, metric_subject_id(dataset.id, metric_id))
+        for dataset in release.datasets
+        for metric_id in dataset.metric_ids
+    ]
+    return tuple(
+        (
+            kind,
+            subject_id,
+            fact_subject_hash(
+                kind,
+                subject_id,
+                release=release,
+                schema_snapshot_hash=schema_snapshot_hash,
+            ),
+        )
+        for kind, subject_id in subjects
+    )

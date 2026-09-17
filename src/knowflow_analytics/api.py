@@ -48,6 +48,7 @@ from knowflow_analytics.modeling.contracts import (
 )
 from knowflow_analytics.modeling.deletion import ResourceKind
 from knowflow_analytics.modeling.domain import DomainLifecycle
+from knowflow_analytics.modeling.fact_checks import FactCheckKind
 from knowflow_analytics.modeling.layout import GraphNodePosition, GraphViewport
 from knowflow_analytics.modeling.product import DecisionChoice
 from knowflow_analytics.modeling.quality import MetricPreviewDecision
@@ -631,6 +632,13 @@ class ApplyModelingPlanRequest(_RequestModel):
 
 
 class CreateModelingQualityReportRequest(_RequestModel):
+    expected_etag: int = Field(ge=1)
+    schema_snapshot_hash: str = Field(min_length=1, max_length=128)
+
+
+class RunFactCheckRequest(_RequestModel):
+    kind: FactCheckKind
+    subject_id: str = Field(min_length=1, max_length=256)
     expected_etag: int = Field(ge=1)
     schema_snapshot_hash: str = Field(min_length=1, max_length=128)
 
@@ -2255,6 +2263,40 @@ def create_api(
             expected_etag=payload.expected_etag,
             schema_snapshot_hash=payload.schema_snapshot_hash,
         )
+
+    @app.get("/v1/analytics/projects/{project_id}/revisions/{revision_id}/fact-checks")
+    def list_fact_checks(
+        project_id: str,
+        revision_id: str,
+        request_context: Context,
+    ):
+        """每个对象此刻的内容键与已有结论。**纯读缓存，不碰客户库**，因此不限流。"""
+
+        require_project(project_id, request_context)
+        owned_revision(project_id, revision_id)
+        return {"entries": application.list_fact_checks(revision_id=revision_id)}
+
+    @app.post("/v1/analytics/projects/{project_id}/revisions/{revision_id}/fact-checks")
+    def run_fact_check(
+        project_id: str,
+        revision_id: str,
+        payload: RunFactCheckRequest,
+        request_context: Context,
+    ):
+        """就地核对一个对象。一次一条语句，打的是客户库，所以走限流。"""
+
+        require_project(project_id, request_context)
+        owned_revision(project_id, revision_id)
+        expensive(request_context)
+        return {
+            "entry": application.run_fact_check(
+                revision_id=revision_id,
+                kind=payload.kind,
+                subject_id=payload.subject_id,
+                expected_etag=payload.expected_etag,
+                schema_snapshot_hash=payload.schema_snapshot_hash,
+            )
+        }
 
     @app.get(
         "/v1/analytics/projects/{project_id}/revisions/{revision_id}/quality-reports/{report_id}"

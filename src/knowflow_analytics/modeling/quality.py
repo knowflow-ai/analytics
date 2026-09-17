@@ -183,6 +183,21 @@ class ModelingQualityProfiler:
         self._dialect = dialect
         self._translator = SemanticTranslator()
 
+    def with_statement_timeout(self, statement_timeout_ms: int) -> ModelingQualityProfiler:
+        """同样的连接与执行器，另一个语句上限。
+
+        发布前那次完整跑给 30 秒，建模页点一下不能这么等——量不完就直说。
+        """
+
+        return ModelingQualityProfiler(
+            self._engine,
+            self._executor,
+            statement_timeout_ms=statement_timeout_ms,
+            overall_timeout_ms=self._overall_timeout_ms,
+            max_metric_previews=self._max_metric_previews,
+            dialect=self._dialect,
+        )
+
     def profile(self, revision: ModelingRevision) -> ModelingQualityReport:
         started = time.monotonic()
         release = revision.semantic_spec

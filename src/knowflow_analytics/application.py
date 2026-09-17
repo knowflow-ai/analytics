@@ -10,7 +10,7 @@ from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 from sqlalchemy import create_engine
@@ -32,6 +32,7 @@ from knowflow_analytics.contracts import (
     DimensionValueSpec,
     QueryRuleSpec,
     SemanticQuery,
+    SemanticRelease,
     TermSpec,
 )
 from knowflow_analytics.errors import AnalyticsError, SemanticValidationError
@@ -144,6 +145,17 @@ from knowflow_analytics.modeling.dimension_dictionary_eligibility import (
 )
 from knowflow_analytics.modeling.domain import DomainGovernance, DomainLifecycle
 from knowflow_analytics.modeling.drift import SchemaDriftAnalyzer, SchemaDriftReport
+from knowflow_analytics.modeling.fact_checks import (
+    FACT_CHECK_STATEMENT_TIMEOUT_MS,
+    FACT_CHECK_TTL_HOURS,
+    FactCheckEntry,
+    FactCheckKind,
+    FactCheckRecord,
+    FactCheckSubjectError,
+    fact_check_subjects,
+    fact_subject_hash,
+    split_metric_subject_id,
+)
 from knowflow_analytics.modeling.introspector import SchemaIntrospector
 from knowflow_analytics.modeling.jobs import (
     ModelingJob,
@@ -182,6 +194,7 @@ from knowflow_analytics.modeling.quality import (
     MetricPreviewDecision,
     ModelingQualityProfiler,
     ModelingQualityReport,
+    QualityStatus,
     modeling_quality_report_is_stale,
 )
 from knowflow_analytics.modeling.relation_candidates import (
@@ -3443,6 +3456,93 @@ class AnalyticsApplication:
         self.catalog.save_modeling_quality_report(report)
         return report
 
+    def list_fact_checks(self, *, revision_id: str) -> tuple[FactCheckEntry, ...]:
+        """草稿里每个可核对对象的当前键与命中的缓存。**只读缓存，不碰客户库。**
+
+        界面据此在每个对象旁标出「已核对 / 未核对 / 可能已过时」，翻到哪一屏都不会
+        因此发起一次扫库。
+        """
+
+        revision = self.catalog.get_revision(revision_id)
+        subjects = fact_check_subjects(
+            revision.semantic_spec,
+            schema_snapshot_hash=revision.schema_snapshot_hash,
+        )
+        cached = self.catalog.load_fact_checks(
+            project_id=revision.project_id,
+            subject_hashes=tuple(item[2] for item in subjects),
+        )
+        deadline = datetime.now(UTC) - timedelta(hours=FACT_CHECK_TTL_HOURS)
+        return tuple(
+            FactCheckEntry(
+                kind=kind,
+                subject_id=subject_id,
+                subject_hash=subject_hash,
+                result=cached.get(subject_hash),
+                expired=(subject_hash in cached and cached[subject_hash].computed_at < deadline),
+            )
+            for kind, subject_id, subject_hash in subjects
+        )
+
+    def run_fact_check(
+        self,
+        *,
+        revision_id: str,
+        kind: FactCheckKind,
+        subject_id: str,
+        expected_etag: int,
+        schema_snapshot_hash: str,
+    ) -> FactCheckEntry:
+        """用真实数据核对一个对象。发布前那套证据，一次只取一条。"""
+
+        revision = self.catalog.get_revision(revision_id)
+        profiler = self._source(revision.project_id).quality_profiler
+        if profiler is None:
+            raise ValueError("modeling quality profiler is not configured")
+        self._require_revision_version(
+            revision,
+            expected_etag=expected_etag,
+            expected_schema_snapshot_hash=schema_snapshot_hash,
+        )
+        release = revision.semantic_spec
+        subject_hash = fact_subject_hash(
+            kind,
+            subject_id,
+            release=release,
+            schema_snapshot_hash=revision.schema_snapshot_hash,
+        )
+        try:
+            record = _run_one_fact_check(
+                profiler.with_statement_timeout(FACT_CHECK_STATEMENT_TIMEOUT_MS),
+                kind=kind,
+                subject_id=subject_id,
+                subject_hash=subject_hash,
+                release=release,
+            )
+        except AnalyticsError as exc:
+            # 量不出来同样是给建模者看的结论，但不进缓存：那样这个对象在改动之前
+            # 再也拿不到真实结果。
+            return FactCheckEntry(
+                kind=kind,
+                subject_id=subject_id,
+                subject_hash=subject_hash,
+                result=FactCheckRecord(
+                    kind=kind,
+                    subject_id=subject_id,
+                    subject_hash=subject_hash,
+                    status=QualityStatus.WARNING,
+                    payload={"error_code": exc.code, "message": str(exc)},
+                    computed_at=datetime.now(UTC),
+                ),
+            )
+        self.catalog.save_fact_check(project_id=revision.project_id, record=record)
+        return FactCheckEntry(
+            kind=kind,
+            subject_id=subject_id,
+            subject_hash=subject_hash,
+            result=record,
+        )
+
     def get_current_evaluation_report(self, revision_id: str) -> EvaluationReport | None:
         """取当前语义版本对应的最新黄金评测报告,没有则 None。
 
@@ -4537,3 +4637,44 @@ class AnalyticsApplication:
             dry_run_before_execute=self._dry_run_before_execute,
             selection_secret=self._selection_secret,
         )
+
+
+def _run_one_fact_check(
+    profiler: ModelingQualityProfiler,
+    *,
+    kind: FactCheckKind,
+    subject_id: str,
+    subject_hash: str,
+    release: SemanticRelease,
+) -> FactCheckRecord:
+    """把单对象核对的结果装成一条缓存记录。走的是发布前那套方法，不是另一条实现。"""
+
+    if kind is FactCheckKind.METRIC:
+        dataset_id, metric_id = split_metric_subject_id(subject_id)
+        preview = profiler.preview_metric(dataset_id, metric_id, release)
+        payload, status = preview.model_dump(mode="json"), preview.status
+    elif kind is FactCheckKind.RELATION:
+        relation = next((item for item in release.relations if item.id == subject_id), None)
+        if relation is None:
+            raise FactCheckSubjectError(f"relation {subject_id} is not in this revision")
+        profile = profiler.profile_relation(relation, release)
+        payload, status = profile.model_dump(mode="json"), profile.status
+    else:
+        model = next((item for item in release.models if item.id == subject_id), None)
+        if model is None:
+            raise FactCheckSubjectError(f"model {subject_id} is not in this revision")
+        if kind is FactCheckKind.ROWS:
+            preview = profiler.preview_model_rows(model, release)
+            # 样例行没有对错，只有「看到了」。
+            payload, status = preview.model_dump(mode="json"), QualityStatus.PASSED
+        else:
+            grain = profiler.profile_grain(model, release)
+            payload, status = grain.model_dump(mode="json"), grain.status
+    return FactCheckRecord(
+        kind=kind,
+        subject_id=subject_id,
+        subject_hash=subject_hash,
+        status=status,
+        payload=payload,
+        computed_at=datetime.now(UTC),
+    )

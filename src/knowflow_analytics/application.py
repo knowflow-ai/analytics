@@ -564,6 +564,7 @@ class AnalyticsApplication:
         minimum_accuracy: float = 1.0,
         require_quality_report_for_publish: bool = True,
         dry_run_before_execute: bool = False,
+        query_budget_seconds: float | None = None,
         modeling_job_workers: int = 2,
         modeling_max_concurrency: int | None = None,
         selection_secret: str | bytes | None = None,
@@ -635,6 +636,7 @@ class AnalyticsApplication:
             require_quality_report=require_quality_report_for_publish,
         )
         self._dry_run_before_execute = dry_run_before_execute
+        self._query_budget_seconds = query_budget_seconds
         self._selection_secret = selection_secret or secrets.token_bytes(32)
         if not 0 < query_diagnostic_ttl_seconds <= QUERY_DIAGNOSTIC_MAX_TTL_SECONDS:
             raise ValueError("query diagnostic ttl is outside its retention limit")
@@ -4650,6 +4652,7 @@ class AnalyticsApplication:
             query_failures=self.catalog,
             dry_run_before_execute=self._dry_run_before_execute,
             selection_secret=self._selection_secret,
+            question_budget_seconds=self._query_budget_seconds,
         )
 
 

@@ -57,6 +57,10 @@ class AnalyticsSettings(BaseSettings):
     # 30 秒常年卡在边上，而超时这一档**不重试**——一次超时就是整条问不出来。
     # 实际生效值是 min(本项, model_gateway_timeout_seconds)，所以要给到 60 以上时两项都得抬。
     model_gateway_query_timeout_seconds: float = Field(default=60.0, ge=1.0, le=600.0)
+    # 一轮问数的墙钟预算：重试链是「每次调用超时 × 尝试次数」，不封顶就会越过调用方的
+    # 请求超时（RAGFlow BFF 默认 120 秒），用户于是拿到一句没有诊断的超时。留 20 秒给
+    # 映射、执行与诊断落库。
+    query_budget_seconds: float = Field(default=100.0, ge=5.0, le=600.0)
     # One-click modeling fans out per table and per business entity. Free model
     # tiers reject that burst (Groq 429 on tokens-per-minute, Gemini 503) while
     # answering the same calls serially, so the fan-out has to match the

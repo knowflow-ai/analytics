@@ -18,7 +18,9 @@ from knowflow_analytics.contracts import (
     AnalysisTopicRouteSpec,
     Cardinality,
     DatasetSpec,
+    DimensionSpec,
     FieldKind,
+    FieldSpec,
     FrozenModel,
     RelationSpec,
     SemanticRelease,
@@ -55,6 +57,26 @@ class AnalysisTopicProposalSet(FrozenModel):
     revision_etag: int = Field(ge=1)
     schema_snapshot_hash: str = Field(min_length=1, max_length=128)
     proposals: tuple[AnalysisTopicProposal, ...]
+
+
+def is_hidden_identifier(field: FieldSpec, dimension: DimensionSpec) -> bool:
+    """这个标识列该不该留在可问范围之外。
+
+    **主标识藏，外部标识不藏**（与 Cube 一致，它也只默认隐藏 primaryKey）。主标识是
+    粒度键，按它分组等于按行分组，没有业务含义；外部标识正相反——账户号、门店号就是
+    人说「各账户」「各门店」时指的那个东西。
+
+    2026-09-16 之前所有标识列一律隐藏，代价是一张只有外部标识的表**结构上就没有**可以
+    分组的键：现场「余额大于 10000 的人数占比」因此无解，模型退而抓了另一张表里一个
+    名字像账户、实际是评分调整值的列。
+
+    维度语义类型被显式标成 ``identifier`` 时仍然隐藏：那是建模者亲口说「这列是技术
+    字段」。角色未确认（``identifier_type`` 为空）的标识列也藏——不猜。
+    """
+
+    if dimension.semantic_type == "identifier":
+        return True
+    return field.kind is FieldKind.IDENTIFIER and field.identifier_type != "foreign"
 
 
 def validate_analysis_topic_route(
@@ -109,10 +131,7 @@ def validate_analysis_topic_route(
     technical_dimensions = sorted(
         dimension_id
         for dimension_id in dataset.dimension_ids
-        if (
-            fields[dimensions[dimension_id].field_id].kind is FieldKind.IDENTIFIER
-            or dimensions[dimension_id].semantic_type == "identifier"
-        )
+        if is_hidden_identifier(fields[dimensions[dimension_id].field_id], dimensions[dimension_id])
     )
     if technical_dimensions:
         raise SemanticValidationError(
@@ -436,7 +455,7 @@ class AnalysisTopicProposer:
             metrics_by_model[metric.model_id].append(metric.id)
         for dimension in release.dimensions:
             field = fields[dimension.field_id]
-            if field.kind is FieldKind.IDENTIFIER or dimension.semantic_type == "identifier":
+            if is_hidden_identifier(field, dimension):
                 exclusions_by_model[dimension.model_id].append(
                     AnalysisTopicExclusion(
                         element_id=dimension.id,
@@ -638,15 +657,11 @@ class AnalysisTopicProposer:
             elif relation.cardinality is Cardinality.MANY_TO_ONE:
                 adjacency[relation.left_model_id].append((relation.right_model_id, relation.id))
                 if multiplying:
-                    adjacency[relation.right_model_id].append(
-                        (relation.left_model_id, relation.id)
-                    )
+                    adjacency[relation.right_model_id].append((relation.left_model_id, relation.id))
             elif relation.cardinality is Cardinality.ONE_TO_MANY:
                 adjacency[relation.right_model_id].append((relation.left_model_id, relation.id))
                 if multiplying:
-                    adjacency[relation.left_model_id].append(
-                        (relation.right_model_id, relation.id)
-                    )
+                    adjacency[relation.left_model_id].append((relation.right_model_id, relation.id))
             elif multiplying and relation.cardinality is Cardinality.MANY_TO_MANY:
                 # 多对多两边都放大，去重还原不出任何一边的粒度，永远不开放。
                 continue

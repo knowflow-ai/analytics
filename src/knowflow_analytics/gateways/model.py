@@ -7,7 +7,7 @@ from typing import Any, Protocol
 import httpx
 
 from knowflow_analytics.errors import AnalyticsError
-from knowflow_analytics.gateways.calls import record_call
+from knowflow_analytics.gateways.calls import record_call, remaining_seconds
 
 LOGGER = logging.getLogger(__name__)
 
@@ -34,6 +34,8 @@ class StructuredModelGateway(Protocol):
 
 _TEMPERATURE_BY_ATTEMPT = {1: 0.0, 2: 0.3, 3: 0.6}
 _TRANSPORT_RETRIES = 3
+#: 预算只剩这么点时不再发请求——发了也只会在调用方超时之后才回来。
+_BUDGET_FLOOR_SECONDS = 2.0
 _BACKOFF_SECONDS = (0.5, 2.0, 5.0)
 # 问数链路上各用途的超时上限（秒）。实测正常 7–20s；全局 60s 加上传输层 3 次重试，
 # 一次挂住的调用最坏 60+60+60。超时不再在传输层重试同一个 prompt——那本来就该交给
@@ -98,6 +100,25 @@ class HttpModelGateway:
             return min(self._timeout_seconds, self._query_timeout_seconds)
         return min(self._timeout_seconds, _PURPOSE_TIMEOUT_CAPS.get(purpose, self._timeout_seconds))
 
+    def _budgeted_timeout(self, purpose: str) -> float:
+        """本档上限与「这轮问数还剩多少」的较小者。
+
+        重试链是「每次调用超时 × 尝试次数」，调用方的请求超时对它一无所知，于是先响的
+        是调用方——用户拿到一句没有诊断的超时。剩下的时间不够再打一发时直接认输，把
+        带诊断的超时还回去。
+        """
+
+        timeout = self._timeout_for(purpose)
+        remaining = remaining_seconds()
+        if remaining is None:
+            return timeout
+        if remaining <= _BUDGET_FLOOR_SECONDS:
+            raise ModelGatewayTimeout(
+                "这轮问数的时间预算已经用完，没有再发一次模型请求的余地",
+                code="MODEL_GATEWAY_BUDGET_EXHAUSTED",
+            )
+        return min(timeout, remaining)
+
     def _post_with_backoff(self, body: dict[str, Any], *, purpose: str) -> Any:
         """网络抖动和 5xx 退避重试；4xx 与信封里的业务拒绝不重试。
 
@@ -105,8 +126,8 @@ class HttpModelGateway:
         """
 
         last: Exception | None = None
-        timeout = self._timeout_for(purpose)
         for index in range(_TRANSPORT_RETRIES):
+            timeout = self._budgeted_timeout(purpose)
             try:
                 response = self._client.post(
                     "/v1/analytics/internal/model/generate",

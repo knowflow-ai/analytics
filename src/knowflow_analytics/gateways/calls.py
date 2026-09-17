@@ -11,12 +11,14 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any
 
 _CALLS: ContextVar[list[dict[str, Any]] | None] = ContextVar("analytics_calls", default=None)
+_DEADLINE: ContextVar[float | None] = ContextVar("analytics_deadline", default=None)
 
 
 @contextmanager
@@ -35,3 +37,27 @@ def record_call(**fields: Any) -> None:
     calls = _CALLS.get()
     if calls is not None:
         calls.append(fields)
+
+
+@contextmanager
+def question_budget(seconds: float | None) -> Iterator[None]:
+    """一轮问数的墙钟预算。
+
+    调用方（RAGFlow BFF）有自己的请求超时；重试链是「每次调用超时 × 尝试次数」，两者
+    互不知情，于是**先响的是调用方**——用户看到一句没有诊断的「analytics request timed
+    out」，而我们这边其实知道是哪一步卡住了。开了预算之后，模型调用的超时取「本档上限」
+    与「还剩多少」的较小者，剩下的不够就直接不打这一发，把带诊断的超时还给用户。
+    """
+
+    token = _DEADLINE.set(None if seconds is None else time.monotonic() + seconds)
+    try:
+        yield
+    finally:
+        _DEADLINE.reset(token)
+
+
+def remaining_seconds() -> float | None:
+    """这轮问数还剩多少秒。没开预算时返回 None。"""
+
+    deadline = _DEADLINE.get()
+    return None if deadline is None else deadline - time.monotonic()

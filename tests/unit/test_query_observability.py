@@ -10,7 +10,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from knowflow_analytics.gateways.calls import capture_calls, record_call
+from knowflow_analytics.gateways.calls import capture_calls, question_budget, record_call
 from knowflow_analytics.gateways.model import HttpModelGateway, ModelGatewayError
 from knowflow_analytics.query.contracts import ObservedTrace, QueryStage, QueryTraceStep
 
@@ -147,3 +147,67 @@ class TestGatewayRecordsItsCalls:
         # 超时现在记为更具体的子类名，诊断里能一眼看出是超时而不是拒绝
         assert calls[1]["error"] == "ModelGatewayTimeout"
         assert all("elapsed_ms" in item for item in calls)
+
+
+class TestQuestionBudget:
+    """重试链是「每次调用超时 × 尝试次数」，调用方的请求超时对它一无所知。
+
+    现场（2026-09-16）：一个当前模型答不了的问题把整条重试链跑满，先响的是 RAGFlow BFF
+    的 120 秒，用户拿到一句没有诊断的「analytics request timed out」——而我们这边其实
+    知道卡在哪一步。
+    """
+
+    def test_a_call_is_capped_by_what_is_left_of_the_question(self) -> None:
+        gateway, client = _gateway([_OK], timeout_seconds=240.0)
+
+        with question_budget(12.0):
+            _call(gateway)
+
+        assert client.calls[0]["timeout"] == pytest.approx(12.0, abs=0.5)
+
+    def test_it_stops_instead_of_firing_a_request_that_can_only_land_too_late(self) -> None:
+        gateway, client = _gateway([_OK])
+
+        with question_budget(0.5), pytest.raises(ModelGatewayError) as raised:
+            _call(gateway)
+
+        assert raised.value.code == "MODEL_GATEWAY_BUDGET_EXHAUSTED"
+        assert client.calls == [], "剩下的时间不够就不该再打这一发"
+
+    def test_without_a_budget_nothing_changes(self) -> None:
+        gateway, client = _gateway([_OK], timeout_seconds=240.0)
+
+        _call(gateway)
+
+        assert client.calls[0]["timeout"] == 60.0
+
+    def test_the_diagnosis_does_not_tell_you_to_raise_a_timeout_that_did_not_fire(self) -> None:
+        """预算跑满和单次超时是两回事：前者调大单次上限只会更快撞上调用方的超时。"""
+
+        from knowflow_analytics.query.errors import SemanticParsingError
+        from knowflow_analytics.query.service import _error_diagnosis
+
+        exhausted = _error_diagnosis(
+            SemanticParsingError(
+                "模型在规定时间内没有返回",
+                code="LLM_S2SQL_TIMEOUT",
+                details={
+                    "attempts": [
+                        {"attempt": 1, "code": "LLM_S2SQL_INVALID"},
+                        {"attempt": 2, "code": "MODEL_GATEWAY_BUDGET_EXHAUSTED"},
+                    ]
+                },
+            )
+        )
+        slow = _error_diagnosis(
+            SemanticParsingError(
+                "模型在规定时间内没有返回",
+                code="LLM_S2SQL_TIMEOUT",
+                details={"attempts": [{"attempt": 1, "code": None}]},
+            )
+        )
+
+        assert "预算" in exhausted.summary
+        assert "建模" in exhausted.recommendation
+        assert "QUERY_TIMEOUT_SECONDS" not in exhausted.recommendation
+        assert "QUERY_TIMEOUT_SECONDS" in slow.recommendation

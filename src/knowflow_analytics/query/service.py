@@ -35,7 +35,7 @@ from knowflow_analytics.contracts import (
 from knowflow_analytics.errors import AnalyticsError
 from knowflow_analytics.execution.dialect import SqlDialect
 from knowflow_analytics.execution.targets import ExecutionTargetProvider
-from knowflow_analytics.gateways.calls import capture_calls
+from knowflow_analytics.gateways.calls import capture_calls, question_budget
 from knowflow_analytics.hashing import content_hash
 from knowflow_analytics.query.ambiguity import (
     SemanticDecisionObligation,
@@ -277,6 +277,7 @@ class AnalyticsQueryService:
         dry_run_before_execute: bool = False,
         selection_secret: str | bytes | None = None,
         selection_token_ttl_seconds: int = 900,
+        question_budget_seconds: float | None = None,
     ) -> None:
         self._releases = releases
         self._orchestrator = orchestrator
@@ -290,6 +291,9 @@ class AnalyticsQueryService:
         self._query_history = query_history
         self._query_failures = query_failures
         self._query_rule_engine = query_rule_engine or QueryRuleEngine()
+        # 整轮问数的墙钟预算。调用方（BFF）默认 120 秒，这里必须先认输，否则用户拿到的
+        # 是一句没有诊断的「analytics request timed out」。
+        self._question_budget_seconds = question_budget_seconds
         self._dry_run_before_execute = dry_run_before_execute
         secret = (
             selection_secret.encode("utf-8")
@@ -316,7 +320,7 @@ class AnalyticsQueryService:
         """一轮问数。外面这层只做一件事：把这一轮里每次模型 / 向量调用的耗时收起来，
         挂到最后一个阶段的 detail 里（诊断产物可见，普通 wire 不出）。"""
 
-        with capture_calls() as calls:
+        with capture_calls() as calls, question_budget(self._question_budget_seconds):
             response = self._query(request, actor_id=actor_id, on_trace=on_trace, now=now)
         return _attach_model_calls(response, calls)
 
@@ -4960,6 +4964,26 @@ def _error_diagnosis(exc: AnalyticsError) -> QueryDiagnosis:
         )
     if exc.code == "LLM_S2SQL_TIMEOUT":
         # 超时不退给规则兜底：规则表达不了条件与占比，答出来的是另一个问题的数字。
+        attempts = exc.details.get("attempts") if isinstance(exc.details, dict) else None
+        exhausted = isinstance(attempts, list) and any(
+            isinstance(item, dict) and item.get("code") == "MODEL_GATEWAY_BUDGET_EXHAUSTED"
+            for item in attempts
+        )
+        if exhausted:
+            # 单次没超时，是整条重试链把一轮问数的预算跑满了——这时调大单次上限只会更糟。
+            return QueryDiagnosis(
+                category=QueryDiagnosticCategory.FINAL_PARSING,
+                stage=QueryStage.FINAL_PARSING.value,
+                severity="error",
+                summary="这轮问数把整轮时间预算跑满了，模型一直没写出可执行的查询",
+                recommendation=(
+                    "看这一轮每次被拒的原因（诊断里的尝试记录）：多半是同一条治理规则反复"
+                    "拦下同一种写法，换模型或调大超时都不会有帮助，要改的是建模。"
+                    "确属模型慢时再调大 KNOWFLOW_ANALYTICS_QUERY_BUDGET_SECONDS，"
+                    "但它必须留在调用方请求超时以内。"
+                ),
+                user_hint="这个问题这次没能答出来。换一种问法，或让建模者看一下诊断。",
+            )
         return QueryDiagnosis(
             category=QueryDiagnosticCategory.FINAL_PARSING,
             stage=QueryStage.FINAL_PARSING.value,

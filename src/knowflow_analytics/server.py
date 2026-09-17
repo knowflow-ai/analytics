@@ -111,6 +111,7 @@ def create_app() -> FastAPI:
         minimum_evaluation_cases=settings.minimum_evaluation_cases,
         minimum_accuracy=settings.minimum_accuracy,
         dry_run_before_execute=settings.dry_run_before_execute,
+        query_budget_seconds=settings.query_budget_seconds,
         modeling_max_concurrency=settings.modeling_max_concurrency,
         selection_secret=service_secret,
     )

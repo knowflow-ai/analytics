@@ -90,7 +90,36 @@ def test_a_filter_on_the_multiplied_side_is_applied_before_collapsing(sales_rele
 
     sql = _translate(
         _with_primary_identifier(sales_release),
-        f"SELECT SUM(\"净收入\") FROM {_T} WHERE \"商品\" = '咖啡'",
+        f'SELECT SUM("净收入") FROM {_T} WHERE "商品" = \'咖啡\'',
     ).physical_query.sql
 
     assert "SELECT DISTINCT" in sql
+
+
+def test_a_frozen_route_takes_the_same_collapse(sales_release) -> None:
+    """生产走的是冻结路由那条分支（plan_explicit），不是即时最短路搜索。"""
+
+    from knowflow_analytics.contracts import AnalysisTopicPathSpec, AnalysisTopicRouteSpec
+
+    release = _with_primary_identifier(sales_release)
+    release = release.model_copy(
+        update={
+            "analysis_topic_routes": (
+                AnalysisTopicRouteSpec(
+                    dataset_id="sales_dataset",
+                    root_model_id="orders",
+                    paths=(
+                        AnalysisTopicPathSpec(
+                            target_model_id="order_items",
+                            relation_ids=("orders_items",),
+                        ),
+                    ),
+                ),
+            )
+        }
+    )
+
+    sql = _translate(release).physical_query.sql
+
+    assert "SELECT DISTINCT" in sql
+    assert "__kf_grain_0" in sql

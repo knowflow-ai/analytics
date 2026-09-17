@@ -33,6 +33,7 @@ class JoinPlanner:
         required_model_ids: set[str],
         has_metrics: bool,
         fanout_safe: bool = False,
+        allow_multiplication: bool = False,
     ) -> tuple[PlannedRelation, ...]:
         if required_model_ids == {anchor_model_id}:
             return ()
@@ -56,13 +57,12 @@ class JoinPlanner:
                 current = next_model
 
         ordered = self._order_tree(anchor_model_id, selected)
-        if has_metrics and not fanout_safe:
-            for edge in ordered:
-                if self._expands_rows(edge):
-                    raise TranslationError(
-                        f"relation {edge.relation.id} expands the metric grain",
-                        code="FANOUT_RISK",
-                    )
+        self._reject_multiplication(
+            ordered,
+            has_metrics=has_metrics,
+            fanout_safe=fanout_safe,
+            allow_multiplication=allow_multiplication,
+        )
         return tuple(ordered)
 
     def plan_explicit(
@@ -73,6 +73,7 @@ class JoinPlanner:
         required_model_ids: set[str],
         has_metrics: bool,
         fanout_safe: bool = False,
+        allow_multiplication: bool = False,
     ) -> tuple[PlannedRelation, ...]:
         """Bind a reviewed root-relative route without shortest-path discovery."""
 
@@ -100,14 +101,50 @@ class JoinPlanner:
                 "analysis topic route does not reach every requested model",
                 code="ANALYSIS_TOPIC_PATH_MISSING",
             )
-        if has_metrics and not fanout_safe:
-            for edge in ordered:
-                if self._expands_rows(edge):
-                    raise TranslationError(
-                        f"relation {edge.relation.id} expands the metric grain",
-                        code="FANOUT_RISK",
-                    )
+        self._reject_multiplication(
+            ordered,
+            has_metrics=has_metrics,
+            fanout_safe=fanout_safe,
+            allow_multiplication=allow_multiplication,
+        )
         return tuple(ordered)
+
+    def _reject_multiplication(
+        self,
+        ordered: list[PlannedRelation],
+        *,
+        has_metrics: bool,
+        fanout_safe: bool,
+        allow_multiplication: bool,
+    ) -> None:
+        """放大的连接要么被算对，要么被拒绝，绝不静默翻倍。
+
+        ``allow_multiplication`` 由调用方在**能够**算对时打开：它必须按事实根的主
+        标识把重复行塌回去再聚合（见 ``multiplies_anchor``）。做不到就还是拒绝——
+        错的数字比答不了更糟。
+        """
+
+        if allow_multiplication or not has_metrics or fanout_safe:
+            return
+        for edge in ordered:
+            if self._expands_rows(edge):
+                raise TranslationError(
+                    f"relation {edge.relation.id} expands the metric grain",
+                    code="FANOUT_RISK",
+                    details={
+                        # 文本 S2SQL 那条路会按事实根主标识去重还原（对齐 Cube 的 keys
+                        # 子查询）；结构化投影还没有那一层，这里如实说明去哪儿问。
+                        "hint": (
+                            "该组合会放大事实粒度；用自然语言问数可得到按主标识去重的正确结果。"
+                        ),
+                    },
+                )
+
+    @staticmethod
+    def multiplies_anchor(ordered: tuple[PlannedRelation, ...]) -> bool:
+        """这套连接会不会把事实根的行复制出多份。"""
+
+        return any(JoinPlanner._expands_rows(edge) for edge in ordered)
 
     def _unique_shortest_path(self, source: str, target: str) -> list[tuple[str, RelationSpec]]:
         queue: deque[str] = deque([source])

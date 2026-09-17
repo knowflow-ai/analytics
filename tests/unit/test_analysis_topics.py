@@ -31,7 +31,14 @@ def _with_confirmed_order_root(sales_release):
     return sales_release.model_copy(update={"fields": fields})
 
 
-def test_default_topic_uses_only_safe_root_relative_paths(sales_release):
+def test_a_confirmed_grain_opens_the_many_side_of_a_one_to_many(sales_release):
+    """确认了主标识，一对多的那一侧也进作用域。
+
+    2026-09-16 改过向：此前放大事实粒度的路径整条被禁，「各商品的净收入」这类跨粒度
+    问题一律答不了。现在查询期按事实根主标识去重还原（对齐 Cube 的 keys 子查询），
+    数字由 tests/integration/test_fanout_numbers_postgres.py 对着真库核过。
+    """
+
     release = _with_confirmed_order_root(sales_release)
 
     proposals = AnalysisTopicProposer().propose(release)
@@ -39,16 +46,30 @@ def test_default_topic_uses_only_safe_root_relative_paths(sales_release):
     assert len(proposals) == 1
     proposal = proposals[0]
     assert proposal.route.root_model_id == "orders"
-    assert proposal.dataset.model_ids == ("orders", "customers")
+    assert proposal.dataset.model_ids == ("orders", "customers", "order_items")
     assert proposal.route.paths == (
         AnalysisTopicPathSpec(
             target_model_id="customers",
             relation_ids=("orders_customer",),
         ),
+        AnalysisTopicPathSpec(
+            target_model_id="order_items",
+            relation_ids=("orders_items",),
+        ),
     )
     assert "customer_segment" in proposal.dataset.dimension_ids
-    assert "product" not in proposal.dataset.dimension_ids
+    assert "product" in proposal.dataset.dimension_ids
     assert release.datasets[0].id == "sales_dataset"  # proposal generation is non-mutating
+
+
+def test_without_a_confirmed_grain_the_many_side_stays_out(sales_release):
+    """塌不回去就不开放：没有主标识时，放大的那一侧按老规矩整条排除。"""
+
+    proposals = AnalysisTopicProposer().propose(sales_release)
+
+    proposal = next(item for item in proposals if item.route.root_model_id == "orders")
+    assert proposal.dataset.model_ids == ("orders", "customers")
+    assert "product" not in proposal.dataset.dimension_ids
 
 
 def test_default_topic_membership_is_invariant_to_business_name_changes(sales_release):

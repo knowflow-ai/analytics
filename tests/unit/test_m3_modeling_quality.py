@@ -18,6 +18,8 @@ from knowflow_analytics.modeling.quality import (
 
 
 def test_metric_dimension_matrix_exposes_safe_and_fanout_paths(sales_release):
+    """没有主标识时，一对多维度仍然拦下：塌不回去就算不对。"""
+
     cells = ModelingQualityProfiler._reachability_matrix(sales_release)
     index = {(item.metric_id, item.dimension_id): item for item in cells}
 
@@ -25,6 +27,29 @@ def test_metric_dimension_matrix_exposes_safe_and_fanout_paths(sales_release):
     assert index[("net_revenue", "customer_segment")].relation_ids == ("orders_customer",)
     assert index[("net_revenue", "product")].status is QualityStatus.BLOCKING
     assert index[("net_revenue", "product")].reason_code == "FANOUT_RISK"
+    assert "主标识" in index[("net_revenue", "product")].message
+    assert index[("net_revenue", "product")].relation_ids == ("orders_items",)
+
+
+def test_a_fanned_out_dimension_becomes_reachable_once_the_grain_is_declared(sales_release):
+    """有主标识就能按主标识去重还原，这个维度于是可问——数字由扇出那组实机测试核对。"""
+
+    with_primary = sales_release.model_copy(
+        update={
+            "fields": tuple(
+                item.model_copy(update={"identifier_type": "primary"})
+                if item.id == "orders.id"
+                else item
+                for item in sales_release.fields
+            )
+        }
+    )
+
+    cells = ModelingQualityProfiler._reachability_matrix(with_primary)
+    index = {(item.metric_id, item.dimension_id): item for item in cells}
+
+    assert index[("net_revenue", "product")].status is QualityStatus.PASSED
+    assert index[("net_revenue", "product")].reason_code == "REACHABLE_AFTER_COLLAPSE"
     assert index[("net_revenue", "product")].relation_ids == ("orders_items",)
 
 

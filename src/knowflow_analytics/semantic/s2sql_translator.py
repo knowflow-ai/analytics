@@ -13,6 +13,7 @@ from sqlglot.optimizer.simplify import simplify
 from knowflow_analytics.contracts import (
     Aggregation,
     DatasetSpec,
+    FieldKind,
     FilterOperator,
     FixedFilter,
     MetricKind,
@@ -735,12 +736,15 @@ class _OntologyQueryParser:
             dataset_id=statement.dataset.id,
             required_model_ids=required_models,
         )
+        # 放大的连接不再一刀切禁掉：能按事实根的主标识把重复行塌回去就算对它，
+        # 算不对才拒绝。判定放在这里而不是规划器里——规划器不知道我们会不会塌。
         if bound_route is None:
             relation_plan = planner.plan(
                 anchor_model_id=anchor_model_id,
                 required_model_ids=required_models,
                 has_metrics=bool(metrics),
                 fanout_safe=fanout_safe,
+                allow_multiplication=True,
             )
         else:
             anchor_model_id, relation_ids = bound_route
@@ -755,6 +759,26 @@ class _OntologyQueryParser:
                 required_model_ids=required_models,
                 has_metrics=bool(metrics),
                 fanout_safe=fanout_safe,
+                allow_multiplication=True,
+            )
+        multiplied = (
+            bool(metrics)
+            and not fanout_safe
+            and JoinPlanner.multiplies_anchor(tuple(relation_plan))
+        )
+        grain_fields = _grain_fields(indexes, anchor_model_id) if multiplied else ()
+        if multiplied and not grain_fields:
+            raise TranslationError(
+                f"模型 {indexes.models[anchor_model_id].name} 参与了一对多连接且带可加度量，"
+                "需要主标识才能正确聚合",
+                code="FANOUT_RISK",
+            )
+        if multiplied and statement.metric_time_axes:
+            # 逻辑时间轴把来源按轴 UNION ALL 展开，与按主标识塌回去叠在一起还没有
+            # 验证过的形态。宁可答不了，不给一个没人核对过的数字。
+            raise TranslationError(
+                "multi-axis metrics cannot be combined with a fanned-out join yet",
+                code="FANOUT_RISK",
             )
         translator = SemanticTranslator()
         aliases = translator._aliases(anchor_model_id, relation_plan)
@@ -835,6 +859,17 @@ class _OntologyQueryParser:
                 for axis_id in statement.metric_time_axes
             ]
             inner_sql = " UNION ALL ".join(branches)
+        elif multiplied:
+            inner_sql = _collapsed_inner_sql(
+                indexes=indexes,
+                aliases=aliases,
+                parameters=parameters,
+                field_tokens=statement.field_tokens,
+                anchor_model_id=anchor_model_id,
+                grain_fields=grain_fields,
+                from_sql=from_sql,
+                where_sql=where_sql,
+            )
         else:
             inner_sql = f"SELECT {_projection_list(projections)} FROM {from_sql}{where_sql}"
         inner_query = sqlglot.parse_one(inner_sql, read="postgres")
@@ -947,6 +982,90 @@ class _OntologyQueryParser:
             relation_ids=tuple(dict.fromkeys(relation_ids)),
             result_limit=result_limit,
         )
+
+
+KEYS_ALIAS = "__kf_keys"
+GRAIN_TOKEN_PREFIX = "__kf_grain_"
+
+
+def _grain_fields(indexes: _ReleaseIndexes, model_id: str) -> tuple[Any, ...]:
+    """事实根的主标识列。复合主键按 ID 排序，SQL 因此可复现。"""
+
+    return tuple(
+        sorted(
+            (
+                field
+                for field in indexes.fields.values()
+                if field.model_id == model_id
+                and field.kind is FieldKind.IDENTIFIER
+                and field.identifier_type == "primary"
+            ),
+            key=lambda item: item.id,
+        )
+    )
+
+
+def _collapsed_inner_sql(
+    *,
+    indexes: _ReleaseIndexes,
+    aliases: dict[str, str],
+    parameters: _ParameterBuilder,
+    field_tokens: dict[str, str],
+    anchor_model_id: str,
+    grain_fields: tuple[Any, ...],
+    from_sql: str,
+    where_sql: str,
+) -> str:
+    """按事实根的主标识把被放大的行塌回去（对齐 Cube 的 keys 子查询）。
+
+    三步，与 Cube 的 ``BaseQuery.js`` 一致：放大的连接照跑；
+    ``SELECT DISTINCT 分组维度 + 事实根主键`` 把重复行塌掉；按主键接回事实根再聚合。
+    过滤留在子查询里——它决定哪些（维度，主键）对入选，塌回去之后每个主键只算一次。
+
+    比 Cube 少一层：作用域里的指标必然属于事实根，所以被放大的只有事实根一个，
+    不需要「每个被放大的 cube 一个子查询再按维度缝合」。
+    """
+
+    outer_tokens = {
+        token: field_id
+        for token, field_id in field_tokens.items()
+        if indexes.fields[field_id].model_id == anchor_model_id
+    }
+    keys_tokens = {
+        token: field_id for token, field_id in field_tokens.items() if token not in outer_tokens
+    }
+    keys_select = [
+        f"{indexes.field_sql(field_id, aliases)} AS {_quote(token)}"
+        for token, field_id in keys_tokens.items()
+    ]
+    grain_tokens = [f"{GRAIN_TOKEN_PREFIX}{index}" for index in range(len(grain_fields))]
+    keys_select += [
+        f"{indexes.field_sql(field.id, aliases)} AS {_quote(token)}"
+        for field, token in zip(grain_fields, grain_tokens, strict=True)
+    ]
+    keys_sql = f"SELECT DISTINCT {', '.join(keys_select)} FROM {from_sql}{where_sql}"
+
+    outer_select = [
+        f"{_quote(KEYS_ALIAS)}.{_quote(token)} AS {_quote(token)}" for token in keys_tokens
+    ]
+    outer_select += [
+        f"{indexes.field_sql(field_id, aliases)} AS {_quote(token)}"
+        for token, field_id in outer_tokens.items()
+    ]
+    anchor = indexes.models[anchor_model_id]
+    anchor_sql = (
+        f"{SemanticTranslator._model_source_sql(anchor, indexes, parameters)} "
+        f"AS {_quote(aliases[anchor_model_id])}"
+    )
+    on_sql = " AND ".join(
+        f"{indexes.field_sql(field.id, aliases)} = {_quote(KEYS_ALIAS)}.{_quote(token)}"
+        for field, token in zip(grain_fields, grain_tokens, strict=True)
+    )
+    return (
+        f"SELECT {_projection_list(outer_select)} "
+        f"FROM ({keys_sql}) AS {_quote(KEYS_ALIAS)} "
+        f"JOIN {anchor_sql} ON {on_sql}"
+    )
 
 
 def _projection_list(projections: list[str]) -> str:

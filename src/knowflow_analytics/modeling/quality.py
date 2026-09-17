@@ -13,6 +13,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from knowflow_analytics.contracts import (
     Cardinality,
+    FieldKind,
     FrozenModel,
     SemanticQuery,
     SemanticRelease,
@@ -585,6 +586,11 @@ class ModelingQualityProfiler:
         metric_by_id = {item.id: item for item in release.metrics}
         dimension_by_id = {item.id: item for item in release.dimensions}
         planner = JoinPlanner(release.relations)
+        primary_models = {
+            field.model_id
+            for field in release.fields
+            if field.kind is FieldKind.IDENTIFIER and field.identifier_type == "primary"
+        }
         cells: list[DatasetReachabilityCell] = []
         for dataset in sorted(release.datasets, key=lambda item: item.id):
             for metric_id in dataset.metric_ids:
@@ -596,25 +602,36 @@ class ModelingQualityProfiler:
                             anchor_model_id=metric.model_id,
                             required_model_ids={metric.model_id, dimension.model_id},
                             has_metrics=True,
+                            allow_multiplication=True,
                         )
-                        status = QualityStatus.PASSED
-                        code = "REACHABLE"
-                        message = "指标可沿唯一且不扩张事实粒度的关系访问该维度。"
+                        if (
+                            JoinPlanner.multiplies_anchor(path)
+                            and metric.model_id not in primary_models
+                        ):
+                            # 会被放大，而事实根没有主标识：塌不回去，也就算不对。
+                            status = QualityStatus.BLOCKING
+                            code = "FANOUT_RISK"
+                            message = (
+                                "该维度经一对多关系访问，会把事实行复制成多份；"
+                                "事实模型没有主标识，无法按主标识去重还原。"
+                                "确认一个在数据里唯一的主标识后即可按该维度分组。"
+                            )
+                        elif JoinPlanner.multiplies_anchor(path):
+                            status = QualityStatus.PASSED
+                            code = "REACHABLE_AFTER_COLLAPSE"
+                            message = (
+                                "该维度经一对多关系访问：查询会先按事实主标识去重再聚合，"
+                                "同一条事实不会被重复计入。"
+                            )
+                        else:
+                            status = QualityStatus.PASSED
+                            code = "REACHABLE"
+                            message = "指标可沿唯一且不扩张事实粒度的关系访问该维度。"
                     except TranslationError as exc:
                         path = ()
                         status = QualityStatus.BLOCKING
                         code = exc.code
                         message = str(exc)
-                        if exc.code == "FANOUT_RISK":
-                            try:
-                                path = planner.plan(
-                                    anchor_model_id=metric.model_id,
-                                    required_model_ids={metric.model_id, dimension.model_id},
-                                    has_metrics=True,
-                                    fanout_safe=True,
-                                )
-                            except TranslationError:
-                                path = ()
                     cells.append(
                         DatasetReachabilityCell(
                             dataset_id=dataset.id,

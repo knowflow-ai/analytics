@@ -24,8 +24,14 @@ class SemanticValidationError(AnalyticsError):
 
 
 class TranslationError(AnalyticsError):
-    def __init__(self, message: str, *, code: str = "TRANSLATION_FAILED") -> None:
-        super().__init__(message, code=code, stage="TRANSLATING")
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "TRANSLATION_FAILED",
+        details: dict[str, object] | None = None,
+    ) -> None:
+        super().__init__(message, code=code, stage="TRANSLATING", details=details)
 
 
 class QueryGuardError(AnalyticsError):

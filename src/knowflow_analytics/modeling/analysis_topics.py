@@ -140,6 +140,12 @@ def validate_analysis_topic_route(
             f"analysis topic has conflicting canonical names: {conflicting_members[:5]}",
             code="ANALYSIS_TOPIC_CANONICAL_NAME_CONFLICT",
         )
+    root_has_primary = any(
+        field.model_id == route.root_model_id
+        and field.kind is FieldKind.IDENTIFIER
+        and field.identifier_type == "primary"
+        for field in release.fields
+    )
     reachable = {route.root_model_id}
     governed_prefixes: dict[str, tuple[str, ...]] = {route.root_model_id: ()}
     for path in route.paths:
@@ -162,7 +168,9 @@ def validate_analysis_topic_route(
                     f"analysis topic path is discontinuous at relation {relation_id}",
                     code="ANALYSIS_TOPIC_PATH_DISCONTINUOUS",
                 )
-            if _expands_rows(relation, from_model_id=current):
+            if _expands_rows(relation, from_model_id=current) and not root_has_primary:
+                # 放大的路径本身不再是错（翻译期按事实根主标识去重还原，对齐 Cube
+                # 的 keys 子查询）；塌不回去才是错。
                 raise SemanticValidationError(
                     f"analysis topic path expands the fact grain at relation {relation_id}",
                     code="ANALYSIS_TOPIC_FANOUT_PATH",
@@ -458,6 +466,8 @@ class AnalysisTopicProposer:
             paths, ambiguous = self._safe_unique_paths(
                 root_model_id=root_model_id,
                 relations=release.relations,
+                # 会被放大的路径只在能塌回去时才开放：翻译期按事实根主标识去重还原。
+                allow_multiplication=root_model_id in primary_fields_by_model,
             )
             model_ids = (root_model_id, *sorted(paths))
             metric_ids = tuple(sorted(metrics_by_model[root_model_id]))
@@ -591,7 +601,35 @@ class AnalysisTopicProposer:
         *,
         root_model_id: str,
         relations: tuple[RelationSpec, ...],
+        allow_multiplication: bool = False,
     ) -> tuple[dict[str, tuple[str, ...]], set[str]]:
+        """事实根到每个实体的唯一路径。
+
+        先只走不放大事实粒度的方向；``allow_multiplication`` 打开时，对**这样走不到**
+        的实体再补一轮，允许经过一对多。放大的路径不参与和安全路径的竞争——已经有
+        安全路径的实体，路由一个字都不变，这是把改动面压到最小的那条线。
+
+        放大的路径在查询期由翻译器按事实根主标识去重还原（对齐 Cube 的 keys 子查询），
+        所以只有确认了主标识的事实根才允许打开。
+        """
+
+        safe = AnalysisTopicProposer._adjacency(relations, multiplying=False)
+        paths, ambiguous = AnalysisTopicProposer._unique_paths(root_model_id, safe)
+        if not allow_multiplication:
+            return paths, ambiguous
+        full = AnalysisTopicProposer._adjacency(relations, multiplying=True)
+        extra_paths, extra_ambiguous = AnalysisTopicProposer._unique_paths(root_model_id, full)
+        reached = set(paths) | ambiguous | {root_model_id}
+        for target, edges in extra_paths.items():
+            if target not in reached:
+                paths[target] = edges
+        ambiguous |= {target for target in extra_ambiguous if target not in reached}
+        return paths, ambiguous
+
+    @staticmethod
+    def _adjacency(
+        relations: tuple[RelationSpec, ...], *, multiplying: bool
+    ) -> dict[str, list[tuple[str, str]]]:
         adjacency: dict[str, list[tuple[str, str]]] = defaultdict(list)
         for relation in relations:
             if relation.cardinality is Cardinality.ONE_TO_ONE:
@@ -599,11 +637,27 @@ class AnalysisTopicProposer:
                 adjacency[relation.right_model_id].append((relation.left_model_id, relation.id))
             elif relation.cardinality is Cardinality.MANY_TO_ONE:
                 adjacency[relation.left_model_id].append((relation.right_model_id, relation.id))
+                if multiplying:
+                    adjacency[relation.right_model_id].append(
+                        (relation.left_model_id, relation.id)
+                    )
             elif relation.cardinality is Cardinality.ONE_TO_MANY:
                 adjacency[relation.right_model_id].append((relation.left_model_id, relation.id))
+                if multiplying:
+                    adjacency[relation.left_model_id].append(
+                        (relation.right_model_id, relation.id)
+                    )
+            elif multiplying and relation.cardinality is Cardinality.MANY_TO_MANY:
+                # 多对多两边都放大，去重还原不出任何一边的粒度，永远不开放。
+                continue
         for edges in adjacency.values():
             edges.sort(key=lambda item: item[1])
+        return adjacency
 
+    @staticmethod
+    def _unique_paths(
+        root_model_id: str, adjacency: dict[str, list[tuple[str, str]]]
+    ) -> tuple[dict[str, tuple[str, ...]], set[str]]:
         # BFS 给出最短路径,同时数出最短路径的条数。歧义的判据是"存在等长的
         # 另一条最短路径"(同一对模型间有两条外键、或两条同长度的绕行),而不是
         # "存在任何其它路径"。一条严格更长的绕行是另一种派生关系,不是对同一

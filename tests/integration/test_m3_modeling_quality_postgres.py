@@ -82,10 +82,12 @@ def test_m3_profiles_grain_relations_metrics_and_dataset_matrix_against_postgres
     assert previews["net_revenue"].rows == ((380,),)
     assert previews["order_count"].rows == ((3,),)
     assert all(item.status is QualityStatus.PENDING_REVIEW for item in previews.values())
+    # 主标识确认过（夹具把 orders.id 标成 primary），一对多的维度因此可达：
+    # 查询期按主标识去重还原，数字由 test_fanout_numbers_postgres.py 核过。
     assert any(
         item.metric_id == "net_revenue"
         and item.dimension_id == "product"
-        and item.reason_code == "FANOUT_RISK"
+        and item.reason_code == "REACHABLE_AFTER_COLLAPSE"
         for item in report.reachability
     )
 

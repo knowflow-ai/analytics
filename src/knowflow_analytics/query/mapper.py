@@ -398,11 +398,14 @@ class SemanticMapper:
         )
         matches: list[MappingEvidenceMatch] = []
         exact_terms = _dictionary_term_texts(text, entries)
+        named_dimensions = _named_dimension_ids(text, entries)
         for detected_text, (segment_dataset_ids, detected_spans) in segment_scopes.items():
             if not detected_text:
                 continue
             numeric = _is_numeric_literal(detected_text)
             for entry in entries:
+                if numeric and _is_unnamed_numeric_value(entry, named_dimensions):
+                    continue
                 eligible = self._eligible_dataset_ids(
                     entry.dataset_ids,
                     segment_dataset_ids,
@@ -486,6 +489,7 @@ class SemanticMapper:
         """Batch question and exact-term-description segments in one model call."""
 
         assert self._embedding_gateway is not None
+        named_dimensions = _named_dimension_ids(question, entries)
         requests: list[tuple[str | None, str, tuple[str, ...], tuple[tuple[int, int], ...]]] = [
             (None, segment, allowed_dataset_ids, spans)
             for segment, spans in _embedding_segments_with_spans(question, entries)
@@ -541,6 +545,8 @@ class SemanticMapper:
                 if entry.element_type is SemanticElementType.DATASET:
                     continue
                 if numeric_segment and entry.normalized_phrase != normalized_segment:
+                    continue
+                if numeric_segment and _is_unnamed_numeric_value(entry, named_dimensions):
                     continue
                 eligible = self._eligible_dataset_ids(
                     entry.dataset_ids,
@@ -1747,6 +1753,38 @@ def _is_numeric_literal(text: str) -> bool:
     """纯数字只认整体相等：「2000」和「20000」相似 0.8 没有任何意义。"""
 
     return _NUMERIC_LITERAL.fullmatch(text) is not None
+
+
+def _named_dimension_ids(question: str, entries: tuple[SemanticIndexEntry, ...]) -> frozenset[str]:
+    """问句里被点名的维度：名字或别名原样出现过。"""
+
+    normalized = normalize_text(question)
+    return frozenset(
+        entry.element_id
+        for entry in entries
+        if entry.element_type is SemanticElementType.DIMENSION
+        and entry.normalized_phrase
+        and entry.normalized_phrase in normalized
+    )
+
+
+def _is_unnamed_numeric_value(entry: SemanticIndexEntry, named_dimensions: frozenset[str]) -> bool:
+    """这是一个「没人介绍过的数字取值」吗。
+
+    问句里的裸数字几乎总是阈值、数量或名次；它撞上某张表的某个编码是巧合，不是证据。
+    现场（2026-09-17）「账户余额大于 1000」里的 1000 命中了另一张表的
+    ``账户代码 = 1000``（那列是评分调整值），该维度于是成了必须满足的精确条件，
+    而指标锚在另一个事实根上，两表无关系——整条路由 fail-closed，用户看到的是
+    「该指标不能按所选维度安全分析」。
+
+    维度自己被点名时（「账户代码是 1000」）数字就有了出处，照常召回。文本取值不受
+    这条限制：「上海」本身就是强信号。
+    """
+
+    return (
+        entry.element_type is SemanticElementType.DIMENSION_VALUE
+        and entry.dimension_id not in named_dimensions
+    )
 
 
 def _dictionary_term_texts(

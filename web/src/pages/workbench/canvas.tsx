@@ -23,6 +23,8 @@ import {
 } from '@analytics/lib/labels';
 import type { WorkbenchContext } from './index';
 import { EntityEditor } from './entity-editor';
+import { FactCheckControl } from './fact-check-control';
+import { cardinalityLabel, observedCardinalityFix } from './fact-check';
 import { ModelGraph } from './model-graph';
 import { useAvailableCanvasHeight } from '@analytics/lib/use-available-height';
 
@@ -396,6 +398,40 @@ export function CanvasPanel({ projectId, revision, acceptRevision, readOnly }: W
                 </Select>
               </Field>
             </div>
+            {/*
+              基数写错不会报错，只会让扇出判定跟着错，而错的扇出静默改变每一个跨表
+              指标的数值。所以这里是整组核对里唯一「既能查又能改」的一处。
+              新建的关系还没有 id，先存下来才能核对。
+            */}
+            {draft.id && (
+              <FactCheckControl
+                projectId={projectId}
+                revision={revision}
+                kind="relation"
+                subjectId={draft.id}
+                readOnly={readOnly}
+                hint="量一下两端命中率与实际的一对多方向"
+              >
+                {(entry) => {
+                  const fix = observedCardinalityFix(entry);
+                  if (!fix) return null;
+                  return (
+                    <div className="flex flex-wrap items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-900">
+                      <span>
+                        声明 {cardinalityLabel(fix.declared)}，实测 {cardinalityLabel(fix.observed)}。
+                      </span>
+                      <button
+                        type="button"
+                        className="font-medium text-amber-900 underline underline-offset-2 hover:text-amber-700"
+                        onClick={() => setDraft({ ...draft, cardinality: fix.observed as Cardinality })}
+                      >
+                        采用实测基数
+                      </button>
+                    </div>
+                  );
+                }}
+              </FactCheckControl>
+            )}
           </div>
         )}
       </Dialog>

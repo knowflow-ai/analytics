@@ -646,6 +646,28 @@ export type AnalyticsQualityStatus =
   | 'confirmed'
   | 'rejected';
 
+export type AnalyticsFactCheckKind = 'grain' | 'relation' | 'metric' | 'rows';
+
+/**
+ * 建模期按对象核对的一条结论。`payload` 与发布前质量报告里对应那一段同形,
+ * 因为它就是同一段代码量出来的。
+ */
+export interface AnalyticsFactCheckEntry {
+  kind: AnalyticsFactCheckKind;
+  subject_id: string;
+  subject_hash: string;
+  result: {
+    kind: AnalyticsFactCheckKind;
+    subject_id: string;
+    subject_hash: string;
+    status: AnalyticsQualityStatus;
+    payload: Record<string, unknown>;
+    computed_at: string;
+  } | null;
+  /** 量过,但已经超过 24 小时 —— 数据会漂移,旧数字仍然显示,只是标注可能过时。 */
+  expired: boolean;
+}
+
 export interface AnalyticsModelingQualityReport {
   id: string;
   project_id: string;

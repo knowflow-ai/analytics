@@ -44,6 +44,7 @@ import {
   roleChangeBlockers,
 } from './field-lock';
 import { ContextualTermButton } from './business-dictionary';
+import { FactCheckControl } from './fact-check-control';
 
 type Kind = CatalogFieldRoleInput['kind'];
 type DeletionKind = 'dimensions' | 'metrics' | 'models' | 'hierarchies';
@@ -557,6 +558,8 @@ export function EntityEditor({ projectId, revision, modelId, readOnly, acceptRev
                 {detail.kind === 'field' && (
                   <FieldEditor
                       key={`${detail.field.id}:${editEpoch}`}
+                      projectId={projectId}
+                      revision={revision}
                       field={detail.field}
                       blockers={blockersByField.get(detail.field.id) ?? []}
                       relations={relationReferences(detail.field, spec.relations).map((r) => {
@@ -734,6 +737,8 @@ export function EntityEditor({ projectId, revision, modelId, readOnly, acceptRev
 }
 
 export function FieldEditor({
+  projectId,
+  revision,
   field,
   blockers,
   relations,
@@ -742,6 +747,8 @@ export function FieldEditor({
   onClose,
   onSave,
 }: {
+  projectId: string;
+  revision: AnalyticsRevision;
   field: AnalyticsField;
   /** 改角色会被服务端编译拒绝的原因:MEASURE 型指标口径还引用着该 measure。 */
   blockers: AnalyticsCatalogMetric[];
@@ -793,18 +800,28 @@ export function FieldEditor({
           </div>
         )}
         {form.kind === 'identifier' && (
-        <div className="grid grid-cols-[repeat(auto-fit,minmax(170px,1fr))] gap-3">
-            <Field label="标识类型">
-              <Select disabled={locked} value={form.identifierType} onChange={(e) => setForm({ ...form, identifierType: e.target.value as 'primary' | 'foreign' })}>
-                <option value="primary">主标识</option>
-                <option value="foreign">外部标识</option>
-              </Select>
-            </Field>
-            <label className="flex items-end gap-2 pb-2 text-xs text-slate-600">
-              <input type="checkbox" checked={Boolean(form.createDimension)} onChange={(e) => setForm({ ...form, createDimension: e.target.checked })} />
-              生成维度
-            </label>
-          </div>
+          <>
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(170px,1fr))] gap-3">
+              <Field label="标识类型">
+                <Select disabled={locked} value={form.identifierType} onChange={(e) => setForm({ ...form, identifierType: e.target.value as 'primary' | 'foreign' })}>
+                  <option value="primary">主标识</option>
+                  <option value="foreign">外部标识</option>
+                </Select>
+              </Field>
+              <label className="flex items-end gap-2 pb-2 text-xs text-slate-600">
+                <input type="checkbox" checked={Boolean(form.createDimension)} onChange={(e) => setForm({ ...form, createDimension: e.target.checked })} />
+                生成维度
+              </label>
+            </div>
+            {/* 主标识决定整张表的粒度，而它选得对不对是数据说了算，不是名字说了算。 */}
+            <FactCheckControl
+              projectId={projectId}
+              revision={revision}
+              kind="grain"
+              subjectId={field.model_id}
+              hint="主标识要在真实数据里非空且唯一，量一下再保存"
+            />
+          </>
         )}
         {(form.kind === 'dimension' || form.kind === 'time') && (
         <div className="grid grid-cols-[repeat(auto-fit,minmax(170px,1fr))] gap-3">

@@ -5,6 +5,8 @@ import type {
   AnalyticsDictionaryDecision,
   AnalyticsDimensionValue,
   AnalyticsEvaluationReport,
+  AnalyticsFactCheckEntry,
+  AnalyticsFactCheckKind,
   AnalyticsGoldenSuiteRecord,
   AnalyticsFeedbackStatus,
   AnalyticsQueryFailure,
@@ -341,6 +343,31 @@ export const reviewQualityReport = (
         expected_content_hash: report.content_hash,
         decisions,
       },
+    },
+  );
+
+/**
+ * 建模页每个对象此刻的核对状态。**纯读缓存,不碰业务库**,所以翻页、切实体都可以调。
+ */
+export const listFactChecks = (projectId: string, revisionId: string) =>
+  request<{ entries: AnalyticsFactCheckEntry[] }>(
+    `${revisionPath(projectId, revisionId)}/fact-checks`,
+    { projectId },
+  );
+
+/** 就地核对一个对象。打的是业务库,只在用户点「用数据核对」时调。 */
+export const runFactCheck = (
+  projectId: string,
+  revisionId: string,
+  version: RevisionVersion,
+  subject: { kind: AnalyticsFactCheckKind; subject_id: string },
+) =>
+  request<{ entry: AnalyticsFactCheckEntry }>(
+    `${revisionPath(projectId, revisionId)}/fact-checks`,
+    {
+      method: 'POST',
+      projectId,
+      body: { ...version, ...subject },
     },
   );
 

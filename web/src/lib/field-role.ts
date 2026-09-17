@@ -34,8 +34,11 @@ export function fieldRoleVisual(field: RoleInput): FieldRoleVisual {
       return { label, tone: 'sky', variant: 'outline', icon: 'clock' };
     case 'measure':
       return { label, tone: 'green', variant: 'solid', icon: null };
+    case 'field':
+      // 普通字段是人做过的决定，不是待办：中性色，不占提醒色。
+      return { label, tone: 'slate', variant: 'solid', icon: null };
     default:
-      // 待确认是需要用户处理的缺口，用提醒色。
+      // 真的没有角色（kind 缺失）才是需要用户处理的缺口。
       return { label, tone: 'amber', variant: 'solid', icon: null };
   }
 }

@@ -31,13 +31,13 @@ interface ModelNodeData extends Record<string, unknown> {
   fieldCount: number;
   dimensionCount: number;
   metricCount: number;
-  unclassifiedCount: number;
+  /** 不参与分析的普通字段数。它是一种选择，不是待办，所以用中性色。 */
+  plainCount: number;
   fields: Array<{
     id: string;
     name: string;
     role: string;
     roleClass: string;
-    pending: boolean;
     handleMode: FieldHandleMode | null;
   }>;
   onOpen: () => void;
@@ -117,8 +117,8 @@ function ModelNodeView({ data, selected }: NodeProps<ModelNode>) {
           <Sigma className="h-3 w-3 text-emerald-600" />
           {data.metricCount} 指标
         </span>
-        {data.unclassifiedCount > 0 && (
-          <span className="ml-auto text-blue-600">{data.unclassifiedCount} 待确认</span>
+        {data.plainCount > 0 && (
+          <span className="ml-auto text-slate-400">{data.plainCount} 普通字段</span>
         )}
       </div>
       <Handle
@@ -232,13 +232,12 @@ export function ModelGraph({
             fieldCount: fields.length,
             dimensionCount: spec.dimensions.filter((d) => d.model_id === model.id).length,
             metricCount: spec.metrics.filter((m) => m.model_id === model.id).length,
-            unclassifiedCount: fields.filter((field) => field.kind === 'field').length,
+            plainCount: fields.filter((field) => field.kind === 'field').length,
             fields: fields.map((field) => ({
               id: field.id,
               name: field.name,
               role: fieldRoleVisual(field).label,
               roleClass: FIELD_ROLE_TEXT_CLASS[fieldRoleVisual(field).tone],
-              pending: field.kind === 'field',
               // 主标识可拉新关系；已有关系挂着的字段降级后也要保留连接点，
               // 否则边会凭空消失而关系还在目录里。
               handleMode: fieldHandleMode(field, anchoredFieldIds),

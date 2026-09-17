@@ -26,6 +26,10 @@ export function fieldRoleLabel(field: Pick<AnalyticsField, 'kind' | 'identifier_
       return '时间';
     case 'measure':
       return '度量';
+    case 'field':
+      // 「不参与分析」也是一个决定：编辑器的角色下拉里它就叫普通字段。此前这里
+      // 掉进 default 显示成「待确认」，用户选完保存还是「待确认」，永远清不掉。
+      return '普通字段';
     default:
       return '待确认';
   }

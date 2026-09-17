@@ -2023,6 +2023,32 @@ class CatalogStore:
             raise CatalogError("semantic index was not found", code="INDEX_SNAPSHOT_NOT_FOUND")
         return SemanticIndexSnapshot.model_validate(row["payload"])
 
+    def find_index_snapshot(
+        self,
+        *,
+        project_id: str,
+        release_spec_hash: str,
+    ) -> SemanticIndexSnapshot | None:
+        """按内容键找回一份可复用的索引。找不到不是错误，是「还没建过」。
+
+        只按语义内容找，不按 embedding 模型过滤：当前模型的 id 要真发一次 encode 才
+        知道，而那正是我们想省掉的那一次。模型真换了由 Mapper 既有的那道
+        「query embedding model differs from index snapshot」兜底——它明确报错，
+        不会静默降低召回。
+        """
+
+        with self._engine.connect() as connection:
+            payload = connection.execute(
+                select(index_snapshots.c.payload)
+                .where(
+                    index_snapshots.c.project_id == project_id,
+                    index_snapshots.c.release_spec_hash == release_spec_hash,
+                )
+                .order_by(index_snapshots.c.created_at.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+        return SemanticIndexSnapshot.model_validate(payload) if payload is not None else None
+
     def publish(
         self,
         *,

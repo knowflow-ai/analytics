@@ -160,12 +160,14 @@ def test_validated_revision_preview_runs_the_normal_query_pipeline(sales_catalog
         assert response.data.rows == (("华东", 300),)
         assert response.physical_sql is None
         assert len(executor.calls) == 1
-        with pytest.raises(CatalogError) as raised:
-            application.catalog.get_index_snapshot(
-                response.index_snapshot_id,
-                project_id="sales",
-            )
-        assert raised.value.code == "INDEX_SNAPSHOT_NOT_FOUND"
+        # 2026-09-17 起索引落库并按内容复用：试问一次建一次、下一次直接拿现成的
+        # （现场每次试问都重建整份目录，18–26 秒，与 S2SQL 加起来必然撞上请求超时）。
+        stored = application.catalog.get_index_snapshot(
+            response.index_snapshot_id,
+            project_id="sales",
+        )
+        expected = application.catalog.get_revision("revision-preview").semantic_spec
+        assert stored.release_spec_hash == expected.spec_hash
     finally:
         application.close()
         engine.dispose()

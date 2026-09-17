@@ -4595,15 +4595,30 @@ class AnalyticsApplication:
                 and candidate.release_spec_hash == revision.semantic_spec.spec_hash
             ):
                 index = candidate
+        # Building an index embeds every governed phrase, so it must run as the
+        # tenant that owns the request's embedding model.
+        gateway = (
+            self._embedding_gateway.for_tenant(tenant_id)
+            if tenant_id
+            else self._embedding_gateway
+        )
         if index is None:
-            # Building an index embeds every governed phrase, so it must run as
-            # the tenant that owns the request's embedding model.
-            gateway = (
-                self._embedding_gateway.for_tenant(tenant_id)
-                if tenant_id
-                else self._embedding_gateway
+            # 按内容键找回上一次建好的那份。此前只有澄清续跑才复用，普通试问一律
+            # 重建且建完不存——实机一小时四次试问，四次都在发 16.5 MB 的 embedding，
+            # 18~26 秒，与随后 30~60 秒的 S2SQL 叠加后必然越过调用方 120 秒的超时
+            # （2026-09-17 现场：自然语言试问「每次都失败，没成功过」）。
+            index = self.catalog.find_index_snapshot(
+                project_id=revision.project_id,
+                release_spec_hash=revision.semantic_spec.spec_hash,
             )
+        if index is None:
             index = SemanticIndexBuilder(gateway).build(revision.semantic_spec)
+            # 存下来，否则下一次还得重建一遍。草稿一改 spec_hash 就变，自然重建。
+            with suppress(CatalogError):
+                self.catalog.save_index_snapshot(
+                    project_id=revision.project_id,
+                    index_snapshot=index,
+                )
         staged_release = revision.semantic_spec.model_copy(
             update={
                 "id": f"staged:{revision.id}",

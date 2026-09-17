@@ -46,3 +46,47 @@ def test_multi_stage_shape_translates(sales_release, name: str) -> None:
     )
 
     assert translated.physical_query.sql
+
+
+_KEEPS_DRILLDOWN = {
+    "普通聚合": f'SELECT "区域", SUM("净收入") FROM {_T} GROUP BY "区域"',
+    "窗口占本组比": f'SELECT "区域", "渠道",'
+    f' SUM("净收入") / SUM(SUM("净收入")) OVER (PARTITION BY "区域") AS _占比_'
+    f' FROM {_T} GROUP BY "区域", "渠道"',
+    "窗口排名": f'SELECT "区域", RANK() OVER (ORDER BY SUM("净收入") DESC) AS _名次_'
+    f' FROM {_T} GROUP BY "区域"',
+}
+
+_LOSES_DRILLDOWN = {
+    "CTE 条件占比": f'WITH a AS (SELECT "区域", SUM("净收入") AS _s FROM {_T} GROUP BY "区域")'
+    " SELECT COUNT(CASE WHEN _s > 2000 THEN 1 END) AS _户数_ FROM a",
+    "标量子查询": f'SELECT "区域" FROM {_T} WHERE "净收入" > (SELECT AVG("净收入") FROM {_T})',
+    "集合运算": f'SELECT "区域" AS _值_ FROM {_T} UNION SELECT "渠道" FROM {_T}',
+}
+
+
+@pytest.mark.parametrize("name", sorted(_KEEPS_DRILLDOWN))
+def test_window_shapes_keep_their_drilldown_options(name: str) -> None:
+    """窗口形态仍是「单条 SELECT 直接 FROM 数据集」，五种确定性编辑照样成立。
+
+    这条性质决定了教学时优先推窗口而不是 CTE：同样答得出来，后续还能继续拆。
+    """
+
+    from knowflow_analytics.query.s2sql_edit import editable_select
+
+    assert editable_select(_KEEPS_DRILLDOWN[name]) is not None
+
+
+@pytest.mark.parametrize("name", sorted(_LOSES_DRILLDOWN))
+def test_multi_layer_shapes_give_up_drilldown_rather_than_edit_the_wrong_layer(
+    name: str,
+) -> None:
+    """过滤与分组都在 CTE 内部，在外层做编辑会让 chip 上写的和实际执行的不一致。
+
+    那正是静默错答。这类问题的自然追问要重写整条 CTE，没有机械编辑能做到，
+    所以不给选项，让用户重新问一句。
+    """
+
+    from knowflow_analytics.query.s2sql_edit import editable_select
+
+    assert editable_select(_LOSES_DRILLDOWN[name]) is None

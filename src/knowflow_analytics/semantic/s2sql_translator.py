@@ -155,6 +155,10 @@ class _SqlQueryParser:
                     entity_dimension_id = _entity_share_dimension_id(
                         functions[0], statement.symbols, aliases
                     )
+                elif operator == "RANK_OF":
+                    entity_dimension_id = _rank_of_dimension_id(
+                        functions[0], statement.symbols, aliases
+                    )
                 resolved = _semantic_pairs(functions[0], statement.symbols, aliases)
                 metrics = [item for item in resolved if item.kind == "metric"]
                 if len(metrics) != 1:
@@ -586,19 +590,25 @@ class _MetricRatioParser:
                 "RATIO_OVER and RATIO_ROLL cannot be combined",
                 code="S2SQL_RATIO_MIXED_MODES",
             )
-        entity_calls = [item for item in statement.ratio_calls if item.operator == "ENTITY_SHARE"]
-        if entity_calls and len(statement.ratio_calls) > len(entity_calls):
-            raise _invalid(
-                "ENTITY_SHARE cannot be combined with other ratio functions",
-                code="S2SQL_RATIO_MIXED_MODES",
-            )
-        if entity_calls:
-            if len(entity_calls) > 1:
+        # 整句改写型原语（收成 CTE）一次只能有一个，也不与逐列改写的 RATIO_* 同框。
+        for operator, apply in (
+            ("ENTITY_SHARE", self._apply_entity_share),
+            ("RANK_OF", self._apply_rank_of),
+        ):
+            calls = [item for item in statement.ratio_calls if item.operator == operator]
+            if not calls:
+                continue
+            if len(statement.ratio_calls) > len(calls):
                 raise _invalid(
-                    "one ENTITY_SHARE is allowed per query",
+                    f"{operator} cannot be combined with other ratio functions",
+                    code="S2SQL_RATIO_MIXED_MODES",
+                )
+            if len(calls) > 1:
+                raise _invalid(
+                    f"one {operator} is allowed per query",
                     code="S2SQL_RATIO_SHAPE_INVALID",
                 )
-            self._apply_entity_share(statement, entity_calls[0])
+            apply(statement, calls[0])
             return
         for call in statement.ratio_calls:
             if call.operator == "RATIO_TO_TOTAL":
@@ -647,6 +657,88 @@ class _MetricRatioParser:
             )
         replacement = sqlglot.parse_one(expression_sql, read="postgres")
         function.replace(replacement)
+
+    @staticmethod
+    def _apply_rank_of(statement: _QueryStatement, call: _RatioCall) -> None:
+        """「某个实体在全体中排第几」：先在全体上聚合与排名，最后才取目标实体。
+
+        这个顺序此前只写在提示词里（「目标实体的过滤必须发生在全量排名之后」），
+        没有治理关守着：先 WHERE 到目标再 RANK()，名次在只剩一行的子集里算——永远第一，
+        SQL 合法、数字正常。从 SQL 上判不出 WHERE 是「范围」还是「目标」，只有意图知道，
+        所以目标由参数说明，剩下的 WHERE 一律当范围留在 CTE 里。
+        """
+
+        assert statement.tree is not None
+        if (
+            not isinstance(statement.tree, exp.Select)
+            or statement.tree.args.get("with_") is not None
+        ):
+            raise _invalid(
+                "rank lookup requires one SELECT without an existing CTE",
+                code="S2SQL_RATIO_SHAPE_INVALID",
+            )
+        select = statement.tree
+        function = _ratio_function(select.expressions[call.projection_index], "RANK_OF")
+        entity, target, metric_side = function.expressions
+        aggregate = _governed_metric_aggregate(statement, call.metric_id, metric_side)
+
+        group = select.args.get("group")
+        group_expressions = tuple(group.expressions) if group is not None else ()
+        for index, projection in enumerate(select.expressions):
+            if index == call.projection_index:
+                continue
+            expression = projection.this if isinstance(projection, exp.Alias) else projection
+            if not any(expression.sql() == item.sql() for item in group_expressions):
+                raise _invalid(
+                    "rank lookup projections must be grouped dimensions",
+                    code="S2SQL_RATIO_SHAPE_INVALID",
+                )
+
+        base = select.copy()
+        base.set("order", None)
+        base.set("limit", None)
+        entity_alias, value_alias, rank_alias = "__kf_rank_entity", "__kf_rank_value", "__kf_rank"
+        group_aliases = [f"__kf_rank_group_{index}" for index in range(len(group_expressions))]
+        base.set(
+            "expressions",
+            [
+                *(
+                    exp.alias_(item.copy(), alias, quoted=True)
+                    for item, alias in zip(group_expressions, group_aliases, strict=True)
+                ),
+                exp.alias_(entity.copy(), entity_alias, quoted=True),
+                exp.alias_(aggregate, value_alias, quoted=True),
+            ],
+        )
+        base.set(
+            "group",
+            exp.Group(expressions=[*(item.copy() for item in group_expressions), entity.copy()]),
+        )
+        partition = (
+            f"PARTITION BY {', '.join(_quote(alias) for alias in group_aliases)} "
+            if group_aliases
+            else ""
+        )
+        outer_projections: list[str] = []
+        group_cursor = 0
+        for index, projection in enumerate(select.expressions):
+            if index == call.projection_index:
+                output_alias = projection.alias or "__kf_rank_of"
+                outer_projections.append(f"{_quote(rank_alias)} AS {_quote(output_alias)}")
+                continue
+            alias = group_aliases[group_cursor]
+            group_cursor += 1
+            outer_projections.append(f"{_quote(alias)} AS {_quote(projection.alias or alias)}")
+        base_cte, ranked_cte = "__kf_rank_base", "__kf_ranked"
+        statement.tree = sqlglot.parse_one(
+            f"WITH {_quote(base_cte)} AS ({base.sql(dialect='postgres')}), "
+            f"{_quote(ranked_cte)} AS (SELECT *, RANK() OVER ({partition}"
+            f"ORDER BY {_quote(value_alias)} DESC) AS {_quote(rank_alias)} "
+            f"FROM {_quote(base_cte)}) "
+            f"SELECT {', '.join(outer_projections)} FROM {_quote(ranked_cte)} "
+            f"WHERE {_quote(entity_alias)} = {target.sql(dialect='postgres')}",
+            read="postgres",
+        )
 
     @staticmethod
     def _apply_entity_share(statement: _QueryStatement, call: _RatioCall) -> None:
@@ -1590,6 +1682,7 @@ def _ratio_function(projection: exp.Expression, operator: str) -> exp.Anonymous:
         len(candidates[0].expressions) == 1
         or (operator == "RATIO_TO_TOTAL" and len(candidates[0].expressions) == 3)
         or (operator == "ENTITY_SHARE" and len(candidates[0].expressions) == 2)
+        or (operator == "RANK_OF" and len(candidates[0].expressions) == 3)
     )
     if not valid_arity:
         raise _invalid(
@@ -1654,6 +1747,33 @@ def _entity_share_dimension_id(
     return resolved[0].id
 
 
+def _rank_of_dimension_id(
+    function: exp.Anonymous,
+    symbols: SemanticSymbolTable,
+    aliases: dict[str, tuple[ResolvedSemanticSymbol, ...]],
+) -> str:
+    """RANK_OF(实体维度, 该实体的值, 指标)：三段各就各位，不猜。"""
+
+    if len(function.expressions) != 3:
+        raise _invalid(
+            "RANK_OF requires an entity dimension, its value and a metric",
+            code="S2SQL_RATIO_SHAPE_INVALID",
+        )
+    entity, target, _metric = function.expressions
+    if not isinstance(target, (exp.Literal, exp.Boolean, exp.Neg)):
+        raise _invalid(
+            "RANK_OF requires one literal value for the target entity",
+            code="S2SQL_RATIO_SHAPE_INVALID",
+        )
+    resolved = _semantic_pairs(entity, symbols, aliases) if isinstance(entity, exp.Column) else ()
+    if len(resolved) != 1 or resolved[0].kind != "dimension":
+        raise _invalid(
+            "RANK_OF requires one governed dimension as the entity",
+            code="S2SQL_RATIO_SCOPE_INVALID",
+        )
+    return resolved[0].id
+
+
 def _ratio_scope_dimension_ids(
     projection: exp.Expression,
     symbols: SemanticSymbolTable,
@@ -1661,7 +1781,7 @@ def _ratio_scope_dimension_ids(
     results: set[str] = set()
     for function in projection.find_all(exp.Anonymous):
         name = function.name.upper()
-        if name == "ENTITY_SHARE" and len(function.expressions) == 2:
+        if name in {"ENTITY_SHARE", "RANK_OF"} and len(function.expressions) in {2, 3}:
             dimension = function.expressions[0]
         elif name == "RATIO_TO_TOTAL" and len(function.expressions) == 3:
             dimension = function.expressions[1]
@@ -2406,7 +2526,10 @@ def _output_columns(statement: _QueryStatement) -> tuple[OutputColumn, ...]:
                 and original_projection.find(exp.AggFunc) is None
             )
             ratio_form: str | None = None
-            if index in ratio_indexes:
+            if index in ratio_indexes and ratio_calls_by_index[index].operator.upper() == "RANK_OF":
+                # 名次是一个整数，值域与比率无关，按普通计算列展示。
+                kind_value = "calculation"
+            elif index in ratio_indexes:
                 kind_value = "ratio"
                 operator = ratio_calls_by_index[index].operator.upper()
                 ratio_form = "share" if operator in {"RATIO_TO_TOTAL", "ENTITY_SHARE"} else "delta"
@@ -2456,8 +2579,11 @@ _RATIO_COLUMN_SUFFIX = {
     "RATIO_OVER": "同比",
     "RATIO_TO_TOTAL": "占比",
     "ENTITY_SHARE": "达标占比",
+    "RANK_OF": "排名",
 }
-_GOVERNED_FUNCTIONS = frozenset({"RATIO_ROLL", "RATIO_OVER", "RATIO_TO_TOTAL", "ENTITY_SHARE"})
+_GOVERNED_FUNCTIONS = frozenset(
+    {"RATIO_ROLL", "RATIO_OVER", "RATIO_TO_TOTAL", "ENTITY_SHARE", "RANK_OF"}
+)
 
 
 def _unwrap(node: exp.Expression) -> exp.Expression:

@@ -877,9 +877,9 @@ class LlmS2SqlParser:
                     "(SELECT AVG(指标) FROM 数据集)；"
                     "UNION/UNION ALL/INTERSECT/EXCEPT 可用，每个分支必须各自完整、"
                     "只引用受治理成员，且投影列数与含义一一对应。"
-                    "排名查询允许使用 RANK/DENSE_RANK/ROW_NUMBER 窗口函数，或使用比目标值更大"
-                    "的分组数量加一；必须先在未过滤的完整集合中完成聚合和排名，目标实体的过滤"
-                    "必须发生在全量排名之后，并使用 WITH 隔离聚合/排名与外层过滤。"
+                    "问某个实体在全体中排第几写 RANK_OF(实体维度, 该实体的值, 指标)，"
+                    "例如 RANK_OF(门店, '太古里店', 销售金额)；系统先在全体上聚合排名再取该实体，"
+                    "不要自己先过滤再排名。分区取前 N 名仍用 RANK/DENSE_RANK/ROW_NUMBER 窗口。"
                     "没有聚合函数就是明细查询，查询类型由系统解析 SQL AST 后确定。"
                     "mapped_constraints 是 Schema Linking 证据：EXACT 且无歧义的值命中必须形成"
                     "过滤；其他值仅为候选；同一 ambiguity_group 内的对象互斥，只能选择一个有问题"
@@ -1239,6 +1239,22 @@ def _normalize_semantic_function_identifier_literals(
                     if metric is not None:
                         comparison.set(side, exp.column(metric, quoted=True))
                         changed = True
+            function.set("expressions", arguments)
+            continue
+        if name == "RANK_OF" and len(function.expressions) == 3:
+            arguments = list(function.expressions)
+            dimension = _governed_identifier_literal(
+                arguments[0], symbols=symbols, expected_kind="dimension"
+            )
+            metric = _governed_identifier_literal(
+                arguments[2], symbols=symbols, expected_kind="metric"
+            )
+            if dimension is not None:
+                arguments[0] = exp.column(dimension, quoted=True)
+                changed = True
+            if metric is not None:
+                arguments[2] = exp.column(metric, quoted=True)
+                changed = True
             function.set("expressions", arguments)
             continue
         if name != "RATIO_TO_TOTAL" or len(function.expressions) != 3:

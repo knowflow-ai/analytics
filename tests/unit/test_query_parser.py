@@ -101,7 +101,11 @@ def test_llm_prompt_preserves_explicit_time_only_rule(sales_release):
         "问题未明确表达时间范围时，禁止在 WHERE 中添加时间条件"
         in (gateway.requests[0]["messages"][0]["content"])
     )
-    assert "目标实体的过滤必须发生在全量排名之后" in gateway.requests[0]["messages"][0]["content"]
+    # 「先全量排名再取目标」的顺序此前只写在提示词里，零拦截；现在由 RANK_OF 的展开保证，
+    # 提示词只教原语的写法。反向钉住：谁把散文加回来，这里先红。
+    system_prompt = gateway.requests[0]["messages"][0]["content"]
+    assert "RANK_OF(实体维度, 该实体的值, 指标)" in system_prompt
+    assert "目标实体的过滤必须发生在全量排名之后" not in system_prompt
 
 
 def test_llm_cannot_drop_an_exact_unambiguous_dimension_value(sales_release) -> None:

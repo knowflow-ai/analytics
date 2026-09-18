@@ -865,11 +865,10 @@ class LlmS2SqlParser:
                     "选择问题要求的分组维度。若问题询问某个精确维度值占整体多少，使用 "
                     "RATIO_TO_TOTAL(指标, 维度, 原始值)，该维度值只过滤分子，禁止再放入 WHERE；"
                     "上述函数的指标参数只能是一个已发布指标。"
-                    "满足某个指标条件的实体占比（如「余额大于 2000 的账户占比」）"
-                    "RATIO_TO_TOTAL 不能表达："
-                    "先用 WITH 按代表该实体的维度分组聚合出指标，再在外层写 "
-                    "COUNT(CASE WHEN 聚合别名 > 阈值 THEN 1 END) * 1.0 / COUNT(实体维度)；"
-                    "阈值必须作用在按实体聚合后的值上，不得直接对明细行判断。"
+                    "满足某个指标条件的实体占比（如「余额大于 2000 的账户占比」）写 "
+                    "ENTITY_SHARE(实体维度, 指标 比较 阈值)，"
+                    "例如 ENTITY_SHARE(账户, 账户余额 > 2000)；"
+                    "系统会先按实体聚合再比阈值，不要自己用 WITH 或 CASE WHEN 去算它。"
                     "组内比较用分区窗口：占本组比写 SUM(指标) / SUM(SUM(指标)) OVER "
                     "(PARTITION BY 维度)，组内排名写 RANK() OVER (PARTITION BY 维度 ORDER BY "
                     "SUM(指标) DESC)，与组内均值比写 AVG(SUM(指标)) OVER (PARTITION BY 维度)；"
@@ -1222,7 +1221,27 @@ def _normalize_semantic_function_identifier_literals(
     symbols = SemanticSymbolTable.from_release(release, dataset_id=dataset.id)
     changed = False
     for function in tree.find_all(exp.Anonymous):
-        if function.name.upper() != "RATIO_TO_TOTAL" or len(function.expressions) != 3:
+        name = function.name.upper()
+        if name == "ENTITY_SHARE" and len(function.expressions) == 2:
+            arguments = list(function.expressions)
+            dimension = _governed_identifier_literal(
+                arguments[0], symbols=symbols, expected_kind="dimension"
+            )
+            if dimension is not None:
+                arguments[0] = exp.column(dimension, quoted=True)
+                changed = True
+            comparison = arguments[1]
+            if isinstance(comparison, exp.Binary):
+                for side in ("this", "expression"):
+                    metric = _governed_identifier_literal(
+                        comparison.args.get(side), symbols=symbols, expected_kind="metric"
+                    )
+                    if metric is not None:
+                        comparison.set(side, exp.column(metric, quoted=True))
+                        changed = True
+            function.set("expressions", arguments)
+            continue
+        if name != "RATIO_TO_TOTAL" or len(function.expressions) != 3:
             continue
         arguments = list(function.expressions)
         metric = _governed_identifier_literal(arguments[0], symbols=symbols, expected_kind="metric")

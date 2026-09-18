@@ -941,10 +941,15 @@ def test_a_timeout_stops_the_retry_chain_instead_of_asking_the_same_slow_model_a
     assert [item["error"] for item in raised.value.details["attempts"]] == ["ModelGatewayTimeout"]
 
 
-def test_s2sql_prompt_teaches_the_conditional_share_shape(sales_release) -> None:
-    """现场：「账户余额大于 2000 的账户占比」。提示词只教了 RATIO_TO_TOTAL 的两种形状，模型把
-    指标塞进第二个参数被拒；翻译器其实接受「WITH 按实体聚合，再 COUNT(CASE WHEN …)/COUNT(实体)」。
-    实验：按账户算 21.9%，按明细行算 21.5%，粒度那一步不能省。"""
+def test_s2sql_prompt_teaches_the_entity_share_primitive(sales_release) -> None:
+    """现场：「账户余额大于 2000 的账户占比」。实验：按账户算 21.9%，按明细行算 21.5%，
+    粒度那一步不能省——而它此前只写在提示词里（「阈值必须作用在按实体聚合后的值上」），
+    没有任何治理关守着：阈值打在明细行上是合法 SQL、执行成功、数字正常，只是错了。
+
+    现在它是原语 ENTITY_SHARE(实体维度, 指标 比较 阈值)，先聚合再比阈值由编译器保证
+    （tests/unit/test_entity_share_primitive.py）。提示词只需要教这个写法，
+    那五行 WITH + CASE WHEN 的散文随之删掉——散文规则是语义模型缺口的影子，缺口补上
+    就不该再有影子。这里反向钉住：谁把散文加回来，这里先红。"""
 
     gateway = _CapturingGateway({"thought": "占比", "sql": 'SELECT SUM("净收入") FROM "销售经营"'})
 
@@ -957,8 +962,11 @@ def test_s2sql_prompt_teaches_the_conditional_share_shape(sales_release) -> None
 
     system_prompt = gateway.requests[0]["messages"][0]["content"]
     assert "满足某个指标条件的实体占比" in system_prompt
-    assert "COUNT(CASE WHEN" in system_prompt
-    assert "RATIO_TO_TOTAL 不能表达" in system_prompt
+    assert "ENTITY_SHARE(实体维度, 指标 比较 阈值)" in system_prompt
+    # 旧的"教模型手写 CTE"散文必须消失：它替一件正确性约束记账，而账已经由编译器结清。
+    assert "COUNT(CASE WHEN 聚合别名" not in system_prompt
+    assert "不得直接对明细行判断" not in system_prompt
+    assert "RATIO_TO_TOTAL 不能表达" not in system_prompt
 
 
 def test_s2sql_prompt_requires_an_alias_for_calculated_columns(sales_release) -> None:

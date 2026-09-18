@@ -73,6 +73,8 @@ class _RatioCall:
     projection_index: int
     operator: str
     metric_id: str
+    # ENTITY_SHARE 独有：代表实体的那个维度。它参与路由但不是输出列。
+    entity_dimension_id: str | None = None
 
 
 @dataclass
@@ -139,7 +141,7 @@ class _SqlQueryParser:
             functions = [
                 item
                 for item in projection.find_all(exp.Anonymous)
-                if item.name.upper() in {"RATIO_ROLL", "RATIO_OVER", "RATIO_TO_TOTAL"}
+                if item.name.upper() in _GOVERNED_FUNCTIONS
             ]
             if len(functions) > 1 or (functions and len(branches) > 1):
                 raise _invalid(
@@ -147,6 +149,12 @@ class _SqlQueryParser:
                     code="S2SQL_RATIO_SHAPE_INVALID",
                 )
             if functions:
+                operator = functions[0].name.upper()
+                entity_dimension_id: str | None = None
+                if operator == "ENTITY_SHARE":
+                    entity_dimension_id = _entity_share_dimension_id(
+                        functions[0], statement.symbols, aliases
+                    )
                 resolved = _semantic_pairs(functions[0], statement.symbols, aliases)
                 metrics = [item for item in resolved if item.kind == "metric"]
                 if len(metrics) != 1:
@@ -157,8 +165,9 @@ class _SqlQueryParser:
                 statement.ratio_calls.append(
                     _RatioCall(
                         projection_index=projection_index,
-                        operator=functions[0].name.upper(),
+                        operator=operator,
                         metric_id=metrics[0].id,
+                        entity_dimension_id=entity_dimension_id,
                     )
                 )
         for select in _set_query_selects(statement.tree):
@@ -503,6 +512,20 @@ class _MetricRatioParser:
                 "RATIO_OVER and RATIO_ROLL cannot be combined",
                 code="S2SQL_RATIO_MIXED_MODES",
             )
+        entity_calls = [item for item in statement.ratio_calls if item.operator == "ENTITY_SHARE"]
+        if entity_calls and len(statement.ratio_calls) > len(entity_calls):
+            raise _invalid(
+                "ENTITY_SHARE cannot be combined with other ratio functions",
+                code="S2SQL_RATIO_MIXED_MODES",
+            )
+        if entity_calls:
+            if len(entity_calls) > 1:
+                raise _invalid(
+                    "one ENTITY_SHARE is allowed per query",
+                    code="S2SQL_RATIO_SHAPE_INVALID",
+                )
+            self._apply_entity_share(statement, entity_calls[0])
+            return
         for call in statement.ratio_calls:
             if call.operator == "RATIO_TO_TOTAL":
                 self._apply_total_ratio(statement, call)
@@ -550,6 +573,102 @@ class _MetricRatioParser:
             )
         replacement = sqlglot.parse_one(expression_sql, read="postgres")
         function.replace(replacement)
+
+    @staticmethod
+    def _apply_entity_share(statement: _QueryStatement, call: _RatioCall) -> None:
+        """「满足某个指标条件的实体占比」：先按实体聚合，再在实体粒度上比阈值。
+
+        这个顺序此前只写在提示词里（「阈值必须作用在按实体聚合后的值上，不得直接对
+        明细行判断」），没有任何治理关守着——模型把阈值打在明细行上是合法 SQL、执行
+        成功、六道关全绿，只是数字错了。从 SQL 上也判不出来：明细查询按行过滤指标列
+        本来就合法。区别只在「这是实体占比」这个意图，所以它只能是原语，粒度归这里。
+
+        展开与期间比同一条路：把原语句收成一层 CTE（外层分组维度 + 实体维度分组，
+        指标按治理聚合），外层在 ``__kf_entity_value`` 上比阈值。WHERE 留在 CTE 里——
+        过滤决定哪些行入选，再聚合。
+        """
+
+        assert statement.tree is not None
+        if (
+            not isinstance(statement.tree, exp.Select)
+            or statement.tree.args.get("with_") is not None
+        ):
+            raise _invalid(
+                "entity share requires one SELECT without an existing CTE",
+                code="S2SQL_RATIO_SHAPE_INVALID",
+            )
+        select = statement.tree
+        function = _ratio_function(select.expressions[call.projection_index], "ENTITY_SHARE")
+        entity = function.expressions[0]
+        predicate = function.expressions[1]
+        metric_side, literal_side = _entity_share_predicate_sides(predicate)
+        aggregate = _governed_metric_aggregate(statement, call.metric_id, metric_side)
+
+        group = select.args.get("group")
+        group_expressions = tuple(group.expressions) if group is not None else ()
+        for index, projection in enumerate(select.expressions):
+            if index == call.projection_index:
+                continue
+            expression = projection.this if isinstance(projection, exp.Alias) else projection
+            if not any(expression.sql() == item.sql() for item in group_expressions):
+                raise _invalid(
+                    "entity share projections must be grouped dimensions",
+                    code="S2SQL_RATIO_SHAPE_INVALID",
+                )
+
+        base = select.copy()
+        base.set("order", None)
+        base.set("limit", None)
+        entity_alias = "__kf_entity"
+        value_alias = "__kf_entity_value"
+        group_aliases = [f"__kf_entity_group_{index}" for index in range(len(group_expressions))]
+        base.set(
+            "expressions",
+            [
+                *(
+                    exp.alias_(item.copy(), alias, quoted=True)
+                    for item, alias in zip(group_expressions, group_aliases, strict=True)
+                ),
+                exp.alias_(entity.copy(), entity_alias, quoted=True),
+                exp.alias_(aggregate, value_alias, quoted=True),
+            ],
+        )
+        base.set(
+            "group",
+            exp.Group(expressions=[*(item.copy() for item in group_expressions), entity.copy()]),
+        )
+
+        comparison = predicate.copy()
+        value_column = exp.column(value_alias, quoted=True)
+        if comparison.this.sql() == metric_side.sql():
+            comparison.set("this", value_column)
+        else:
+            comparison.set("expression", value_column)
+        share_sql = (
+            f"CAST(COUNT(CASE WHEN {comparison.sql(dialect='postgres')} THEN 1 END) "
+            f"AS DOUBLE PRECISION) / NULLIF(COUNT({_quote(entity_alias)}), 0)"
+        )
+        outer_projections: list[str] = []
+        group_cursor = 0
+        for index, projection in enumerate(select.expressions):
+            if index == call.projection_index:
+                output_alias = projection.alias or "__kf_entity_share"
+                outer_projections.append(f"{share_sql} AS {_quote(output_alias)}")
+                continue
+            alias = group_aliases[group_cursor]
+            group_cursor += 1
+            outer_projections.append(f"{_quote(alias)} AS {_quote(projection.alias or alias)}")
+        cte = "__kf_entity_base"
+        outer_group = (
+            f" GROUP BY {', '.join(_quote(alias) for alias in group_aliases)}"
+            if group_aliases
+            else ""
+        )
+        statement.tree = sqlglot.parse_one(
+            f"WITH {_quote(cte)} AS ({base.sql(dialect='postgres')}) "
+            f"SELECT {', '.join(outer_projections)} FROM {_quote(cte)}{outer_group}",
+            read="postgres",
+        )
 
     @staticmethod
     def _apply_period_ratio(
@@ -1395,6 +1514,7 @@ def _ratio_function(projection: exp.Expression, operator: str) -> exp.Anonymous:
     valid_arity = len(candidates) == 1 and (
         len(candidates[0].expressions) == 1
         or (operator == "RATIO_TO_TOTAL" and len(candidates[0].expressions) == 3)
+        or (operator == "ENTITY_SHARE" and len(candidates[0].expressions) == 2)
     )
     if not valid_arity:
         raise _invalid(
@@ -1404,15 +1524,74 @@ def _ratio_function(projection: exp.Expression, operator: str) -> exp.Anonymous:
     return candidates[0]
 
 
+_COMPARISONS = (exp.GT, exp.GTE, exp.LT, exp.LTE, exp.EQ, exp.NEQ)
+
+
+def _entity_share_predicate_sides(
+    predicate: exp.Expression,
+) -> tuple[exp.Expression, exp.Expression]:
+    """拆出「指标 比较 字面量」的两边；不是这个形状就拒，不猜。"""
+
+    if not isinstance(predicate, _COMPARISONS):
+        raise _invalid(
+            "ENTITY_SHARE requires a comparison between a governed metric and a literal",
+            code="S2SQL_RATIO_SHAPE_INVALID",
+        )
+    left, right = predicate.this, predicate.expression
+    literal_types = (exp.Literal, exp.Boolean, exp.Neg)
+    if isinstance(right, literal_types) and not isinstance(left, literal_types):
+        metric_side = left
+    elif isinstance(left, literal_types) and not isinstance(right, literal_types):
+        metric_side = right
+    else:
+        raise _invalid(
+            "ENTITY_SHARE requires a comparison between a governed metric and a literal",
+            code="S2SQL_RATIO_SHAPE_INVALID",
+        )
+    if metric_side.find(exp.Column) is None:
+        raise _invalid(
+            "ENTITY_SHARE requires a comparison between a governed metric and a literal",
+            code="S2SQL_RATIO_SHAPE_INVALID",
+        )
+    return metric_side, right if metric_side is left else left
+
+
+def _entity_share_dimension_id(
+    function: exp.Anonymous,
+    symbols: SemanticSymbolTable,
+    aliases: dict[str, tuple[ResolvedSemanticSymbol, ...]],
+) -> str:
+    """ENTITY_SHARE 的第一个参数必须唯一解析成一个受治理维度。"""
+
+    if len(function.expressions) != 2:
+        raise _invalid(
+            "ENTITY_SHARE requires an entity dimension and a metric comparison",
+            code="S2SQL_RATIO_SHAPE_INVALID",
+        )
+    _entity_share_predicate_sides(function.expressions[1])
+    entity = function.expressions[0]
+    resolved = _semantic_pairs(entity, symbols, aliases) if isinstance(entity, exp.Column) else ()
+    if len(resolved) != 1 or resolved[0].kind != "dimension":
+        raise _invalid(
+            "ENTITY_SHARE requires one governed dimension as the entity",
+            code="S2SQL_RATIO_SCOPE_INVALID",
+        )
+    return resolved[0].id
+
+
 def _ratio_scope_dimension_ids(
     projection: exp.Expression,
     symbols: SemanticSymbolTable,
 ) -> set[str]:
     results: set[str] = set()
     for function in projection.find_all(exp.Anonymous):
-        if function.name.upper() != "RATIO_TO_TOTAL" or len(function.expressions) != 3:
+        name = function.name.upper()
+        if name == "ENTITY_SHARE" and len(function.expressions) == 2:
+            dimension = function.expressions[0]
+        elif name == "RATIO_TO_TOTAL" and len(function.expressions) == 3:
+            dimension = function.expressions[1]
+        else:
             continue
-        dimension = function.expressions[1]
         if not isinstance(dimension, exp.Column):
             continue
         try:
@@ -1455,8 +1634,16 @@ def _ratio_metric_aggregate(
     call: _RatioCall,
     function: exp.Anonymous,
 ) -> exp.Expression:
-    metric = next(item for item in statement.release.metrics if item.id == call.metric_id)
-    argument = function.expressions[0].copy()
+    return _governed_metric_aggregate(statement, call.metric_id, function.expressions[0])
+
+
+def _governed_metric_aggregate(
+    statement: _QueryStatement,
+    metric_id: str,
+    argument_expression: exp.Expression,
+) -> exp.Expression:
+    metric = next(item for item in statement.release.metrics if item.id == metric_id)
+    argument = argument_expression.copy()
     # 模型把治理聚合自己写了一遍——``RATIO_ROLL(SUM("销售金额"))``，而销售金额的治理
     # 聚合就是 SUM。这和裸引用是同一个意思，剥掉外层按裸引用处理；不这么做的话
     # 实机「咖啡按月环比销售情况」整条重试链 48 秒每次都写成这个形状，最后拒答。
@@ -2147,7 +2334,7 @@ def _output_columns(statement: _QueryStatement) -> tuple[OutputColumn, ...]:
             if index in ratio_indexes:
                 kind_value = "ratio"
                 operator = ratio_calls_by_index[index].operator.upper()
-                ratio_form = "share" if operator == "RATIO_TO_TOTAL" else "delta"
+                ratio_form = "share" if operator in {"RATIO_TO_TOTAL", "ENTITY_SHARE"} else "delta"
             elif _share_shaped(original_projection):
                 # 模型现算的条件占比（受治理函数表达不了这种形状）。
                 kind_value = "ratio"
@@ -2189,7 +2376,13 @@ def _output_columns(statement: _QueryStatement) -> tuple[OutputColumn, ...]:
     return tuple(results)
 
 
-_RATIO_COLUMN_SUFFIX = {"RATIO_ROLL": "环比", "RATIO_OVER": "同比", "RATIO_TO_TOTAL": "占比"}
+_RATIO_COLUMN_SUFFIX = {
+    "RATIO_ROLL": "环比",
+    "RATIO_OVER": "同比",
+    "RATIO_TO_TOTAL": "占比",
+    "ENTITY_SHARE": "达标占比",
+}
+_GOVERNED_FUNCTIONS = frozenset({"RATIO_ROLL", "RATIO_OVER", "RATIO_TO_TOTAL", "ENTITY_SHARE"})
 
 
 def _unwrap(node: exp.Expression) -> exp.Expression:

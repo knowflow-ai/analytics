@@ -321,6 +321,80 @@ class _DimExpressionParser:
             _replace_token(statement.tree, token, replacement)
 
 
+_GRAIN_ORDER = ("DAY", "WEEK", "MONTH", "QUARTER", "YEAR")
+
+
+def _trunc_grain(trunc: exp.Expression) -> str | None:
+    unit = trunc.args.get("unit")
+    grain = str(getattr(unit, "name", None) or getattr(unit, "this", "")).upper()
+    return grain if grain in _GRAIN_ORDER else None
+
+
+class _TimeGovernanceParser:
+    """把语义模型里已经声明的两条时间规则接到编译器上。
+
+    此前它们只写在提示词里，翻译期零强制——声明了等于没声明：
+
+    - ``time_granularity`` 是该列数据的真实粒度。模型按天截断一列月粒度数据，得到的是
+      每天一行的合法结果，数字全错。粒度没声明就没有依据，不猜。
+    - ``requires_explicit_time`` 是指标级声明。它唯一的检查点在 ``_apply_time_filters``，
+      只被 rule 候选与结构化路径调用；自然语言路径从不经过。这里对最终 S2SQL 直接判：
+      问了这样的指标却没有任何时间维度上的过滤，拒绝。
+    """
+
+    name = "TimeGovernanceParser"
+
+    def parse(self, statement: _QueryStatement) -> None:
+        assert statement.tree is not None
+        dimensions = {item.id: item for item in statement.release.dimensions}
+        time_dimension_by_token = {
+            token: dimensions[resolved.id]
+            for token, resolved in statement.semantic_tokens.items()
+            if resolved.kind == "dimension" and dimensions[resolved.id].semantic_type == "time"
+        }
+        self._reject_finer_grain(statement, time_dimension_by_token)
+        self._require_explicit_time(statement, time_dimension_by_token)
+
+    @staticmethod
+    def _reject_finer_grain(statement: _QueryStatement, time_dimension_by_token) -> None:
+        assert statement.tree is not None
+        for trunc in statement.tree.find_all(exp.TimestampTrunc, exp.DateTrunc):
+            grain = _trunc_grain(trunc)
+            column = trunc.this if isinstance(trunc.this, exp.Column) else trunc.find(exp.Column)
+            if grain is None or column is None:
+                continue
+            dimension = time_dimension_by_token.get(column.name)
+            if dimension is None or dimension.time_granularity is None:
+                continue
+            declared = dimension.time_granularity.value.upper()
+            if _GRAIN_ORDER.index(grain) < _GRAIN_ORDER.index(declared):
+                raise _invalid(
+                    f"「{dimension.name}」的真实粒度是{declared.lower()}，"
+                    f"不能按更细的 {grain.lower()} 截断",
+                    code="S2SQL_TIME_GRANULARITY_TOO_FINE",
+                )
+
+    @staticmethod
+    def _require_explicit_time(statement: _QueryStatement, time_dimension_by_token) -> None:
+        assert statement.tree is not None
+        metrics = {item.id: item for item in statement.release.metrics}
+        demanding = [
+            metrics[metric_id].name
+            for metric_id in statement.metric_ids
+            if metrics[metric_id].requires_explicit_time
+        ]
+        if not demanding:
+            return
+        for clause in statement.tree.find_all(exp.Where, exp.Having):
+            columns = clause.find_all(exp.Column)
+            if any(column.name in time_dimension_by_token for column in columns):
+                return
+        raise _invalid(
+            f"「{'」「'.join(demanding)}」必须指定时间范围",
+            code="EXPLICIT_TIME_REQUIRED",
+        )
+
+
 class _DefaultDimValueParser:
     name = "DefaultDimValueParser"
 
@@ -1323,6 +1397,7 @@ class S2SqlSemanticTranslator:
             _NoOpParser("SqlVariableParser"),
             _NoOpParser("StructQueryParser"),
             _SqlQueryParser(),
+            _TimeGovernanceParser(),
             _DefaultDimValueParser(),
             _DimExpressionParser(),
             _MetricExpressionParser(),

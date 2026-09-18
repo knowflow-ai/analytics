@@ -5010,6 +5010,24 @@ def _error_diagnosis(exc: AnalyticsError) -> QueryDiagnosis:
             ),
             user_hint="模型这次没能在规定时间内作答，没有结果可以给你。请稍后重试。",
         )
+    if exc.code == "S2SQL_TIME_GRANULARITY_TOO_FINE":
+        return QueryDiagnosis(
+            category=QueryDiagnosticCategory.TRANSLATION,
+            stage=QueryStage.TRANSLATING.value,
+            severity="error",
+            summary="生成的时间粒度比该列声明的真实粒度更细",
+            recommendation="这列数据只到声明的粒度；若数据本身更细，改维度上的 time_granularity。",
+            user_hint=f"{exc}。请按这列的粒度来问，比如按月而不是按天。",
+        )
+    if exc.code == "EXPLICIT_TIME_REQUIRED":
+        return QueryDiagnosis(
+            category=QueryDiagnosticCategory.TRANSLATION,
+            stage=QueryStage.TRANSLATING.value,
+            severity="error",
+            summary="问到的指标要求明确的时间范围，而问题里没有",
+            recommendation="该指标声明了 requires_explicit_time；要放开就去掉这个声明。",
+            user_hint=f"{exc}，请补上想看的日期或时间段，例如「上个月」。",
+        )
     if exc.code == "DIMENSION_NOT_REACHABLE":
         return QueryDiagnosis(
             category=QueryDiagnosticCategory.ROUTING,

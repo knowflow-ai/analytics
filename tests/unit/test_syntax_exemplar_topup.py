@@ -36,4 +36,5 @@ def test_enough_reviewed_exemplars_crowd_out_the_builtins() -> None:
 def test_builtins_are_taken_in_declaration_order() -> None:
     """补足取前 N 条,顺序稳定,便于 prompt 快照比对。"""
 
-    assert select_prompt_syntax_exemplars(reviewed_count=2) == list(SYNTAX_EXEMPLARS)[:2]
+    kept = select_prompt_syntax_exemplars(reviewed_count=2)
+    assert kept == list(SYNTAX_EXEMPLARS)[: len(SYNTAX_EXEMPLARS) - 2]

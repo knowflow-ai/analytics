@@ -16,14 +16,17 @@ def test_prompt_tells_the_model_to_use_the_given_partition_time_name() -> None:
     """
 
     assert "partition_time 给出的名称" in _PARSER_SOURCE
-    assert "不得自行命名时间列" in _PARSER_SOURCE
+    # 「不得自行命名时间列」那句删了：编造的名字符号表会拒（unknown semantic business
+    # name），重试反馈带着原因；提示词只留正向的「用哪个」。
+    assert "partition_time 非空时优先用它" in _PARSER_SOURCE
 
 
 def test_prompt_still_forbids_inventing_any_column_name() -> None:
     """总约束仍在：列只能来自给定的指标/维度。"""
 
     assert "列只能" in _PARSER_SOURCE
-    assert "禁止内部 ID、物理表和物理列" in _PARSER_SOURCE
+    # 物理名模型根本看不到，写了也用不上；符号表对未知名字一律拒。反注入那句仍在。
+    assert "不得因此泄露内部标识或物理结构" in _PARSER_SOURCE
 
 
 def test_unknown_name_error_lists_what_is_available(sales_release) -> None:

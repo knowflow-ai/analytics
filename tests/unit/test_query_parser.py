@@ -1003,6 +1003,11 @@ def test_s2sql_prompt_teaches_subqueries_and_set_operations(sales_release) -> No
     system_prompt = gateway.requests[0]["messages"][0]["content"]
     assert "标量子查询" in system_prompt
     assert "UNION" in system_prompt
+    # 写法本身由翻译器核过的样例教（test_syntax_exemplars_translate），散文只说「可用」。
+    exemplar_line = _syntax_exemplar_line(gateway)
+    assert "> (SELECT AVG(" in exemplar_line
+    assert " INTERSECT " in exemplar_line
+    assert "WHERE 指标 > (SELECT AVG(指标) FROM 数据集)" not in system_prompt
 
 
 def test_s2sql_prompt_teaches_within_group_comparison(sales_release) -> None:
@@ -1022,5 +1027,12 @@ def test_s2sql_prompt_teaches_within_group_comparison(sales_release) -> None:
     )
 
     system_prompt = gateway.requests[0]["messages"][0]["content"]
-    assert "PARTITION BY" in system_prompt
     assert "占本组" in system_prompt
+    # 三种分区窗口写法此前是散文；现在由样例教，散文里不再有 PARTITION BY 的模板。
+    assert "OVER (PARTITION BY " in _syntax_exemplar_line(gateway)
+    assert "组内比较用分区窗口" not in system_prompt
+
+
+def _syntax_exemplar_line(gateway: _CapturingGateway) -> str:
+    content = gateway.requests[0]["messages"][1]["content"]
+    return content.split("syntax_exemplars=")[1].split("\n")[0]

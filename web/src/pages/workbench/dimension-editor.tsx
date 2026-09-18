@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 import type { AnalyticsCatalogDimension } from '@analytics/api/types';
 import { Button, Field, Input, Select, Textarea } from '@analytics/components/ui';
+import { ExpressionArea } from './expression-field';
+import { readColumnExpr, writeColumnExpr } from './expression-builder';
 import {
   DIMENSION_KIND_LABEL,
   type DimensionEditorValues,
@@ -11,12 +13,6 @@ import {
   dimensionEditorInitial,
 } from './dimension-definition';
 
-
-/** 可抄写法:最常见的两类——分箱与截取。聚合属于指标,这里不出现 SUM/COUNT。 */
-const DIMENSION_EXPR_EXAMPLES = [
-  "CASE WHEN net_amount >= 1000 THEN '大额' ELSE '普通' END",
-  'substr(order_no, 1, 4)',
-];
 
 const SENSITIVITY = [
   { value: 0, label: '0 · 普通' },
@@ -53,6 +49,11 @@ export function DimensionEditor({
   onClose: () => void;
 }) {
   const [form, setForm] = useState<DimensionEditorValues>(() => dimensionEditorInitial(dimension));
+  // 实测 63 个维度表达式全是裸列引用。默认就该是「选一列」,而不是让人手打 "门店名称"
+  // ——还得自己知道要加双引号。读不回单列的（CASE WHEN 分箱这类）才落到表达式。
+  const [advanced, setAdvanced] = useState(
+    () => readColumnExpr(dimensionEditorInitial(dimension).expr, columns) === null,
+  );
   const set = <K extends keyof DimensionEditorValues>(key: K, value: DimensionEditorValues[K]) =>
     setForm((prev) => ({ ...prev, [key]: value }));
   const check = useMemo(
@@ -73,53 +74,51 @@ export function DimensionEditor({
     <div className="flex flex-col gap-3">
       <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-3">
         <div className="mb-2 text-[13px] font-medium text-slate-700">取值来源</div>
-        <Field
-          label="表达式"
-          tip={
-            <span className="block text-[11px] text-slate-500">
-              <span className="block">引用本模型的物理列;聚合属于指标,这里不能写 SUM/COUNT。</span>
-              <span className="mt-1.5 block">
-                示例(点击填入):
-                {DIMENSION_EXPR_EXAMPLES.map((example) => (
-                  <button
-                    key={example}
-                    type="button"
-                    onClick={() => set('expr', example)}
-                    className="mt-1 block rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-left font-mono text-[11px] text-slate-600 hover:border-slate-300 hover:text-slate-800"
-                  >
-                    {example}
-                  </button>
-                ))}
-              </span>
-            </span>
-          }
-        >
-          <Input
-            className="font-mono text-[12px]"
-            value={form.expr}
-            onChange={(e) => set('expr', e.target.value)}
-          />
-        </Field>
-        {check.error && <div className="mt-2 text-[11px] text-red-600">{check.error}</div>}
-        <div className="mt-2 text-[11px] text-slate-500">
-          可用字段：
-          {columns.length === 0 ? (
-            <span className="text-slate-400">该模型还没有字段</span>
-          ) : (
-            columns.map((column) => (
-              <button
-                key={column}
-                type="button"
-                title="点击插入到表达式"
-                onClick={() => set('expr', `${form.expr}${form.expr.trim() ? ' ' : ''}${column}`)}
-                className="ml-1 rounded border border-slate-200 bg-white px-1.5 py-0.5 font-mono text-[11px] text-slate-600 hover:border-slate-300"
-              >
-                {column}
-              </button>
-            ))
-          )}
+        {advanced ? (
+          <Field label="表达式" hint="引用本模型的物理列；聚合属于指标，这里不能写 SUM/COUNT">
+            <ExpressionArea
+              value={form.expr}
+              tokens={columns.map((column) => ({
+                key: column,
+                label: column,
+                token: writeColumnExpr(column),
+              }))}
+              emptyHint="该模型还没有字段"
+              error={check.error}
+              onChange={(expr) => set('expr', expr)}
+            />
+          </Field>
+        ) : (
+          <Field label="取自哪一列">
+            <Select
+              value={readColumnExpr(form.expr, columns) ?? ''}
+              onChange={(e) => set('expr', writeColumnExpr(e.target.value))}
+            >
+              {readColumnExpr(form.expr, columns) === null && <option value="">选择一列</option>}
+              {columns.map((column) => (
+                <option key={column} value={column}>
+                  {column}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        )}
+        <div className="mt-2 flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => setAdvanced((prev) => !prev)}
+          >
+            {advanced ? '改回选一列' : '改用表达式'}
+          </Button>
+          <span className="text-[11px] text-slate-400">
+            {advanced
+              ? '分箱、截取、拼接这类才需要表达式；回到「选一列」会清掉现在的写法'
+              : '要按区间分箱或截取一段时改用表达式'}
+          </span>
         </div>
       </div>
+
       <Field label="业务名称">
         <Input value={form.name} onChange={(e) => set('name', e.target.value)} />
       </Field>

@@ -12,6 +12,13 @@ import {
   buildDefineParams,
   checkDefinition,
 } from './metric-definition';
+import { ExpressionArea } from './expression-field';
+import {
+  OPERATOR_LABEL,
+  type BinaryOperator,
+  readBinaryExpr,
+  writeBinaryExpr,
+} from './expression-builder';
 import {
   AGG_LABEL,
   FILTER_OP_LABEL,
@@ -282,41 +289,103 @@ function ShapeEditor({
             <span className="ml-auto text-[11px] text-slate-400">点下面的指标名插入</span>
           )}
         </span>
-        {(shape === 'metric' || freeform) && (
-          <>
-            <Textarea
-              rows={2}
-              className="font-mono text-[12px]"
-              value={values.expr}
-              onChange={(e) => onChange({ expr: e.target.value })}
-            />
-            <div className="text-[11px] text-slate-500">
-              可引用：
-              {sources.metrics.length === 0 ? (
-                <span className="text-slate-400">该模型还没有其它指标</span>
-              ) : (
-                sources.metrics.map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    title="点击插入到表达式"
-                    onClick={() =>
-                      onChange({
-                        expr: `${values.expr}${values.expr.trim() ? ' ' : ''}${item.bizName}`,
-                      })
-                    }
-                    className="ml-1 rounded border border-slate-200 bg-white px-1.5 py-0.5 font-mono text-[11px] text-slate-600 hover:border-slate-300"
-                  >
-                    {item.name}
-                  </button>
-                ))
-              )}
-              <span className="ml-1 text-slate-400">· 只能引用同一个模型的指标</span>
-            </div>
-          </>
-        )}
+        {(shape === 'metric' || freeform) && <MetricExpression values={values} sources={sources} error={error} onChange={onChange} />}
       </label>
       {error && <div className="text-[11px] text-red-600">{error}</div>}
+    </div>
+  );
+}
+
+function MetricExpression({
+  values,
+  sources,
+  error,
+  onChange,
+}: {
+  values: MetricEditorValues;
+  sources: MetricDefinitionSources;
+  error: string | null;
+  onChange: (patch: Partial<MetricEditorValues>) => void;
+}) {
+  const names = sources.metrics.map((item) => item.bizName);
+  const binary = readBinaryExpr(values.expr, names);
+  // 复合指标绝大多数就是两个指标一个运算（毛利 = 收入 − 成本，毛利率 = 毛利 ÷ 收入）。
+  // 读不回二元式的（CASE WHEN、带常数）才落到表达式。
+  const [advanced, setAdvanced] = useState(() => binary === null && values.expr.trim() !== '');
+  const label = (bizName: string) =>
+    sources.metrics.find((item) => item.bizName === bizName)?.name ?? bizName;
+  const pick = (patch: Partial<{ left: string; operator: BinaryOperator; right: string }>) =>
+    onChange({
+      expr: writeBinaryExpr({
+        left: patch.left ?? binary?.left ?? names[0] ?? '',
+        operator: patch.operator ?? binary?.operator ?? '-',
+        right: patch.right ?? binary?.right ?? names[1] ?? names[0] ?? '',
+      }),
+    });
+
+  if (sources.metrics.length === 0) {
+    return (
+      <span className="text-[11px] text-slate-400">
+        该模型还没有其它指标可以组合——先在字段上建几个原子指标。
+      </span>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      {advanced ? (
+        <ExpressionArea
+          value={values.expr}
+          tokens={sources.metrics.map((item) => ({
+            key: item.id,
+            label: item.name,
+            token: item.bizName,
+          }))}
+          emptyHint="该模型还没有其它指标"
+          error={error}
+          onChange={(expr) => onChange({ expr })}
+        />
+      ) : (
+        <div className="flex items-center gap-2">
+          <Select className="h-8 flex-1" value={binary?.left ?? ''} onChange={(e) => pick({ left: e.target.value })}>
+            {binary === null && <option value="">选择指标</option>}
+            {names.map((name) => (
+              <option key={name} value={name}>
+                {label(name)}
+              </option>
+            ))}
+          </Select>
+          <Select
+            className="h-8 w-[104px]"
+            value={binary?.operator ?? '-'}
+            onChange={(e) => pick({ operator: e.target.value as BinaryOperator })}
+          >
+            {(Object.keys(OPERATOR_LABEL) as BinaryOperator[]).map((op) => (
+              <option key={op} value={op}>
+                {OPERATOR_LABEL[op]}
+              </option>
+            ))}
+          </Select>
+          <Select className="h-8 flex-1" value={binary?.right ?? ''} onChange={(e) => pick({ right: e.target.value })}>
+            {binary === null && <option value="">选择指标</option>}
+            {names.map((name) => (
+              <option key={name} value={name}>
+                {label(name)}
+              </option>
+            ))}
+          </Select>
+        </div>
+      )}
+      <div className="flex items-center gap-2">
+        <Button size="sm" variant="ghost" onClick={() => setAdvanced((prev) => !prev)}>
+          {advanced ? '改回两个指标相算' : '改用表达式'}
+        </Button>
+        <span className="text-[11px] text-slate-400">
+          {advanced
+            ? '可用四则与 CASE WHEN 等标量写法，不能写聚合函数；除法自动防除零'
+            : '要写 CASE WHEN 或带常数时改用表达式'}
+        </span>
+      </div>
     </div>
   );
 }

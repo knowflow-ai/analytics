@@ -1,6 +1,7 @@
 import { Info, Loader2, TriangleAlert, X } from 'lucide-react';
 import {
   createContext,
+  forwardRef,
   useCallback,
   useContext,
   useEffect,
@@ -81,9 +82,14 @@ export function Input({ className, ...rest }: InputHTMLAttributes<HTMLInputEleme
   return <input className={cx(CONTROL, 'h-9', className)} {...rest} />;
 }
 
-export function Textarea({ className, ...rest }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  return <textarea className={cx(CONTROL, 'py-2 leading-relaxed', className)} {...rest} />;
-}
+/** 转发 ref:表达式输入要读写光标位置,把名字插到光标处而不是追加到末尾。 */
+export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement>>(
+  function Textarea({ className, ...rest }, ref) {
+    return (
+      <textarea ref={ref} className={cx(CONTROL, 'py-2 leading-relaxed', className)} {...rest} />
+    );
+  },
+);
 
 export function Select({ className, ...rest }: SelectHTMLAttributes<HTMLSelectElement>) {
   return <select className={cx(CONTROL, 'h-9', className)} {...rest} />;

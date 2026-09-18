@@ -489,7 +489,7 @@ export function EntityEditor({ projectId, revision, modelId, readOnly, acceptRev
         <div className="flex min-h-0 flex-1 flex-col gap-4 md:flex-row">
           <section className="min-h-0 min-w-0 flex-1 overflow-y-auto pr-1 md:flex-[3_1_460px]">
             <div className="mb-2 flex items-baseline justify-between">
-              <span className="font-semibold text-slate-700">字段与派生</span>
+              <span className="font-semibold text-slate-700">字段与指标</span>
               {!readOnly && <span className="text-[11px] text-slate-400">点一行编辑</span>}
             </div>
             <table className="w-full text-left">
@@ -780,6 +780,10 @@ export function EntityEditor({ projectId, revision, modelId, readOnly, acceptRev
                     modelId={modelId}
                     seedColumn={detail.seedColumn}
                     seedShape={detail.seedShape}
+                    onJumpColumn={(column) => {
+                      const target = fields.find((f) => f.column === column);
+                      if (target) setSelection({ kind: 'field', id: target.id });
+                    }}
                     spec={spec}
                     aliasSuggest={
                       detail.metric

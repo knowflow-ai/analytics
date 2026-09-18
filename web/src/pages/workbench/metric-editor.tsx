@@ -562,6 +562,7 @@ export function MetricEditor({
   onClose,
   seedColumn,
   seedShape,
+  onJumpColumn,
 }: {
   /** ``null`` = 新建。 */
   metric: AnalyticsCatalogMetric | null;
@@ -578,6 +579,8 @@ export function MetricEditor({
   seedColumn?: string;
   /** 从哪个入口进来的：字段行 = 对一列做统计，复合指标分组 = 由其它指标计算。 */
   seedShape?: 'column' | 'metric';
+  /** 跳到某一列去补它的单位。单位是列的属性，改它得在字段上改。 */
+  onJumpColumn?: (column: string) => void;
 }) {
   const creating = metric === null;
   const modelFields = useMemo(
@@ -640,6 +643,11 @@ export function MetricEditor({
     shape?.shape === 'column'
       ? (modelFields.find((f) => f.column === shape.column)?.unit ?? null)
       : null;
+  // 数行数、数个数的指标没有单位是正常的，不是缺口——实测线上「sale_item数量」
+  // 「账户模型预警表数量」都是这一类，对它们提示「去字段上补单位」是误报。
+  const counting =
+    shape?.shape === 'column' &&
+    (shape.aggregation === 'COUNT' || shape.aggregation === 'COUNT_DISTINCT');
   const bizNameTaken =
     creating &&
     sources.metrics.some(
@@ -725,12 +733,25 @@ export function MetricEditor({
           <Field
             label="单位"
             hint={
-              inheritedUnit
-                ? '单位是列的属性，继承自来源列；要改去改那一列'
-                : '来源列还没声明单位。用户说「超过 2 万」时系统无从换算，建议去字段上补'
+              counting
+                ? '数的是条数，没有单位——这不是缺口'
+                : inheritedUnit
+                  ? '单位是列的属性，继承自来源列；要改去改那一列'
+                  : '来源列还没声明单位。用户说「超过 2 万」时系统无从换算，去这一列上补一个'
             }
           >
-            <Input value={inheritedUnit ?? '未声明'} disabled />
+            <div className="flex items-center gap-2">
+              <Input
+                className="flex-1"
+                value={counting ? '条' : (inheritedUnit ?? '未声明')}
+                disabled
+              />
+              {!counting && !inheritedUnit && shape?.shape === 'column' && onJumpColumn && (
+                <Button size="sm" onClick={() => onJumpColumn(shape.column)}>
+                  去补
+                </Button>
+              )}
+            </div>
           </Field>
         )}
         {form.metricDefineType !== 'METRIC' && timeDimensions.length > 1 && (

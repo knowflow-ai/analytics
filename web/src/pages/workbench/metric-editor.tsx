@@ -47,6 +47,27 @@ const SENSITIVITY = [
 const AGGREGATIONS: AggName[] = ['SUM', 'COUNT', 'COUNT_DISTINCT', 'AVG', 'MIN', 'MAX'];
 const FILTER_OPS: FilterOp[] = ['=', '!=', '>', '>=', '<', '<=', 'IN'];
 
+const NUMERIC_TYPE = /^(small|big|tiny|medium)?(int|integer|serial|decimal|numeric|real|double|float|money)/i;
+
+/**
+ * 新建时预选哪一列。
+ *
+ * 取第一个字段会得到「账户号 的 求和」这种荒谬默认——它不是错，是在教用户这个表单
+ * 不用看。优先选有受治理度量的列（建模已经认定它是可加的数量），其次数值列。
+ */
+function defaultColumn(
+  columns: Array<{ column: string; dataType: string }>,
+  sources: MetricDefinitionSources,
+): string {
+  const governed = new Set(sources.measures.map((m) => m.expr.trim().toLowerCase()));
+  return (
+    columns.find((item) => governed.has(item.column.toLowerCase()))?.column ??
+    columns.find((item) => NUMERIC_TYPE.test(item.dataType))?.column ??
+    columns[0]?.column ??
+    ''
+  );
+}
+
 /** 新建指标时的英文标识：其它指标引用它时用这个名字，所以必须是标识符形状。 */
 const BIZ_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -253,10 +274,12 @@ function ShapeEditor({
             onChange={() => onChange({ metricDefineType: 'METRIC', expr: '' })}
           />
           <span className="text-[13px] text-slate-800">由其它指标计算</span>
-          {freeform && (
+          {freeform ? (
             <span className="ml-auto text-[11px] text-amber-700">
               这条口径选择器表达不了，按原文编辑
             </span>
+          ) : (
+            <span className="ml-auto text-[11px] text-slate-400">点下面的指标名插入</span>
           )}
         </span>
         {(shape === 'metric' || freeform) && (
@@ -423,6 +446,7 @@ export function MetricEditor({
   onDelete,
   onClose,
   seedColumn,
+  seedShape,
 }: {
   /** ``null`` = 新建。 */
   metric: AnalyticsCatalogMetric | null;
@@ -437,11 +461,9 @@ export function MetricEditor({
   onClose: () => void;
   /** 从某个字段行的「+ 指标」进来时预填的列。 */
   seedColumn?: string;
+  /** 从哪个入口进来的：字段行 = 对一列做统计，复合指标分组 = 由其它指标计算。 */
+  seedShape?: 'column' | 'metric';
 }) {
-  const [form, setForm] = useState<MetricEditorValues>(() =>
-    metricEditorInitial(metric, { column: seedColumn }),
-  );
-  const [showMore, setShowMore] = useState(false);
   const creating = metric === null;
   const modelFields = useMemo(
     () => spec.fields.filter((f) => f.model_id === modelId),
@@ -451,6 +473,13 @@ export function MetricEditor({
     () => modelFields.map((f) => ({ column: f.column, name: f.name, dataType: f.data_type })),
     [modelFields],
   );
+  const [form, setForm] = useState<MetricEditorValues>(() =>
+    metricEditorInitial(metric, {
+      column: seedColumn ?? (seedShape === 'metric' ? undefined : defaultColumn(columns, sources)),
+      shape: seedShape,
+    }),
+  );
+  const [showMore, setShowMore] = useState(false);
   // 下钻只能选同模型的维度:跨模型下钻会让指标落到无法到达的粒度上。
   const dimensionOptions = useMemo(
     () => spec.dimensions.filter((d) => d.model_id === modelId),
@@ -505,25 +534,21 @@ export function MetricEditor({
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex items-center gap-2">
-        <span className="text-[13px] font-semibold text-slate-700">
-          {creating ? '新建指标' : form.name || metric.name}
-        </span>
-        <Badge tone={form.metricDefineType === 'METRIC' ? 'slate' : 'sky'} variant="outline">
-          {form.metricDefineType === 'METRIC' ? '复合指标' : '原子指标'}
-        </Badge>
-      </div>
-
       <div className="flex flex-col gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-3">
         <div className="flex items-center justify-between gap-2">
-          <span className="text-[13px] font-medium text-slate-700">口径定义</span>
+          <span className="flex items-center gap-2">
+            <span className="text-[13px] font-medium text-slate-700">口径定义</span>
+            <Badge tone={form.metricDefineType === 'METRIC' ? 'slate' : 'sky'} variant="outline">
+              {form.metricDefineType === 'METRIC' ? '复合指标' : '原子指标'}
+            </Badge>
+          </span>
           <span className="text-[11px] text-amber-700">改动会直接改变问数结果</span>
         </div>
         <ShapeEditor
           values={form}
           columns={columns}
           sources={sources}
-          error={definition.error}
+          error={creating && !form.expr.trim() ? null : definition.error}
           onChange={(patch) => setForm((prev) => ({ ...prev, ...patch }))}
         />
         {form.metricDefineType === 'METRIC' ? (

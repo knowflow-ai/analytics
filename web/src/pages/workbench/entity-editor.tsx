@@ -524,7 +524,11 @@ export function EntityEditor({ projectId, revision, modelId, readOnly, acceptRev
                               title="用这一列建一个指标"
                               onClick={(event) => {
                                 event.stopPropagation();
-                                setSelection({ kind: 'new-metric', column: field.column });
+                                setSelection({
+                                  kind: 'new-metric',
+                                  column: field.column,
+                                  shape: 'column',
+                                });
                               }}
                               className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] font-medium text-slate-600 opacity-0 transition-opacity hover:border-slate-300 group-hover:opacity-100"
                             >
@@ -580,7 +584,7 @@ export function EntityEditor({ projectId, revision, modelId, readOnly, acceptRev
                             <button
                               type="button"
                               title="由其它指标计算出一个新指标"
-                              onClick={() => setSelection({ kind: 'new-metric' })}
+                              onClick={() => setSelection({ kind: 'new-metric', shape: 'metric' })}
                               className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] font-medium text-slate-600 hover:border-slate-300"
                             >
                               <Plus className="h-3 w-3" />
@@ -775,6 +779,7 @@ export function EntityEditor({ projectId, revision, modelId, readOnly, acceptRev
                     metric={detail.metric}
                     modelId={modelId}
                     seedColumn={detail.seedColumn}
+                    seedShape={detail.seedShape}
                     spec={spec}
                     aliasSuggest={
                       detail.metric

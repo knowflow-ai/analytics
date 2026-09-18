@@ -186,7 +186,9 @@ describe('新建指标', () => {
     expect(values.bizName).toBe('');
   });
 
-  it('从复合指标分组进来时是空表达式', () => {
+  it('从复合指标分组进来时就是复合指标，不是原子', () => {
+    /** 实机撞到的：入口的形态没带过来，从「复合指标 + 新建」点进去开出的是原子表单，
+     *  徽章写着「原子指标」，还预选了「账户号 的 求和」。 */
     const values = metricEditorInitial(null, { shape: 'metric' });
     expect(values.metricDefineType).toBe('METRIC');
     expect(values.expr).toBe('');

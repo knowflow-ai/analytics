@@ -85,16 +85,26 @@ describe('字段派生了什么', () => {
 });
 
 describe('新建指标', () => {
-  it('new-metric 解析成「指标详情，但还没有对象」，并带上从哪一列点进来的', () => {
-    const detail = resolveEntityDetail({ kind: 'new-metric', column: 'net_amount' }, catalogs);
-    expect(detail).toEqual({ kind: 'metric', metric: null, seedColumn: 'net_amount' });
+  it('new-metric 带上从哪个入口点进来的：哪一列、哪种形态', () => {
+    const detail = resolveEntityDetail(
+      { kind: 'new-metric', column: 'net_amount', shape: 'column' },
+      catalogs,
+    );
+    expect(detail).toEqual({
+      kind: 'metric',
+      metric: null,
+      seedColumn: 'net_amount',
+      seedShape: 'column',
+    });
   });
 
-  it('从复合指标分组点进来时没有种子列', () => {
-    expect(resolveEntityDetail({ kind: 'new-metric' }, catalogs)).toEqual({
+  it('复合指标分组的入口带的是 metric 形态，没有种子列', () => {
+    /** 形态丢了，复合入口就会开出原子表单——实机撞到过。 */
+    expect(resolveEntityDetail({ kind: 'new-metric', shape: 'metric' }, catalogs)).toEqual({
       kind: 'metric',
       metric: null,
       seedColumn: undefined,
+      seedShape: 'metric',
     });
   });
 });

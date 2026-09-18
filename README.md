@@ -1,6 +1,6 @@
 # KnowFlow Analytics
 
-[English](README.en.md) | 简体中文 | [官网](https://www.knowflowchat.cn) | [更新日志](CHANGELOG.md) | [社区与支持](#社区与支持)
+[English](README.en.md) | 简体中文 | [官网](https://www.knowflowchat.cn) | [视频介绍](https://weixin.qq.com/sph/A3Ihzc7U1) | [更新日志](CHANGELOG.md) | [社区与支持](#社区与支持)
 
 **面向 AI Agent 与数据应用的开源语义层和受治理查询引擎。**
 
@@ -387,6 +387,7 @@ src/knowflow_analytics/
 ## 社区与支持
 
 - **官网**：[www.knowflowchat.cn](https://www.knowflowchat.cn)
+- **视频介绍**：[两分钟看完 KnowFlow Analytics](https://weixin.qq.com/sph/A3Ihzc7U1)（微信视频号）
 - **微信公众号**：KnowFlow 企业知识库
 - **交流群**：加微信 `skycode007`，备注“加群”
 - **更新日志**：[CHANGELOG.md](CHANGELOG.md)

@@ -1,6 +1,6 @@
 # KnowFlow Analytics
 
-English | [简体中文](README.md) | [Website](https://www.knowflowchat.cn) | [Changelog](CHANGELOG.en.md) | [Community and support](#community-and-support)
+English | [简体中文](README.md) | [Website](https://www.knowflowchat.cn) | [Video tour](https://weixin.qq.com/sph/A3Ihzc7U1) | [Changelog](CHANGELOG.en.md) | [Community and support](#community-and-support)
 
 **An open-source semantic layer and governed query engine for AI agents and data applications.**
 
@@ -387,6 +387,7 @@ Production deployments should still use a dedicated read-only database account, 
 ## Community and support
 
 - **Website**: [www.knowflowchat.cn](https://www.knowflowchat.cn)
+- **Video tour**: [KnowFlow Analytics in two minutes](https://weixin.qq.com/sph/A3Ihzc7U1) (Chinese narration, WeChat Channels)
 - **WeChat official account**: KnowFlow 企业知识库
 - **Community group**: add WeChat `skycode007` and include “加群” in your request
 - **Changelog**: [CHANGELOG.en.md](CHANGELOG.en.md)

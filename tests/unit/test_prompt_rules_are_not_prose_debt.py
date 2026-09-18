@@ -43,6 +43,7 @@ _RETIRED = {
     "单位或量词写进 value": "S2SQL_NON_NUMERIC_THRESHOLD（test_numeric_threshold_governance）",
     # 这一条不是没人守，是写反了：列存元、用户说「2 万」，照它写 2 就是静默错答。
     "也不得自行缩放": "改成「写成完整数字，单位按声明的 unit 换算」",
+    "该维度值只过滤分子": "S2SQL_RATIO_SCOPE_FILTERED（test_subset_share_denominator）",
 }
 
 # 留下的每一类各钉一句代表。

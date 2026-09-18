@@ -502,6 +502,63 @@ class _NumericThresholdParser:
             ) from None
 
 
+def _reject_collapsed_share_denominator(
+    statement: _QueryStatement, *, dimension: exp.Expression, value: exp.Expression
+) -> None:
+    """分母不能被这个维度筛成分子本身。
+
+    ``RATIO_TO_TOTAL(指标, 维度, 值)`` 展开成 ``agg FILTER (WHERE 维度 = 值) / agg``。
+    外层 WHERE 一旦也把这个维度限定到同一个值，分子分母就是同一批行，结果恒等于 1。
+    实机「太古里店销售额占用多少？」答 1.0，正确答案 0.158——SQL 合法、执行成功、
+    数字是个漂亮的百分比，六道关全绿。
+
+    只拦「恒等于 1」这一种：同一维度被限定到**恰好这一个值**。留了多个值是真的在缩小
+    对比范围（在这几个之间看占比），不拦；过滤别的维度更不拦。
+    """
+
+    assert statement.tree is not None
+    if not isinstance(dimension, exp.Column):
+        return
+    target = value.sql(dialect="postgres")
+    for where in statement.tree.find_all(exp.Where):
+        for predicate in where.find_all(exp.EQ, exp.In):
+            column = predicate.this
+            if not isinstance(column, exp.Column) or column.name != dimension.name:
+                continue
+            if isinstance(predicate, exp.EQ):
+                bound = [predicate.expression]
+            else:
+                bound = list(predicate.expressions)
+            if len(bound) != 1 or bound[0].sql(dialect="postgres") != target:
+                continue
+            name = _member_display_name(statement, dimension) or dimension.name
+            raise _invalid(
+                f"「{name}」已经被过滤成了 {value.sql(dialect='postgres')}，"
+                "占比的分母会跟着只剩这一个值，结果恒等于 100%；"
+                "这个值只过滤分子，不要再写进 WHERE",
+                code="S2SQL_RATIO_SCOPE_FILTERED",
+            )
+
+
+def _member_display_name(statement: _QueryStatement, column: exp.Column) -> str | None:
+    """把语句里的内部 token 还原成业务名，错误消息才有人看得懂。
+
+    这一步跑在维度表达式展开之后，列已经是 ``__kf_field_N``；``field_tokens`` 记着它
+    对应哪个字段，再由字段回查维度。语义 token 尚未展开的形态一并兼容。
+    """
+
+    resolved = statement.semantic_tokens.get(column.name)
+    if resolved is not None:
+        return resolved.name
+    field_id = statement.field_tokens.get(column.name)
+    if field_id is None:
+        return None
+    for item in statement.release.dimensions:
+        if item.field_id == field_id:
+            return item.name
+    return None
+
+
 class _DefaultDimValueParser:
     name = "DefaultDimValueParser"
 
@@ -752,6 +809,7 @@ class _MetricRatioParser:
                     "subset share requires one literal dimension value",
                     code="S2SQL_RATIO_SCOPE_INVALID",
                 )
+            _reject_collapsed_share_denominator(statement, dimension=dimension, value=value)
             expression_sql = (
                 f"CAST({aggregate_sql} FILTER (WHERE "
                 f"{dimension.sql(dialect='postgres')} = {value.sql(dialect='postgres')}) "

@@ -5019,6 +5019,15 @@ def _error_diagnosis(exc: AnalyticsError) -> QueryDiagnosis:
             recommendation="这列数据只到声明的粒度；若数据本身更细，改维度上的 time_granularity。",
             user_hint=f"{exc}。请按这列的粒度来问，比如按月而不是按天。",
         )
+    if exc.code == "S2SQL_RATIO_SCOPE_FILTERED":
+        return QueryDiagnosis(
+            category=QueryDiagnosticCategory.TRANSLATION,
+            stage=QueryStage.TRANSLATING.value,
+            severity="error",
+            summary="占比的分母被同一个维度值过滤掉了，结果会恒等于 100%",
+            recommendation="这是模型写法问题，语义模型不用改；重试链会把原因交回去。",
+            user_hint=f"{exc}。",
+        )
     if exc.code == "S2SQL_NON_NUMERIC_THRESHOLD":
         return QueryDiagnosis(
             category=QueryDiagnosticCategory.TRANSLATION,

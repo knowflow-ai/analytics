@@ -78,8 +78,8 @@ SYNTAX_EXEMPLARS: Final[tuple[dict[str, str], ...]] = (
     {
         "question": "各团队访问次数占本部门的比例",
         "sql": (
-            f'SELECT "部门", "团队", '
-            'SUM("访问次数") / SUM(SUM("访问次数")) OVER (PARTITION BY "部门") AS "_占本部门比_" '
+            f'SELECT "部门", "团队", SUM("访问次数") '
+            '/ SUM(SUM("访问次数")) OVER (PARTITION BY "部门") AS "_占比_" '
             f'FROM {_DS} GROUP BY "部门", "团队"'
         ),
     },
@@ -87,31 +87,29 @@ SYNTAX_EXEMPLARS: Final[tuple[dict[str, str], ...]] = (
     {
         "question": "各部门平均每个团队的访问次数",
         "sql": (
-            'WITH "_团队汇总_" AS ('
+            'WITH "_汇总_" AS ('
             f'SELECT "部门", "团队", SUM("访问次数") AS "_次数_" FROM {_DS} GROUP BY "部门", "团队"'
-            ') SELECT "部门", AVG("_次数_") AS "_团队平均次数_" FROM "_团队汇总_" GROUP BY "部门"'
+            ') SELECT "部门", AVG("_次数_") AS "_均值_" FROM "_汇总_" GROUP BY "部门"'
         ),
     },
     # 与整体比较用标量子查询。
     {
         "question": "访问次数高于所有部门平均水平的部门",
         "sql": (
-            'WITH "_部门汇总_" AS ('
+            'WITH "_汇总_" AS ('
             f'SELECT "部门", SUM("访问次数") AS "_次数_" FROM {_DS} GROUP BY "部门"'
-            ') SELECT "部门", "_次数_" FROM "_部门汇总_" '
-            'WHERE "_次数_" > (SELECT AVG("_次数_") FROM "_部门汇总_")'
+            ') SELECT "部门", "_次数_" FROM "_汇总_" '
+            'WHERE "_次数_" > (SELECT AVG("_次数_") FROM "_汇总_")'
         ),
     },
-    # 分区取前 N 名：先聚合、再按分区排名、最后取名次。
+    # 分区取前 N 名：聚合与分区排名写在同一层，外面按名次取。
     {
         "question": "每个部门访问次数最多的团队",
         "sql": (
-            'WITH "_团队汇总_" AS ('
-            f'SELECT "部门", "团队", SUM("访问次数") AS "_次数_" FROM {_DS} GROUP BY "部门", "团队"'
-            '), "_排名_" AS ('
-            'SELECT "部门", "团队", "_次数_", '
-            'RANK() OVER (PARTITION BY "部门" ORDER BY "_次数_" DESC) AS "_名次_" FROM "_团队汇总_"'
-            ') SELECT "部门", "团队", "_次数_" FROM "_排名_" WHERE "_名次_" = 1'
+            'SELECT "部门", "团队", "_次数_" FROM (SELECT "部门", "团队", '
+            'SUM("访问次数") AS "_次数_", RANK() OVER '
+            '(PARTITION BY "部门" ORDER BY SUM("访问次数") DESC) AS "_名次_" '
+            f'FROM {_DS} GROUP BY "部门", "团队") WHERE "_名次_" = 1'
         ),
     },
     # 集合运算：每个分支各自完整、直接 FROM 数据集（分支不能 FROM CTE），投影列一一对应。

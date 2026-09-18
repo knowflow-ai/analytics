@@ -28,6 +28,15 @@ export const AGG_LABEL: Record<AggName, string> = {
   MAX: '最大值',
 };
 
+/**
+ * 「数所有行」这一列。
+ *
+ * ``COUNT(*)`` 在契约里是一等公民（MetricSpec.counts_rows：行数指标数的是行，不是某列
+ * 的取值），不是一条读不懂的表达式。实机把它当成读不回来的写法落到「由其它指标计算」，
+ * 而该模型又没有其它指标可组合，口径就整段从界面上消失了。
+ */
+export const ALL_ROWS = '*';
+
 export interface ColumnChoice {
   column: string;
   aggregation: AggName;
@@ -67,6 +76,8 @@ export function deriveDefineType(
 
 /** 形态 → 表达式。MEASURE 写度量英文名（聚合由度量自带），FIELD 写聚合函数。 */
 export function columnExpr(choice: ColumnChoice, sources: MetricDefinitionSources): string {
+  // 数所有行只能计数：SUM(*) 不是合法 SQL，AVG(*) 更没有读法。
+  if (choice.column === ALL_ROWS) return 'COUNT(*)';
   const measure = governedMeasure(choice, sources);
   if (measure) return measure.bizName;
   if (choice.aggregation === 'COUNT_DISTINCT') return `COUNT(DISTINCT ${choice.column})`;
@@ -89,6 +100,9 @@ export function readShape(
     const agg = (measure.agg ?? '').toUpperCase();
     if (!(agg in AGG_LABEL)) return null;
     return { shape: 'column', column: measure.expr.trim(), aggregation: agg as AggName };
+  }
+  if (/^COUNT\s*\(\s*\*\s*\)$/i.test(text)) {
+    return { shape: 'column', column: ALL_ROWS, aggregation: 'COUNT' };
   }
   const distinct = /^COUNT\s*\(\s*DISTINCT\s+(.+?)\s*\)$/i.exec(text);
   if (distinct && BARE_IDENTIFIER.test(distinct[1])) {

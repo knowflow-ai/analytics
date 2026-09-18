@@ -45,6 +45,22 @@ describe('形态 → 定义方式（用户不选，系统定）', () => {
     );
   });
 
+  it('数所有行：COUNT(*) 是一个正经的「对一列做统计」，不是读不懂的表达式', () => {
+    /** 实机撞到的：账户评分模型结果数量 = COUNT(*)，readShape 读不回来 → 落到
+     *  「由其它指标计算」→ 而该模型没有其它指标可组合 → 口径整段消失。
+     *  契约里行数指标本来就是一等公民（MetricSpec.counts_rows）。 */
+    expect(readShape('FIELD', 'COUNT(*)', sources)).toEqual({
+      shape: 'column',
+      column: '*',
+      aggregation: 'COUNT',
+    });
+    expect(columnExpr({ column: '*', aggregation: 'COUNT' }, sources)).toBe('COUNT(*)');
+  });
+
+  it('数所有行只能计数——求和所有行没有意义', () => {
+    expect(columnExpr({ column: '*', aggregation: 'SUM' }, sources)).toBe('COUNT(*)');
+  });
+
   it('由其它指标计算 → METRIC', () => {
     expect(deriveDefineType('metric', null, sources)).toBe('METRIC');
   });
@@ -131,5 +147,31 @@ describe('限定条件：选择器 ↔ filterSql', () => {
 
   it('没有条件时序列化成 null，而不是空字符串', () => {
     expect(serializeConditions([])).toBeNull();
+  });
+});
+
+describe('线上目录里真实存在的形态，一条都不许读不回来', () => {
+  /**
+   * 夹具取自本机 4 个项目 active release 的实际指标。读不回来的会落到「由其它指标
+   * 计算」，而那条路在没有其它指标可组合时只显示一句提示——口径就整段从界面上消失。
+   * 「看不到该指标之前的定义」就是这么来的。
+   */
+  const live: MetricDefinitionSources = {
+    measures: [
+      { name: '账户余额', agg: 'AVG', expr: 'zhye', bizName: 'zhye', isCreateMetric: 1 },
+      { name: '模型值', agg: 'AVG', expr: 'model_val', bizName: 'model_val', isCreateMetric: 1 },
+    ],
+    fieldColumns: ['zhye', 'model_val', 'id'],
+    metrics: [{ id: 'metric:model_val', bizName: 'model_val', name: '模型值' }],
+  };
+
+  it.each([
+    ['MEASURE', 'zhye', 'column'],
+    ['MEASURE', 'model_val', 'column'],
+    ['FIELD', 'COUNT(id)', 'column'],
+    ['FIELD', 'COUNT(*)', 'column'],
+    ['METRIC', 'model_val - model_val', 'metric'],
+  ] as const)('%s %s 读成 %s', (defineType, expr, shape) => {
+    expect(readShape(defineType, expr, live)?.shape).toBe(shape);
   });
 });

@@ -21,6 +21,7 @@ import {
 } from './expression-builder';
 import {
   AGG_LABEL,
+  ALL_ROWS,
   FILTER_OP_LABEL,
   type AggName,
   type FilterCondition,
@@ -241,6 +242,8 @@ function ShapeEditor({
                 pickColumn({ column: e.target.value, aggregation: read?.aggregation ?? 'SUM' })
               }
             >
+              {/* 行数指标在契约里是一等公民（MetricSpec.counts_rows），不是读不懂的表达式。 */}
+              <option value={ALL_ROWS}>所有行</option>
               {columns.map((item) => (
                 <option key={item.column} value={item.column}>
                   {item.name || item.column}
@@ -251,6 +254,7 @@ function ShapeEditor({
             <Select
               className="h-8 w-auto"
               value={read?.aggregation ?? 'SUM'}
+              disabled={read?.column === ALL_ROWS}
               onChange={(e) =>
                 pickColumn({
                   column: read?.column ?? columns[0]?.column ?? '',
@@ -258,7 +262,7 @@ function ShapeEditor({
                 })
               }
             >
-              {AGGREGATIONS.map((agg) => (
+              {(read?.column === ALL_ROWS ? (['COUNT'] as AggName[]) : AGGREGATIONS).map((agg) => (
                 <option key={agg} value={agg}>
                   {AGG_LABEL[agg]}
                 </option>
@@ -289,7 +293,30 @@ function ShapeEditor({
             <span className="ml-auto text-[11px] text-slate-400">点下面的指标名插入</span>
           )}
         </span>
-        {(shape === 'metric' || freeform) && <MetricExpression values={values} sources={sources} error={error} onChange={onChange} />}
+        {freeform ? (
+          // 读不回来的口径：直接给原文。绝不能被「该模型还没有其它指标」那句提示吞掉——
+          // 实机 COUNT(*) 就是这么整段消失的。
+          <ExpressionArea
+            value={values.expr}
+            tokens={sources.metrics.map((item) => ({
+              key: item.id,
+              label: item.name,
+              token: item.bizName,
+            }))}
+            emptyHint="该模型还没有其它指标"
+            error={error}
+            onChange={(expr) => onChange({ expr })}
+          />
+        ) : (
+          shape === 'metric' && (
+            <MetricExpression
+              values={values}
+              sources={sources}
+              error={error}
+              onChange={onChange}
+            />
+          )
+        )}
       </label>
       {error && <div className="text-[11px] text-red-600">{error}</div>}
     </div>

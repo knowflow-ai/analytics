@@ -1,8 +1,9 @@
 import { useMutation } from '@tanstack/react-query';
-import { Clock, CornerDownRight, Lock } from 'lucide-react';
+import { Clock, CornerDownRight, Lock, Plus } from 'lucide-react';
 import { Fragment, useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
 import { deleteCatalogResource, newResourceId, previewCatalogDeletion, saveDimension, saveHierarchy, saveMetric, saveModel, versionOf } from '@analytics/api/analytics';
 import { MetricEditor, applyMetricEditorValues } from './metric-editor';
+import { FILTER_OP_LABEL, parseConditions } from './metric-authoring';
 import type { MetricDefinitionSources } from './metric-definition';
 import { AliasSuggestButton } from './alias-suggest-button';
 import { DimensionDictionarySection } from './dimension-dictionary-section';
@@ -119,7 +120,11 @@ export function EntityEditor({ projectId, revision, modelId, readOnly, acceptRev
     () => ({
       measures: catalogModel?.modelDetail.measures ?? [],
       fieldColumns: spec.fields.filter((f) => f.model_id === modelId).map((f) => f.column),
-      metrics: catalog.metrics.map((m) => ({ id: m.id, bizName: m.bizName, name: m.name })),
+      // 组合指标的依赖必须同模型（contracts.py:790 起的 validate），跨模型的候选
+      // 摆在这里只会让用户挑中一个必被服务端拒绝的来源。
+      metrics: catalog.metrics
+        .filter((m) => m.modelId === modelId)
+        .map((m) => ({ id: m.id, bizName: m.bizName, name: m.name })),
     }),
     [catalogModel, catalog.metrics, spec.fields, modelId],
   );
@@ -197,7 +202,17 @@ export function EntityEditor({ projectId, revision, modelId, readOnly, acceptRev
   });
   const saveMet = useMutation({
     mutationFn: (metric: AnalyticsCatalogMetric) => saveMetric(projectId, revision.id, version, metric),
-    onSuccess: onSaved('指标'),
+    onSuccess: (next: AnalyticsRevision, metric: AnalyticsCatalogMetric) => {
+      const created = !catalog.metrics.some((item) => item.id === metric.id);
+      acceptRevision(next);
+      // 新建完要落到它自己身上:留在「新建指标」的空表单上,用户会以为没保存成功。
+      setSelection({ kind: 'metric', id: metric.id });
+      toast.success(
+        created
+          ? '指标已保存。新指标会让指标样本重新待确认，发布前记得去质量报告里核一遍。'
+          : '指标已保存。',
+      );
+    },
     onError: (error) => toast.error(describeError(error)),
   });
   const saveHier = useMutation({
@@ -309,6 +324,51 @@ export function EntityEditor({ projectId, revision, modelId, readOnly, acceptRev
     </li>
   );
 
+  // 新建指标：id 用 metric_<32hex>，不与编译器造的 metric:field:… 冒号族相撞，
+  // 也避开 metric:default_count: 这个被 ensure_default_count_metrics 认领的前缀。
+  const newMetricBase = (bizName: string): AnalyticsCatalogMetric =>
+    ({
+      id: newResourceId('metric'),
+      name: '',
+      bizName,
+      description: '',
+      sensitiveLevel: 0,
+      modelId,
+      alias: null,
+      classifications: [],
+      isTag: 0,
+      ext: {},
+      metricDefineType: 'FIELD',
+      metricDefineByFieldParams: null,
+      metricDefineByMeasureParams: null,
+      metricDefineByMetricParams: null,
+    }) as AnalyticsCatalogMetric;
+
+  // 限定摘要直接显示在树上：同一列的几个指标差在哪，目录里就该看得出来，
+  // 而不是逐个点进去比。选择器表达不了的写法原样显示。
+  const columnLabel = new Map(fields.map((f) => [f.column, f.name || f.column]));
+  const filterSummary = new Map<string, string>();
+  catalog.metrics.forEach((item) => {
+    const params =
+      item.metricDefineByMeasureParams ??
+      item.metricDefineByFieldParams ??
+      item.metricDefineByMetricParams;
+    const sql = params?.filterSql ?? '';
+    if (!sql.trim()) return;
+    const parsed = parseConditions(sql);
+    filterSummary.set(
+      item.id,
+      parsed === null || parsed.length === 0
+        ? sql
+        : parsed
+            .map(
+              (c) =>
+                `${columnLabel.get(c.column) ?? c.column} ${FILTER_OP_LABEL[c.operator]} ${c.value}`,
+            )
+            .join('，'),
+    );
+  });
+
   // 不挂在本模型任何字段上的派生物(公式指标/表达式维度),树里单独成组。
   const fieldIdSet = new Set(fields.map((f) => f.id));
   const detachedDimensions = dimensions.filter((d) => !d.field_id || !fieldIdSet.has(d.field_id));
@@ -351,7 +411,7 @@ export function EntityEditor({ projectId, revision, modelId, readOnly, acceptRev
       : detail.kind === 'dimension'
         ? `维度 · ${detail.dimension.name}`
         : detail.kind === 'metric'
-          ? `指标 · ${detail.metric.name}`
+          ? (detail.metric ? `指标 · ${detail.metric.name}` : '新建指标')
           : detail.kind === 'hierarchy'
             ? detail.hierarchy
               ? `层级 · ${detail.hierarchy.name}`
@@ -450,12 +510,30 @@ export function EntityEditor({ projectId, revision, modelId, readOnly, acceptRev
                     <tr
                       onClick={readOnly || deletionBusy ? undefined : () => setSelection({ kind: 'field', id: field.id })}
                       className={cx(
-                        'transition-colors',
+                        'group transition-colors',
                         !readOnly && !deletionBusy && 'cursor-pointer hover:bg-slate-50',
                         selected && 'bg-sky-50',
                       )}
                     >
-                      <td className="whitespace-nowrap py-1.5 pr-3 font-medium text-slate-800">{field.name}</td>
+                      <td className="whitespace-nowrap py-1.5 pr-3 font-medium text-slate-800">
+                        <span className="inline-flex items-center gap-2">
+                          {field.name}
+                          {!readOnly && !deletionBusy && (
+                            <button
+                              type="button"
+                              title="用这一列建一个指标"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setSelection({ kind: 'new-metric', column: field.column });
+                              }}
+                              className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] font-medium text-slate-600 opacity-0 transition-opacity hover:border-slate-300 group-hover:opacity-100"
+                            >
+                              <Plus className="h-3 w-3" />
+                              指标
+                            </button>
+                          )}
+                        </span>
+                      </td>
                       <td className="whitespace-nowrap py-1.5 pr-3 font-mono text-slate-500">
                         {field.column} <span className="text-slate-300">{field.data_type}</span>
                       </td>
@@ -480,21 +558,46 @@ export function EntityEditor({ projectId, revision, modelId, readOnly, acceptRev
                     </tr>
                     {derived.dimensions.map((d) => derivedRow('dimension', d, null, true))}
                     {derived.metrics.map((m) =>
-                      derivedRow('metric', m, m.aggregation?.toUpperCase() ?? m.kind, true),
+                      derivedRow(
+                        'metric',
+                        m,
+                        filterSummary.get(m.id) ?? (m.aggregation?.toUpperCase() ?? m.kind),
+                        true,
+                      ),
                     )}
                     </Fragment>
                   );
                 })}
-                {(detachedDimensions.length > 0 || detachedMetrics.length > 0) && (
+                {(detachedDimensions.length > 0 || detachedMetrics.length > 0 || !readOnly) && (
                   <>
                     <tr>
-                      <td colSpan={3} className="pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                        组合指标 / 表达式维度
+                      <td colSpan={3} className="pb-1 pt-3">
+                        <span className="flex items-center justify-between gap-2">
+                          <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                            复合指标 / 表达式维度
+                          </span>
+                          {!readOnly && !deletionBusy && (
+                            <button
+                              type="button"
+                              title="由其它指标计算出一个新指标"
+                              onClick={() => setSelection({ kind: 'new-metric' })}
+                              className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] font-medium text-slate-600 hover:border-slate-300"
+                            >
+                              <Plus className="h-3 w-3" />
+                              新建
+                            </button>
+                          )}
+                        </span>
                       </td>
                     </tr>
                     {detachedDimensions.map((d) => derivedRow('dimension', d, null, false))}
                     {detachedMetrics.map((m) =>
-                      derivedRow('metric', m, m.aggregation?.toUpperCase() ?? m.kind, false),
+                      derivedRow(
+                        'metric',
+                        m,
+                        filterSummary.get(m.id) ?? (m.aggregation?.toUpperCase() ?? m.kind),
+                        false,
+                      ),
                     )}
                   </>
                 )}
@@ -552,7 +655,7 @@ export function EntityEditor({ projectId, revision, modelId, readOnly, acceptRev
               <div className="flex flex-col gap-3">
                 <div className="flex items-center justify-between gap-2 border-b border-slate-200 pb-2">
                   <span className="truncate text-[13px] font-semibold text-slate-700">{detailTitle}</span>
-                  {detail.kind === 'metric' && (
+                  {detail.kind === 'metric' && detail.metric && (
                     <ContextualTermButton
                       context={{ projectId, revision, acceptRevision, readOnly }}
                       preset={{ metricId: detail.metric.id }}
@@ -668,46 +771,60 @@ export function EntityEditor({ projectId, revision, modelId, readOnly, acceptRev
 
                 {detail.kind === 'metric' && (
                   <MetricEditor
-                    key={`${detail.metric.id}:${editEpoch}`}
+                    key={`${detail.metric?.id ?? 'new'}:${editEpoch}`}
                     metric={detail.metric}
+                    modelId={modelId}
+                    seedColumn={detail.seedColumn}
                     spec={spec}
-                    aliasSuggest={(current, apply) => (
-                      <AliasSuggestButton
-                        projectId={projectId}
-                        revisionId={revision.id}
-                        revisionEtag={revision.etag}
-                        resourceType="metric"
-                        modelId={detail.metric.modelId}
-                        name={detail.metric.name}
-                        bizName={detail.metric.bizName}
-                        description={detail.metric.description ?? ''}
-                        currentAliases={current}
-                        onSuggest={apply}
-                      />
-                    )}
+                    aliasSuggest={
+                      detail.metric
+                        ? (current, apply) => (
+                            <AliasSuggestButton
+                              projectId={projectId}
+                              revisionId={revision.id}
+                              revisionEtag={revision.etag}
+                              resourceType="metric"
+                              modelId={detail.metric!.modelId}
+                              name={detail.metric!.name}
+                              bizName={detail.metric!.bizName}
+                              description={detail.metric!.description ?? ''}
+                              currentAliases={current}
+                              onSuggest={apply}
+                            />
+                          )
+                        : undefined
+                    }
                     sources={{
                       ...metricSources,
-                      metrics: metricSources.metrics.filter((m) => m.id !== detail.metric.id),
+                      metrics: metricSources.metrics.filter((m) => m.id !== detail.metric?.id),
                     }}
                     saving={saveMet.isPending || deletionBusy}
                     onClose={cancelEdit}
                     onDelete={
-                      deletionBusy
+                      !detail.metric || deletionBusy
                         ? undefined
                         : () => void requestDeletion({
                             kind: 'metrics',
-                            id: detail.metric.id,
+                            id: detail.metric!.id,
                             label: '指标',
-                            name: detail.metric.name,
+                            name: detail.metric!.name,
                           })
                     }
                     onSave={(values) =>
-                      saveMet.mutate(applyMetricEditorValues(detail.metric, values, metricSources))
+                      saveMet.mutate(
+                        applyMetricEditorValues(
+                          detail.metric ?? newMetricBase(values.bizName.trim()),
+                          values,
+                          metricSources,
+                        ),
+                      )
                     }
                   />
                 )}
 
+
                 {detail.kind === 'metric' &&
+                  detail.metric &&
                   (metricDataset(detail.metric.id) ? (
                     <FactCheckControl
                       projectId={projectId}

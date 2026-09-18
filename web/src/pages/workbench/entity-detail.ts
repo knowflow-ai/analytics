@@ -10,6 +10,8 @@ export type EntitySelection =
   | { kind: 'metric'; id: string }
   | { kind: 'hierarchy'; id: string }
   | { kind: 'new-hierarchy' }
+  /** 新建指标。``column`` 来自「从哪一行点的 +」——位置即选择，省掉一道「对一列还是由指标算」。 */
+  | { kind: 'new-metric'; column?: string }
   | null;
 
 interface WithId {
@@ -27,7 +29,8 @@ export type EntityDetail<F, D, M, H> =
   | { kind: 'overview' }
   | { kind: 'field'; field: F }
   | { kind: 'dimension'; dimension: D }
-  | { kind: 'metric'; metric: M }
+  /** metric 为 null 表示新建。 */
+  | { kind: 'metric'; metric: M | null; seedColumn?: string }
   /** hierarchy 为 null 表示新建。 */
   | { kind: 'hierarchy'; hierarchy: H | null }
   | { kind: 'missing'; message: string };
@@ -45,6 +48,9 @@ export function resolveEntityDetail<F extends WithId, D extends WithId, M extend
 ): EntityDetail<F, D, M, H> {
   if (!selection) return { kind: 'overview' };
   if (selection.kind === 'new-hierarchy') return { kind: 'hierarchy', hierarchy: null };
+  if (selection.kind === 'new-metric') {
+    return { kind: 'metric', metric: null, seedColumn: selection.column };
+  }
 
   // 保存或删除后目录会整体换新，旧选中态可能已经指向不存在的对象。
   const missing = { kind: 'missing', message: MISSING[selection.kind] } as const;

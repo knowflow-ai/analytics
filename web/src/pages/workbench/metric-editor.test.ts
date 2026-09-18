@@ -175,3 +175,62 @@ describe('指标编辑器', () => {
     expect(saved.aggTimeDimensionId).toBeNull();
   });
 });
+
+describe('新建指标', () => {
+  it('从字段行进来时预填「对这一列求和」', () => {
+    /** 位置即选择：点的是哪一行，就从那一列开始，不再多问一句「对一列还是由指标算」。 */
+    const values = metricEditorInitial(null, { column: 'net_amount' });
+    expect(values.metricDefineType).toBe('FIELD');
+    expect(values.expr).toBe('SUM(net_amount)');
+    expect(values.name).toBe('');
+    expect(values.bizName).toBe('');
+  });
+
+  it('从复合指标分组进来时是空表达式', () => {
+    const values = metricEditorInitial(null, { shape: 'metric' });
+    expect(values.metricDefineType).toBe('METRIC');
+    expect(values.expr).toBe('');
+  });
+
+  it('保存时写入英文标识——其它指标引用它时用的就是这个名字', () => {
+    const base = {
+      id: 'metric_abc',
+      name: '',
+      bizName: 'online_revenue',
+      modelId: 'model:orders',
+      metricDefineType: 'FIELD',
+      metricDefineByFieldParams: null,
+      metricDefineByMeasureParams: null,
+      metricDefineByMetricParams: null,
+    } as unknown as AnalyticsCatalogMetric;
+    const saved = applyMetricEditorValues(
+      base,
+      {
+        ...metricEditorInitial(null, { column: 'net_amount' }),
+        bizName: 'online_revenue',
+        name: '线上销售额',
+      },
+      sources,
+    );
+    expect(saved.bizName).toBe('online_revenue');
+    expect(saved.name).toBe('线上销售额');
+    expect(saved.metricDefineByFieldParams?.expr).toBe('SUM(net_amount)');
+  });
+
+  it('切到复合指标时清掉聚合时间轴', () => {
+    /** 老坑：MEASURE 下选了时间轴再切 METRIC，保存必炸——contracts.MetricSpec
+     *  只允许原子指标声明聚合时间轴，复合指标的时间轴由它引用的原子指标决定。 */
+    const existing = metric({ aggTimeDimensionId: 'dimension:sale_date' } as never);
+    const saved = applyMetricEditorValues(
+      existing,
+      {
+        ...metricEditorInitial(existing),
+        aggTimeDimensionId: 'dimension:sale_date',
+        metricDefineType: 'METRIC',
+        expr: 'order_cnt',
+      },
+      sources,
+    );
+    expect(saved.aggTimeDimensionId).toBeNull();
+  });
+});

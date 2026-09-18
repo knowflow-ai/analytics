@@ -83,3 +83,18 @@ describe('字段派生了什么', () => {
     expect(all.map((m) => m.id)).not.toContain('m2');
   });
 });
+
+describe('新建指标', () => {
+  it('new-metric 解析成「指标详情，但还没有对象」，并带上从哪一列点进来的', () => {
+    const detail = resolveEntityDetail({ kind: 'new-metric', column: 'net_amount' }, catalogs);
+    expect(detail).toEqual({ kind: 'metric', metric: null, seedColumn: 'net_amount' });
+  });
+
+  it('从复合指标分组点进来时没有种子列', () => {
+    expect(resolveEntityDetail({ kind: 'new-metric' }, catalogs)).toEqual({
+      kind: 'metric',
+      metric: null,
+      seedColumn: undefined,
+    });
+  });
+});

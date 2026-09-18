@@ -37,6 +37,7 @@ from knowflow_analytics.errors import TranslationError
 from knowflow_analytics.execution.dialect import SqlDialect, render_physical_sql
 from knowflow_analytics.modeling.analysis_topics import route_relation_ids_for_models
 from knowflow_analytics.modeling.semantic_expression import render_semantic_expression
+from knowflow_analytics.modeling.type_system import is_numeric_type
 from knowflow_analytics.query.errors import SemanticParsingError
 from knowflow_analytics.query.s2sql_ast import textual_query_type, validate_textual_s2sql
 from knowflow_analytics.query.symbols import ResolvedSemanticSymbol, SemanticSymbolTable
@@ -397,6 +398,108 @@ class _TimeGovernanceParser:
             f"「{'」「'.join(demanding)}」必须指定时间范围",
             code="EXPLICIT_TIME_REQUIRED",
         )
+
+
+class _NumericThresholdParser:
+    """和数值成员比较的字面量必须是数字。
+
+    提示词第 46 条「不得把万、亿、元、%、个等单位或量词写进 value」是对的，但零拦截：
+    ``"净收入" > '2万'`` 六道治理关全绿，以参数 ``{'p0': '2万'}`` 送到 PostgreSQL 才炸
+    （invalid input syntax for type numeric）。那时已在 EXECUTING，越过了能救回这次查询
+    的重试链——与 2026-08-30 那个 ``SUM(SUM(...))`` 同一类。在这里拒，重试链就拿得到
+    「哪个成员、哪个字面量」，模型改得动。
+
+    判据是声明出来的，不是猜的：指标一律是数值（COUNT/SUM/AVG/派生都产出数字），维度看
+    其字段声明的 ``data_type``。纯数字的字符串（``'20000'``）不拦——PostgreSQL 转得了，
+    那不是错误。显式 CAST 也不拦：类型是作者亲手指定的。
+    """
+
+    name = "NumericThresholdParser"
+
+    def parse(self, statement: _QueryStatement) -> None:
+        assert statement.tree is not None
+        numeric, member_names = self._token_names(statement)
+        # 不能按 numeric 为空提前退出：COUNT 一个文本维度照样产出数字，
+        # 那种语句里一个数值成员都没有。
+        if not member_names:
+            return
+        for predicate in statement.tree.find_all(exp.EQ, exp.NEQ, exp.GT, exp.GTE, exp.LT, exp.LTE):
+            for side, other in (
+                (predicate.this, predicate.expression),
+                (predicate.expression, predicate.this),
+            ):
+                member = self._numeric_member(side, numeric=numeric, member_names=member_names)
+                if member is not None:
+                    self._require_number(other, member=member)
+                    break
+        for in_clause in statement.tree.find_all(exp.In):
+            member = self._numeric_member(
+                in_clause.this, numeric=numeric, member_names=member_names
+            )
+            if member is None:
+                continue
+            for item in in_clause.expressions:
+                self._require_number(item, member=member)
+        for between in statement.tree.find_all(exp.Between):
+            member = self._numeric_member(between.this, numeric=numeric, member_names=member_names)
+            if member is None:
+                continue
+            for key in ("low", "high"):
+                bound = between.args.get(key)
+                if bound is not None:
+                    self._require_number(bound, member=member)
+
+    @staticmethod
+    def _token_names(statement: _QueryStatement) -> tuple[dict[str, str], dict[str, str]]:
+        """token → 业务名。第一张只含数值成员，第二张含全部成员（给聚合用）。"""
+
+        dimensions = {item.id: item for item in statement.release.dimensions}
+        fields = {item.id: item for item in statement.release.fields}
+        numeric: dict[str, str] = {}
+        member_names: dict[str, str] = {}
+        for token, resolved in statement.semantic_tokens.items():
+            member_names[token] = resolved.name
+            if resolved.kind == "metric":
+                # 指标永远产出数字：COUNT/COUNT DISTINCT 数个数，SUM/AVG/MIN/MAX 与派生
+                # 指标都建立在度量上。
+                numeric[token] = resolved.name
+                continue
+            dimension = dimensions.get(resolved.id)
+            field_spec = fields.get(dimension.field_id) if dimension is not None else None
+            if field_spec is not None and is_numeric_type(field_spec.data_type):
+                numeric[token] = resolved.name
+        return numeric, member_names
+
+    @staticmethod
+    def _numeric_member(
+        expression: exp.Expression, *, numeric: dict[str, str], member_names: dict[str, str]
+    ) -> str | None:
+        node = expression
+        while isinstance(node, exp.Paren):
+            node = node.this
+        if node.find(exp.Cast) is not None:
+            return None
+        if isinstance(node, exp.Column):
+            return numeric.get(node.name)
+        if isinstance(node, exp.AggFunc):
+            # 聚合的结果一律是数字，与被聚合的列是不是数值无关（COUNT 文本列也数出数字）。
+            column = node.find(exp.Column)
+            return member_names.get(column.name) if column is not None else None
+        return None
+
+    @staticmethod
+    def _require_number(expression: exp.Expression, *, member: str) -> None:
+        if not isinstance(expression, exp.Literal) or not expression.is_string:
+            return
+        text = str(expression.this)
+        try:
+            float(text.strip())
+        except ValueError:
+            raise _invalid(
+                f"「{member}」是数值，阈值「{text}」不是数字。万、亿这类数量级词要写成"
+                f"完整数字（2 万写成 20000），单位不写进数字里",
+                code="S2SQL_NON_NUMERIC_THRESHOLD",
+            ) from None
 
 
 class _DefaultDimValueParser:
@@ -1490,6 +1593,7 @@ class S2SqlSemanticTranslator:
             _NoOpParser("StructQueryParser"),
             _SqlQueryParser(),
             _TimeGovernanceParser(),
+            _NumericThresholdParser(),
             _DefaultDimValueParser(),
             _DimExpressionParser(),
             _MetricExpressionParser(),

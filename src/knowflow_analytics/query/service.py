@@ -5019,6 +5019,18 @@ def _error_diagnosis(exc: AnalyticsError) -> QueryDiagnosis:
             recommendation="这列数据只到声明的粒度；若数据本身更细，改维度上的 time_granularity。",
             user_hint=f"{exc}。请按这列的粒度来问，比如按月而不是按天。",
         )
+    if exc.code == "S2SQL_NON_NUMERIC_THRESHOLD":
+        return QueryDiagnosis(
+            category=QueryDiagnosticCategory.TRANSLATION,
+            stage=QueryStage.TRANSLATING.value,
+            severity="error",
+            summary="数值成员的阈值里混进了单位或量词",
+            recommendation=(
+                "指标没声明 unit 时，模型无从知道列里存的是元还是万元。"
+                "给这个指标补上单位，「超过 2 万」才换算得对。"
+            ),
+            user_hint=f"{exc}。",
+        )
     if exc.code == "EXPLICIT_TIME_REQUIRED":
         return QueryDiagnosis(
             category=QueryDiagnosticCategory.TRANSLATION,

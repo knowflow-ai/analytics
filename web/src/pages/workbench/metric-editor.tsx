@@ -285,12 +285,10 @@ function ShapeEditor({
             onChange={() => onChange({ metricDefineType: 'METRIC', expr: '' })}
           />
           <span className="text-[13px] text-slate-800">由其它指标计算</span>
-          {freeform ? (
+          {freeform && (
             <span className="ml-auto text-[11px] text-amber-700">
               这条口径选择器表达不了，按原文编辑
             </span>
-          ) : (
-            <span className="ml-auto text-[11px] text-slate-400">点下面的指标名插入</span>
           )}
         </span>
         {freeform ? (
@@ -339,16 +337,17 @@ function MetricExpression({
   // 复合指标绝大多数就是两个指标一个运算（毛利 = 收入 − 成本，毛利率 = 毛利 ÷ 收入）。
   // 读不回二元式的（CASE WHEN、带常数）才落到表达式。
   const [advanced, setAdvanced] = useState(() => binary === null && values.expr.trim() !== '');
+  // 和条件行同一个道理:表达式是唯一权威,但「只选了一边」没法写成表达式。纯从 expr
+  // 反推的话,选中左边会把右边自动填成某个指标——实机出现了「销售金额 − 销售金额」。
+  const [draft, setDraft] = useState(() => binary ?? { left: '', operator: '-' as BinaryOperator, right: '' });
   const label = (bizName: string) =>
     sources.metrics.find((item) => item.bizName === bizName)?.name ?? bizName;
-  const pick = (patch: Partial<{ left: string; operator: BinaryOperator; right: string }>) =>
-    onChange({
-      expr: writeBinaryExpr({
-        left: patch.left ?? binary?.left ?? names[0] ?? '',
-        operator: patch.operator ?? binary?.operator ?? '-',
-        right: patch.right ?? binary?.right ?? names[1] ?? names[0] ?? '',
-      }),
-    });
+  const pick = (patch: Partial<typeof draft>) => {
+    const next = { ...draft, ...patch };
+    setDraft(next);
+    // 两边都选齐才写得出表达式;没选齐就让它保持为空,保存按钮自然是禁用的。
+    onChange({ expr: next.left && next.right ? writeBinaryExpr(next) : '' });
+  };
 
   if (sources.metrics.length === 0) {
     return (
@@ -374,8 +373,8 @@ function MetricExpression({
         />
       ) : (
         <div className="flex items-center gap-2">
-          <Select className="h-8 flex-1" value={binary?.left ?? ''} onChange={(e) => pick({ left: e.target.value })}>
-            {binary === null && <option value="">选择指标</option>}
+          <Select className="h-8 flex-1" value={draft.left} onChange={(e) => pick({ left: e.target.value })}>
+            <option value="">选择指标</option>
             {names.map((name) => (
               <option key={name} value={name}>
                 {label(name)}
@@ -384,7 +383,7 @@ function MetricExpression({
           </Select>
           <Select
             className="h-8 w-[104px]"
-            value={binary?.operator ?? '-'}
+            value={draft.operator}
             onChange={(e) => pick({ operator: e.target.value as BinaryOperator })}
           >
             {(Object.keys(OPERATOR_LABEL) as BinaryOperator[]).map((op) => (
@@ -393,8 +392,8 @@ function MetricExpression({
               </option>
             ))}
           </Select>
-          <Select className="h-8 flex-1" value={binary?.right ?? ''} onChange={(e) => pick({ right: e.target.value })}>
-            {binary === null && <option value="">选择指标</option>}
+          <Select className="h-8 flex-1" value={draft.right} onChange={(e) => pick({ right: e.target.value })}>
+            <option value="">选择指标</option>
             {names.map((name) => (
               <option key={name} value={name}>
                 {label(name)}
@@ -404,7 +403,14 @@ function MetricExpression({
         </div>
       )}
       <div className="flex items-center gap-2">
-        <Button size="sm" variant="ghost" onClick={() => setAdvanced((prev) => !prev)}>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => {
+            if (advanced) setDraft(readBinaryExpr(values.expr, names) ?? draft);
+            setAdvanced((prev) => !prev);
+          }}
+        >
           {advanced ? '改回两个指标相算' : '改用表达式'}
         </Button>
         <span className="text-[11px] text-slate-400">
@@ -420,16 +426,26 @@ function MetricExpression({
 function ConditionsEditor({
   filterSql,
   columns,
+  preferredColumn,
   valuesByColumn,
   onChange,
 }: {
   filterSql: string;
   columns: Array<{ column: string; name: string }>;
+  /** 新加一行时预选哪一列。默认给第一列会预选出主标识——过滤主键没有意义。 */
+  preferredColumn: string;
   valuesByColumn: Map<string, string[]>;
   onChange: (filterSql: string) => void;
 }) {
   const parsed = parseConditions(filterSql);
-  const write = (next: FilterCondition[]) => onChange(serializeConditions(next) ?? '');
+  // 条件行必须有自己的草稿状态：serializeConditions 会滤掉取值还没填的行（那种行
+  // 序列化不出合法 SQL），纯从 filterSql 反解的话，新加的空行写下去是 null、读回来
+  // 还是空数组——「添加条件」点了没有任何反应就是这么来的。
+  const [draft, setDraft] = useState<FilterCondition[]>(() => parsed ?? []);
+  const write = (next: FilterCondition[]) => {
+    setDraft(next);
+    onChange(serializeConditions(next) ?? '');
+  };
 
   if (parsed === null) {
     // OR、函数、列比列……选择器画不出来。转只读原文，而不是把它改写成能画的形状。
@@ -453,10 +469,10 @@ function ConditionsEditor({
         <span className="text-xs font-medium text-slate-600">只统计满足条件的行</span>
         <span className="text-[11px] text-slate-400">留空 = 全部行</span>
       </div>
-      {parsed.map((condition, index) => {
+      {draft.map((condition, index) => {
         const options = valuesByColumn.get(condition.column) ?? [];
         const patch = (next: Partial<FilterCondition>) =>
-          write(parsed.map((item, i) => (i === index ? { ...item, ...next } : item)));
+          write(draft.map((item, i) => (i === index ? { ...item, ...next } : item)));
         return (
           <div key={index} className="flex items-center gap-2">
             <Select
@@ -505,7 +521,7 @@ function ConditionsEditor({
             <button
               type="button"
               aria-label="删除条件"
-              onClick={() => write(parsed.filter((_, i) => i !== index))}
+              onClick={() => write(draft.filter((_, i) => i !== index))}
               className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-600"
             >
               <X className="h-3.5 w-3.5" />
@@ -520,7 +536,10 @@ function ConditionsEditor({
           icon={<Plus className="h-3 w-3" />}
           disabled={columns.length === 0}
           onClick={() =>
-            write([...parsed, { column: columns[0]?.column ?? '', operator: '=', value: '' }])
+            write([
+              ...draft,
+              { column: preferredColumn || columns[0]?.column || '', operator: '=', value: '' },
+            ])
           }
         >
           添加条件
@@ -595,6 +614,14 @@ export function MetricEditor({
     });
     return map;
   }, [modelFields, dimensionOptions, spec.dimension_values]);
+  // 限定是「只统计满足条件的行」,默认该落在一个可分组的维度上,而不是主标识。
+  const preferredFilterColumn = useMemo(
+    () =>
+      modelFields.find((f) => f.kind === 'dimension')?.column ??
+      modelFields.find((f) => f.kind !== 'identifier')?.column ??
+      '',
+    [modelFields],
+  );
   const set = <K extends keyof MetricEditorValues>(key: K, value: MetricEditorValues[K]) =>
     setForm((prev) => ({ ...prev, [key]: value }));
   const definition = useMemo(
@@ -618,15 +645,16 @@ export function MetricEditor({
     sources.metrics.some(
       (item) => item.bizName.toLowerCase() === form.bizName.trim().toLowerCase(),
     );
-  const bizNameError = creating
-    ? !form.bizName.trim()
-      ? '英文标识不能为空'
-      : !BIZ_NAME_RE.test(form.bizName.trim())
+  // 还没填不是错误——保存按钮本来就是禁用的。只在写错或撞名时报红。
+  const bizNameError =
+    creating && form.bizName.trim()
+      ? !BIZ_NAME_RE.test(form.bizName.trim())
         ? '只能用字母、数字与下划线，且不以数字开头'
         : bizNameTaken
           ? '这个英文标识已经被占用'
           : null
-    : null;
+      : null;
+  const bizNameMissing = creating && !form.bizName.trim();
 
   return (
     <div className="flex flex-col gap-3">
@@ -655,6 +683,7 @@ export function MetricEditor({
           <ConditionsEditor
             filterSql={form.filterSql}
             columns={columns}
+            preferredColumn={preferredFilterColumn}
             valuesByColumn={valuesByColumn}
             onChange={(filterSql) => set('filterSql', filterSql)}
           />
@@ -809,7 +838,12 @@ export function MetricEditor({
           <Button
             variant="primary"
             loading={saving}
-            disabled={!form.name.trim() || definition.error !== null || bizNameError !== null}
+            disabled={
+              !form.name.trim() ||
+              definition.error !== null ||
+              bizNameError !== null ||
+              bizNameMissing
+            }
             onClick={() => onSave(form)}
           >
             保存

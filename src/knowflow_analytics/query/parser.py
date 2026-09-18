@@ -901,23 +901,38 @@ class LlmS2SqlParser:
                     f"{governed_context_line}"
                     f"{entities_line}"
                     f"current_date={current_date.isoformat()}\n"
-                    f"reviewed_exemplars={reviewed_exemplars}\n"
+                    f"{_optional_key('reviewed_exemplars', reviewed_exemplars)}"
                     f"syntax_exemplars={syntax_exemplars}\n"
-                    f"partition_time={partition_time}\n"
-                    f"primary_key={primary_key}\n"
+                    f"{_optional_key('partition_time', partition_time)}"
+                    f"{_optional_key('primary_key', primary_key)}"
+                    # 这条即使为空也要发：它是 COUNT(*) 的开关，"没有"必须说出口。
                     f"default_count_metric={default_count_metric}\n"
                     f"metrics={_render_member_table(metrics, _METRIC_COLUMNS)}\n"
                     f"dimensions={_render_member_table(dimensions, _DIMENSION_COLUMNS)}\n"
                     f"{hierarchy_line}"
-                    f"values={values}\n"
-                    f"domain_terms={terms}\n"
-                    f"mapped_constraints={constraints}"
+                    f"{_optional_key('values', values)}"
+                    f"{_optional_key('domain_terms', terms)}"
+                    f"{_optional_key('mapped_constraints', constraints)}"
                 ),
             },
         ]
         if rejection:
             messages.append(_rejection_message(rejection))
         return messages
+
+
+def _optional_key(key: str, value: Any) -> str:
+    """空值不进 prompt。
+
+    ``values=[]``、``partition_time=None`` 这类键对模型没有任何信息——它既不是"有"也
+    不是"没有"，只是一行噪声。仓库里 ``dimension_hierarchies``、``dataset_context``、
+    ``entities`` 早就是"没有就整个键不出现"（见上面那几行的注释），这几个只是漏了。
+    ``default_count_metric`` 例外：它是 COUNT(*) 的开关，"为空"本身是一条约束。
+    """
+
+    if value is None or (isinstance(value, (list, tuple, dict, str)) and not value):
+        return ""
+    return f"{key}={value}\n"
 
 
 def _semantic_context_payload(

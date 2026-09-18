@@ -12,6 +12,7 @@ from knowflow_analytics.gateways.calls import (
     record_call,
     remaining_seconds,
 )
+from knowflow_analytics.gateways.prompt_schema import prompt_json_schema
 
 LOGGER = logging.getLogger(__name__)
 
@@ -213,7 +214,9 @@ class HttpModelGateway:
             "messages": messages,
             "response_schema": {
                 "name": purpose.replace(".", "_"),
-                "json_schema": response_schema,
+                # pydantic 的 title/docstring/default 只对开发者有意义，却随每次请求
+                # 付一遍钱；剥掉不动任何一条约束（见 gateways/prompt_schema.py）。
+                "json_schema": prompt_json_schema(response_schema),
             },
             # 第一次确定性生成；校验失败后逐级升温，让模型跳出重复的无效输出。
             # 此前第 2、3 次都是 0.5，没有递进。

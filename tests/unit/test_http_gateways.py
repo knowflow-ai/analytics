@@ -604,3 +604,55 @@ def test_model_call_records_carry_output_size():
 
     assert calls[0]["output_chars"] == 321
     assert calls[0]["total_tokens"] == 987
+
+
+def test_the_schema_on_the_wire_carries_no_developer_annotations():
+    """剥离必须发生在网关，而不是每个调用点各记一次。
+
+    12 处 ``generate_json`` 调用都是直接把 ``model_json_schema()`` 递过来的；哪天新加
+    第 13 处，也不该再想起这件事。这里钉住"线上那份不带 title/docstring/default"。
+    """
+
+    bodies = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.read()))
+        return httpx.Response(200, json={"code": 0, "data": {"structured": {"sql": "SELECT 1"}}})
+
+    gateway = HttpModelGateway(
+        base_url="http://ragflow.invalid",
+        service_token="service-token",
+        llm_id="model@provider",
+        client=httpx.Client(
+            base_url="http://ragflow.invalid", transport=httpx.MockTransport(handler)
+        ),
+    )
+
+    gateway.generate_json(
+        purpose="analytics.s2sql",
+        messages=[{"role": "user", "content": "q"}],
+        response_schema={
+            "title": "_LlmS2SqlOutput",
+            "description": "写给维护者的工程笔记",
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "sql": {"title": "Sql", "type": "string", "minLength": 1},
+                # 真的叫 description 的字段：建模契约里就有一个，不能被误删。
+                "description": {"title": "Description", "type": "string", "default": ""},
+            },
+            "required": ["sql"],
+        },
+        trace={"tenant_id": "tenant-1"},
+    )
+
+    sent = bodies[0]["response_schema"]["json_schema"]
+    assert sent == {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "sql": {"type": "string", "minLength": 1},
+            "description": {"type": "string"},
+        },
+        "required": ["sql"],
+    }

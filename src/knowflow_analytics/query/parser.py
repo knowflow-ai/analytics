@@ -242,14 +242,27 @@ class RuleS2SqlParser:
         selected_time_dimension_id: str | None = None,
         time_override: TimeWindowOverride | None = None,
     ) -> ParsedSemanticCandidate | None:
-        metrics = _element_ids(mapping, SemanticElementType.METRIC)
-        dimensions = _element_ids(mapping, SemanticElementType.DIMENSION)
+        dataset = _dataset(release, mapping.dataset_id)
+        # Mapper 证据未必都落在这个数据集里：生成期目录会排除名字随作用域变化的标识列，
+        # 而证据要留着给同名那道门用。Rule 候选直接拿证据拼查询，不过滤就会序列化出一个
+        # 这里根本叫不出名字的成员（实机「报表项目是货币资金的科目有哪些」以
+        # ``semantic element is outside the selected dataset`` 整条挂掉）。
+        metric_ids = frozenset(dataset.metric_ids)
+        dimension_ids = frozenset(dataset.dimension_ids)
+        metrics = [
+            item for item in _element_ids(mapping, SemanticElementType.METRIC) if item in metric_ids
+        ]
+        dimensions = [
+            item
+            for item in _element_ids(mapping, SemanticElementType.DIMENSION)
+            if item in dimension_ids
+        ]
         value_matches = [
             item
             for item in mapping.matches
             if item.element_type is SemanticElementType.DIMENSION_VALUE
+            and item.dimension_id in dimension_ids
         ]
-        dataset = _dataset(release, mapping.dataset_id)
         if not metrics and not dimensions and value_matches:
             # Parity source: DetailValueQuery.fillParseInfo exposes every dataset
             # dimension for a value-only rule query.
@@ -973,12 +986,15 @@ def _semantic_context_payload(
     """
 
     allowed_models = set(dataset.model_ids)
+    # Mapper 命中的成员未必属于这个作用域：生成期目录会排除名字随作用域变化的标识列，
+    # 而证据要留着给同名那道门用。不取交集就会拿一个 ``target_names`` 里没有的 ID 做
+    # 裸字典下标，以 ``INTERNAL_ERROR`` 收场——比答错更难查（实机复现）。
     allowed_targets = {
         "project": {release.project_id},
         "query_scope": {dataset.id},
         "model": allowed_models,
-        "metric": mapped_element_ids,
-        "dimension": mapped_element_ids,
+        "metric": mapped_element_ids & set(dataset.metric_ids),
+        "dimension": mapped_element_ids & set(dataset.dimension_ids),
     }
     rank = {"project": 0, "query_scope": 1, "model": 2, "metric": 3, "dimension": 4}
     entries = sorted(

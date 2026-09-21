@@ -2756,3 +2756,108 @@ class TestAScopeDependentNameIsNotOfferedAcrossScopes:
         assert "客户.业务数量总计" in sales_row, sales_row
         assert "客户.业务数量总计" not in customer_row, customer_row
         assert "业务数量总计" in customer_row, customer_row
+
+
+def test_a_rule_candidate_never_references_a_member_outside_its_dataset(sales_release) -> None:
+    """Rule 候选只能用它那个数据集拥有的成员。
+
+    它直接拿 Mapper 证据拼 SemanticQuery，此前从不按数据集过滤——每个命中恰好都在
+    数据集里，于是这个洞一直潜伏着。生成期目录开始排除成员之后就现形了：实机
+    「报表项目是货币资金的科目有哪些」以
+    ``LLM_S2SQL_AST_INVALID: semantic element is outside the selected dataset`` 整条
+    挂掉，而改动前它答得出 1001/1002/1003。
+
+    证据本身要留着（同名那道门靠它判「这组成员还能不能用名字分开」），所以过滤必须
+    发生在用它的人那一侧。
+    """
+
+    from knowflow_analytics.query.contracts import MappingResult, MatchMethod, SchemaMatch
+    from knowflow_analytics.query.parser import RuleS2SqlParser
+
+    release = _routed_release(sales_release)
+    sales = release.datasets[0]
+    assert "product" not in sales.dimension_ids, "这一条要的就是数据集外的成员"
+
+    def match(element_type, element_id, phrase):
+        return SchemaMatch(
+            entry_id="e_" + element_id,
+            dataset_id=sales.id,
+            element_type=element_type,
+            element_id=element_id,
+            phrase=phrase,
+            detected_text=phrase,
+            method=MatchMethod.KEYWORD,
+            score=0.9,
+            priority=100,
+        )
+
+    candidate = RuleS2SqlParser().parse(
+        question="各地区净收入",
+        release=release,
+        mapping=MappingResult(
+            dataset_id=sales.id,
+            mode=MapMode.MODERATE,
+            normalized_question="各地区净收入",
+            matches=(
+                match(SemanticElementType.METRIC, "net_revenue", "净收入"),
+                match(SemanticElementType.DIMENSION, "region", "地区"),
+                # 数据集外的成员：证据里有，查询里不能有。
+                match(SemanticElementType.DIMENSION, "product", "商品"),
+            ),
+            config_version="v1",
+        ),
+    )
+
+    assert candidate is not None
+    assert "商品" not in candidate.parsed_s2sql, candidate.parsed_s2sql
+    assert "净收入" in candidate.parsed_s2sql, candidate.parsed_s2sql
+
+
+def test_reviewed_context_for_a_member_outside_the_dataset_is_skipped(sales_release) -> None:
+    """已审核上下文按**所选数据集**投影，目录外的成员直接跳过。
+
+    ``allowed_targets`` 用 Mapper 命中的 element id，``target_names`` 用数据集成员，
+    两边对不上就是裸字典下标的 KeyError——实机「报表项目是货币资金的科目有哪些」因此
+    以 ``INTERNAL_ERROR: 问数服务发生内部错误`` 收场，比答错更难查。
+    """
+
+    from knowflow_analytics.contracts import SemanticContextEntry
+    from knowflow_analytics.query.parser import _semantic_context_payload
+    from knowflow_analytics.query.symbols import SemanticSymbolTable
+
+    dataset = sales_release.datasets[0].model_copy(
+        update={"dimension_ids": ("region", "channel", "order_date", "customer_segment")}
+    )
+    assert "product" not in dataset.dimension_ids, "这一条要的就是数据集外的成员"
+    release = sales_release.model_copy(
+        update={
+            "semantic_context": (
+                SemanticContextEntry(
+                    id="ctx_product",
+                    target_type="dimension",
+                    target_id="product",
+                    kind="definition",
+                    text="商品是下单的那一行",
+                    source_type="human_convention",
+                ),
+                SemanticContextEntry(
+                    id="ctx_region",
+                    target_type="dimension",
+                    target_id="region",
+                    kind="definition",
+                    text="区域按收货地址归属",
+                    source_type="human_convention",
+                ),
+            ),
+            "datasets": (dataset, *sales_release.datasets[1:]),
+        }
+    )
+
+    payload = _semantic_context_payload(
+        release,
+        dataset,
+        mapped_element_ids={"product", "region"},
+        symbols=SemanticSymbolTable.from_release(release, dataset_id=dataset.id),
+    )
+
+    assert [item["target_name"] for item in payload] == ["区域"]

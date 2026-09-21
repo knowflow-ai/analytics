@@ -42,6 +42,7 @@ from knowflow_analytics.gateways.calls import (
     question_budget,
 )
 from knowflow_analytics.hashing import content_hash
+from knowflow_analytics.modeling.analysis_topics import scope_canonical_names
 from knowflow_analytics.query.ambiguity import (
     SemanticDecisionObligation,
     SemanticValueBinding,
@@ -4402,13 +4403,31 @@ def _union_scope(
             element.id in scope.metric_ids or element.id in scope.dimension_ids for scope in scopes
         )
     )
+    # 名字取决于「站在哪个作用域」的成员放不进一份跨作用域目录：编译器给作用域内重名的
+    # 非根维度派路径限定名（``科目余额.科目ID``），同一个成员因此在不同作用域里叫不同
+    # 名字，一份目录写不下。
+    #
+    # 此前是按**原始名**判重名，于是把这种成员看成一组无法区分的重名，整份目录放弃——
+    # 而真实作用域内部它们本来就不重名（实机会计目录：63 个成员里 7 个如此，全是外键
+    # 标识列，多作用域生成因此从第一天起就没启用过，「差旅费是多少」被锁在只有行数指标
+    # 的维表里答成 0）。去掉这 7 个，剩下的成员在每个作用域里都叫同一个名字。
+    scope_local = _scope_dependent_member_ids(release, scopes)
+    members = tuple(element for element in members if element.id not in scope_local)
     qualified = _qualified_union_names(release, members, scopes)
     if qualified is None:
         return None
     # 事实根取路径最多的那个：它能到达最多实体，冻结路由也最宽。
     finest = max(scopes, key=lambda item: len(routes[item.id].paths))
-    metrics = tuple(dict.fromkeys(item for scope in scopes for item in scope.metric_ids))
-    dimensions = tuple(dict.fromkeys(item for scope in scopes for item in scope.dimension_ids))
+    metrics = tuple(
+        dict.fromkeys(
+            item for scope in scopes for item in scope.metric_ids if item not in scope_local
+        )
+    )
+    dimensions = tuple(
+        dict.fromkeys(
+            item for scope in scopes for item in scope.dimension_ids if item not in scope_local
+        )
+    )
     models = tuple(dict.fromkeys(item for scope in scopes for item in scope.model_ids))
     paths = tuple(
         {path.target_model_id: path for scope in scopes for path in routes[scope.id].paths}.values()
@@ -4556,6 +4575,41 @@ def _declared_scope_id(
     return matched[0] if len(matched) == 1 else None
 
 
+def _scope_dependent_member_ids(release: SemanticRelease, scopes: list) -> frozenset[str]:
+    """哪些成员的受治理规范名取决于它出现在哪个作用域里。
+
+    ``scope_canonical_names`` 会给作用域内重名的非根维度派路径限定名，所以同一个成员
+    在 A 里叫「科目ID」、在 B 里叫「科目余额.科目ID」。跨作用域目录只能给它一个名字，
+    给哪个都会在另一个作用域里翻不出来，所以不给——它们是经连接到达的技术标识，
+    用户不会问。真实作用域的成员不受影响。
+    """
+
+    spellings: dict[str, set[str]] = defaultdict(set)
+    for scope in scopes:
+        canonical = scope_canonical_names(
+            release,
+            next(item for item in release.analysis_topic_routes if item.dataset_id == scope.id),
+        )
+        for member_id in (*scope.metric_ids, *scope.dimension_ids):
+            if member_id in canonical:
+                spellings[member_id].add(canonical[member_id])
+    # 只对标识列成立。业务成员即使被路径限定也留在目录里：用户会说它，说了之后同名
+    # 那道门要能看见它，判出「这组成员用名字分不开」并问人。标识列（主键/外键）是经
+    # 连接到达的技术列，用户不会问，去掉它们不损失任何可回答的问题。
+    fields = {item.id: item for item in release.fields}
+    identifier_dimension_ids = {
+        item.id
+        for item in release.dimensions
+        if (field := fields.get(item.field_id)) is not None
+        and getattr(field, "identifier_type", None) in {"primary", "foreign"}
+    }
+    return frozenset(
+        member_id
+        for member_id, values in spellings.items()
+        if len(values) > 1 and member_id in identifier_dimension_ids
+    )
+
+
 def _qualified_union_names(
     release: SemanticRelease,
     members: tuple[object, ...],
@@ -4618,7 +4672,11 @@ def _qualified_union_names(
 
 
 def _union_evidence(evidence: MappingEvidence, union_id: str) -> MappingEvidence:
-    """让并集作用域看得见每一条已经可见于某个真实作用域的证据。"""
+    """让生成期目录看得见每一条已经可见于某个真实作用域的证据。
+
+    名字随作用域变化的成员进不了目录，但它们的证据仍然留在这里：同名歧义那道门要靠
+    它判「这组成员还能不能用名字分开」。提示词那边按目录的符号表跳过叫不出名字的成员。
+    """
 
     return evidence.model_copy(
         update={

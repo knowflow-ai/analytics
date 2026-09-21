@@ -742,6 +742,20 @@ class LlmS2SqlParser:
             for group in mapping.ambiguous_groups
             for element_id in group
         }
+
+        # Mapper 命中的成员未必都在这份目录里：名字随作用域变化的成员进不了跨作用域
+        # 目录（见 ``_scope_dependent_member_ids``）。它们的证据仍然留在 mapping 里
+        # ——同名歧义那道门要靠它判「这组成员还能不能用名字分开」——但不能写进提示词，
+        # 目录的符号表叫不出它们的名字。
+        def _nameable(element_id: str | None) -> bool:
+            if element_id is None:
+                return True
+            try:
+                symbols.canonical_name(element_id)
+            except SemanticParsingError:
+                return False
+            return True
+
         constraints = [
             {
                 "type": item.element_type.value,
@@ -757,7 +771,7 @@ class LlmS2SqlParser:
                 "ambiguity_group": ambiguity_by_element.get(item.element_id),
             }
             for item in mapping.matches
-            if item.method is not MatchMethod.ALL_FIELD
+            if item.method is not MatchMethod.ALL_FIELD and _nameable(item.dimension_id)
         ]
         values = [
             {
@@ -766,6 +780,7 @@ class LlmS2SqlParser:
             }
             for item in mapping.matches
             if item.element_type is SemanticElementType.DIMENSION_VALUE
+            and _nameable(item.dimension_id)
         ]
         partition_dimension = (
             dimensions_by_id.get(dataset.default_time_dimension_id)
@@ -1079,19 +1094,25 @@ def _render_scope_catalog(
     if dataset.id != GENERATION_CATALOG_DATASET_ID:
         return ""
     routed = {item.dataset_id for item in release.analysis_topic_routes}
-    names = {item.id: item.name for item in (*release.metrics, *release.dimensions)}
+    catalog = frozenset((*dataset.metric_ids, *dataset.dimension_ids))
 
-    def visible(element_ids: tuple[str, ...]) -> str:
+    def visible(scope: DatasetSpec, element_ids: tuple[str, ...]) -> str:
+        # 名字用**该作用域的**受治理规范名：编译器会给作用域内重名的非根维度派路径
+        # 限定名，告诉模型原始名等于告诉它一个在那里翻不出来的名字。
+        #
         # 列权限白名单在这里和成员表同样生效：作用域清单也是模型看得见的目录，
-        # 漏一个就是把不该看的名字念了出来。
+        # 漏一个就是把不该看的名字念了出来。生成目录之外的成员同样不列——它们
+        # 在不同作用域里叫不同名字，一份目录写不下。
+        symbols = SemanticSymbolTable.from_release(release, dataset_id=scope.id)
         return "、".join(
-            names[item]
+            symbols.canonical_name(item)
             for item in element_ids
-            if item in names and (visible_element_ids is None or item in visible_element_ids)
+            if item in catalog and (visible_element_ids is None or item in visible_element_ids)
         )
 
     rows = [
-        f"  {scope.name} | 指标: {visible(scope.metric_ids)} | 维度: {visible(scope.dimension_ids)}"
+        f"  {scope.name} | 指标: {visible(scope, scope.metric_ids)}"
+        f" | 维度: {visible(scope, scope.dimension_ids)}"
         for scope in release.datasets
         if scope.id != GENERATION_CATALOG_DATASET_ID and scope.id in routed
     ]

@@ -2626,3 +2626,133 @@ class TestTheModelDeclaresItsScope:
 
         assert response.state is QueryState.FAILED, response.model_dump_json(indent=2)
         assert executor.calls == 0
+
+
+class TestAScopeDependentNameIsNotOfferedAcrossScopes:
+    """名字取决于「站在哪个作用域」的成员放不进一份跨作用域目录。
+
+    编译器会给作用域内重名的非根维度派路径限定名，同一个成员因此在 A 里叫
+    「科目ID」、在 B 里叫「科目余额.科目ID」。此前 ``_qualified_union_names`` 按
+    **原始名**判重名，把这种成员看成一组无法区分的重名，整份目录放弃——而真实作用域
+    内部它们本来就不重名（实机会计目录：63 个成员里 7 个如此，全是外键标识列；
+    多作用域生成因此从第一天起就没启用过，「差旅费是多少」被锁在只有行数指标的维表里
+    答成 0）。
+
+    只对标识列成立。业务成员即使被路径限定也留在目录里：用户会说它，说了之后同名那道
+    门要能看见它、判出「这组成员用名字分不开」并问人。
+    """
+
+    def _two_scopes(self, sales_release, *, identifier: bool):
+        release = _routed_cross_type_same_name_release(sales_release)
+        customer = DatasetSpec(
+            id="customer_scope",
+            name="客户内部范围",
+            model_ids=("customers",),
+            metric_ids=(),
+            dimension_ids=("customer_segment",),
+        )
+        fields = release.fields
+        if identifier:
+            fields = tuple(
+                item.model_copy(update={"kind": FieldKind.IDENTIFIER, "identifier_type": "foreign"})
+                if item.id == "customers.segment"
+                else item
+                for item in release.fields
+            )
+        return release.model_copy(
+            update={
+                "fields": fields,
+                "datasets": (release.datasets[0], customer),
+                "analysis_topic_routes": (
+                    *release.analysis_topic_routes,
+                    AnalysisTopicRouteSpec(
+                        dataset_id=customer.id,
+                        root_model_id="customers",
+                    ),
+                ),
+            }
+        )
+
+    def test_the_catalog_is_built_instead_of_abandoned(self, sales_release) -> None:
+        from knowflow_analytics.query.service import _union_scope
+
+        built = _union_scope(
+            self._two_scopes(sales_release, identifier=True),
+            ("sales_dataset", "customer_scope"),
+        )
+
+        assert built is not None, "整份目录放弃的话，多作用域生成永远用不上"
+
+    def test_the_identifier_is_left_out_of_the_catalog_only(self, sales_release) -> None:
+        from knowflow_analytics.query.service import _union_scope
+
+        release = self._two_scopes(sales_release, identifier=True)
+        built = _union_scope(release, ("sales_dataset", "customer_scope"))
+        assert built is not None
+        generation_release, catalog_id, _renames = built
+        catalog = next(item for item in generation_release.datasets if item.id == catalog_id)
+
+        assert "customer_segment" not in catalog.dimension_ids
+        # 真实作用域一个成员都没动：翻译、治理、可达性全在那里发生。
+        sales = next(item for item in generation_release.datasets if item.id == "sales_dataset")
+        assert "customer_segment" in sales.dimension_ids
+        # 别的成员照常在目录里。
+        assert "net_revenue" in catalog.metric_ids
+        assert "channel" in catalog.dimension_ids
+
+    def test_a_business_member_still_fails_closed(self, sales_release) -> None:
+        """同样被路径限定，但它不是标识列：目录照旧整份放弃，同名卡因此保住。
+
+        路径限定只在作用域内重名时才发生，所以业务成员被限定时那组重名一定还在。
+        去掉它会让用户说出口的那个词只剩一个候选——不再问，也不告诉他刚才有两个。
+        """
+
+        from knowflow_analytics.query.service import _union_scope
+
+        assert (
+            _union_scope(
+                self._two_scopes(sales_release, identifier=False),
+                ("sales_dataset", "customer_scope"),
+            )
+            is None
+        )
+
+    def test_the_scope_list_uses_each_scopes_own_canonical_name(self, sales_release) -> None:
+        """作用域清单里的名字必须是**该作用域**的规范名。
+
+        给模型原始名，等于给它一个在那个作用域里翻不出来的名字：编译器把远端重名维度
+        编译成「客户.业务数量总计」，原始名在那里根本解析不出来。
+        """
+
+        from knowflow_analytics.query.contracts import GENERATION_CATALOG_DATASET_ID
+        from knowflow_analytics.query.parser import _render_scope_catalog
+
+        release = self._two_scopes(sales_release, identifier=False)
+        sales = release.datasets[0]
+        customer = release.datasets[1]
+        catalog = sales.model_copy(
+            update={
+                "id": GENERATION_CATALOG_DATASET_ID,
+                "metric_ids": sales.metric_ids,
+                "dimension_ids": (*sales.dimension_ids, *customer.dimension_ids),
+            }
+        )
+        generation_release = release.model_copy(
+            update={
+                "datasets": (*release.datasets, catalog),
+                "analysis_topic_routes": (
+                    *release.analysis_topic_routes,
+                    release.analysis_topic_routes[0].model_copy(
+                        update={"dataset_id": GENERATION_CATALOG_DATASET_ID}
+                    ),
+                ),
+            }
+        )
+
+        rendered = _render_scope_catalog(generation_release, catalog)
+
+        sales_row = next(line for line in rendered.splitlines() if "销售经营" in line)
+        customer_row = next(line for line in rendered.splitlines() if "客户内部范围" in line)
+        assert "客户.业务数量总计" in sales_row, sales_row
+        assert "客户.业务数量总计" not in customer_row, customer_row
+        assert "业务数量总计" in customer_row, customer_row

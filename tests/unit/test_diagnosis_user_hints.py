@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import pytest
 
+from knowflow_analytics.contracts import QueryResult
 from knowflow_analytics.errors import AnalyticsError
-from knowflow_analytics.query.contracts import QueryStage
-from knowflow_analytics.query.service import _error_diagnosis, _success_diagnosis
+from knowflow_analytics.query.contracts import QueryDiagnosticCategory, QueryStage
+from knowflow_analytics.query.service import (
+    _aggregate_matched_no_rows,
+    _error_diagnosis,
+    _success_diagnosis,
+)
 
 # 这些词只对建模者有意义；出现在给提问者看的提示里，就说明两类文案又混在一起了。
 _MODELER_JARGON = ("SQL", "Embedding", "Revision", "Release", "SQLSTATE", "Corrector", "fallback")
@@ -140,3 +145,107 @@ class TestRowLimitExceeded:
         assert diagnosis.user_hint == str(exc)
         assert "计算方式" not in diagnosis.user_hint
         assert diagnosis.stage == QueryStage.TRANSLATING.value
+
+
+class TestAnAggregateThatMatchedNoRows:
+    """没有分组的聚合在零行上返回的是一行 NULL，不是零行。
+
+    界面只在 ``rows.length === 0`` 时说「查询成功，但没有返回数据」
+    （``query-answer.tsx``）；一行 NULL 会被渲染成一个**看起来像答案的空格**，
+    而诊断照旧报 success、零提示。实机「2024 年应交增值税是多少」正是这样：
+    模型落到科目余额分析，那张表没有这个科目的行，于是 ``SUM`` 返回 NULL，
+    用户读到的是「这一年没有应交增值税」——真值是进项 13000 / 销项 26000。
+
+    判据确定性、不读问句：**有指标列、没有分组、结果不超过一行、且全部指标列
+    为 NULL**。SQL 语义上 ``SUM`` 只在没有任何行参与时才返回 NULL，所以这等价于
+    「这个条件下一条记录都没匹配上」。
+
+    措辞沿用 2026-09-03 的口径：说「没有查到数据」，不说「不存在」——高基数维度
+    的取值可能只是抽样发布，我们并不知道数据里真的没有。
+    """
+
+    def test_all_null_metric_columns_stop_being_a_success(self) -> None:
+        diagnosis = _success_diagnosis(
+            parser="llm",
+            llm_enabled=True,
+            audit_complete=True,
+            empty_aggregate=True,
+        )
+
+        assert diagnosis.severity == "warning"
+        assert diagnosis.category is not QueryDiagnosticCategory.SUCCESS
+        assert "没有查到数据" in diagnosis.user_hint
+        assert "不存在" not in diagnosis.user_hint
+        for word in _MODELER_JARGON:
+            assert word not in diagnosis.user_hint
+
+    def test_a_named_unpublished_value_still_wins_because_it_says_more(self) -> None:
+        """两条都成立时先说能指名道姓的那条：它直接给出了可操作的原因。"""
+
+        diagnosis = _success_diagnosis(
+            parser="llm",
+            llm_enabled=True,
+            audit_complete=True,
+            unpublished_values=(("商品名称", "卡布奇洛", "卡布奇诺"),),
+            empty_aggregate=True,
+        )
+
+        assert "卡布奇洛" in diagnosis.user_hint
+
+    def test_an_ordinary_success_is_unchanged(self) -> None:
+        plain = _success_diagnosis(parser="llm", llm_enabled=True, audit_complete=True)
+        same = _success_diagnosis(
+            parser="llm", llm_enabled=True, audit_complete=True, empty_aggregate=False
+        )
+
+        assert plain == same
+        assert plain.category is QueryDiagnosticCategory.SUCCESS
+
+
+class TestWhatCountsAsAnAggregateThatMatchedNoRows:
+    """判据的边界，逐条实测过（真实目录 9/9）。"""
+
+    def _result(self, columns, rows):
+        return QueryResult(columns=tuple(columns), rows=tuple(rows), row_count=len(rows))
+
+    def test_a_single_all_null_metric_row_counts(self) -> None:
+        assert _aggregate_matched_no_rows(
+            self._result(["net_revenue"], [(None,)]),
+            metric_ids=("net_revenue",),
+            dimension_ids=(),
+        )
+
+    def test_a_dimension_only_query_never_counts(self) -> None:
+        """纯维度查询没有指标列，「全部指标列为 NULL」在空集上恒真——必须先要求有指标列。
+
+        实机「有哪些部门」「往来单位有哪些」就是这种形状。
+        """
+
+        assert not _aggregate_matched_no_rows(
+            self._result(["region"], [("销售部",)]),
+            metric_ids=(),
+            dimension_ids=("region",),
+        )
+
+    def test_a_grouped_query_never_counts(self) -> None:
+        """带分组时零行走既有的 ``row_count == 0`` 分支，多行更不适用。"""
+
+        assert not _aggregate_matched_no_rows(
+            self._result(["region", "net_revenue"], [("华南", None), ("华北", 100)]),
+            metric_ids=("net_revenue",),
+            dimension_ids=("region",),
+        )
+
+    def test_one_metric_with_a_value_is_enough_to_disqualify(self) -> None:
+        assert not _aggregate_matched_no_rows(
+            self._result(["net_revenue", "order_count"], [(None, 3)]),
+            metric_ids=("net_revenue", "order_count"),
+            dimension_ids=(),
+        )
+
+    def test_zero_rows_is_left_to_the_existing_branch(self) -> None:
+        assert not _aggregate_matched_no_rows(
+            self._result(["net_revenue"], []),
+            metric_ids=("net_revenue",),
+            dimension_ids=(),
+        )

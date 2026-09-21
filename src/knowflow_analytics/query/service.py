@@ -105,6 +105,7 @@ from knowflow_analytics.query.multi_turn import (
     QueryHistoryTurn,
 )
 from knowflow_analytics.query.orchestrator import CandidateOrchestrator
+from knowflow_analytics.query.parser import TIME_AXIS_UNRESOLVED
 from knowflow_analytics.query.rules import QueryRuleEngine
 from knowflow_analytics.query.s2sql_edit import (
     add_dimension,
@@ -1407,14 +1408,20 @@ class AnalyticsQueryService:
             defaults = tuple(
                 dict.fromkeys((*corrected.applied_defaults, *physical.applied_defaults))
             )
-            # 只有 0 行才需要解释：有结果就说明过滤生效了。投影不完整时我们并不
-            # 知道真实过滤条件，不能拿它去指认用户的说法。
+            # 「一行都没匹配上」有两种形状：零行，以及没有分组的聚合返回一行 NULL。
+            # 后者在界面上是一个看起来像答案的空格，此前完全不进这条解释链。
+            # 投影不完整时我们并不知道真实过滤条件，不能拿它去指认用户的说法。
+            empty_aggregate = audit_complete and _aggregate_matched_no_rows(
+                result,
+                metric_ids=tuple(translated.audit_query.metric_ids),
+                dimension_ids=tuple(translated.audit_query.dimension_ids),
+            )
             unpublished_values = (
                 _unpublished_filter_values(
                     release,
                     filters=_equality_filter_values(translated.audit_query),
                 )
-                if audit_complete and result.row_count == 0
+                if audit_complete and (result.row_count == 0 or empty_aggregate)
                 else ()
             )
             if clarified_choice is not None:
@@ -1501,6 +1508,8 @@ class AnalyticsQueryService:
                         llm_enabled=self._orchestrator.llm_enabled,
                         audit_complete=audit_complete,
                         unpublished_values=unpublished_values,
+                        empty_aggregate=empty_aggregate,
+                        time_axis_unresolved=TIME_AXIS_UNRESOLVED in defaults,
                     ),
                     include_diagnostics=request.include_diagnostics,
                 ),
@@ -4826,12 +4835,42 @@ def _unpublished_filter_values(
     return tuple(found)
 
 
+def _aggregate_matched_no_rows(
+    result: QueryResult,
+    *,
+    metric_ids: tuple[str, ...],
+    dimension_ids: tuple[str, ...],
+) -> bool:
+    """这次聚合有没有任何一行参与。
+
+    没有分组的聚合在零行上返回的是**一行 NULL**，不是零行。界面只在
+    ``rows.length === 0`` 时说「查询成功，但没有返回数据」，所以这一行会被渲染成
+    一个看起来像答案的空格，诊断照旧报 success（实机「2024 年应交增值税是多少」：
+    模型落到科目余额分析，那张表没有这个科目的行，用户读到的是「这一年没有应交
+    增值税」——真值是进项 13000 / 销项 26000）。
+
+    判据不读问句：有指标列、没有分组、结果不超过一行、且**全部**指标列为 NULL。
+    ``SUM`` 只在没有任何行参与时才返回 NULL，所以这等价于「一条记录都没匹配上」。
+    先要求有指标列是必须的——纯维度查询没有指标列，「全部指标列为 NULL」在空集上
+    恒真（实机「有哪些部门」正是这种形状）。零行交给既有的那条分支。
+    """
+
+    if dimension_ids or not metric_ids:
+        return False
+    positions = [index for index, column in enumerate(result.columns) if column in set(metric_ids)]
+    if not positions or len(result.rows) != 1:
+        return False
+    return all(result.rows[0][index] is None for index in positions)
+
+
 def _success_diagnosis(
     *,
     parser: str,
     llm_enabled: bool,
     audit_complete: bool = True,
     unpublished_values: tuple[tuple[str, str, str | None], ...] = (),
+    empty_aggregate: bool = False,
+    time_axis_unresolved: bool = False,
 ) -> QueryDiagnosis:
     if unpublished_values:
         # 空结果有两种完全不同的含义：数据里确实没有，和这个说法系统不认识。
@@ -4869,14 +4908,54 @@ def _success_diagnosis(
             ),
             user_hint="结果正确，但「语义解释」面板无法完整展示这次用到的过滤条件。",
         )
+    if empty_aggregate:
+        # 能指名道姓的那条（上面的未发布取值）先说，它直接给出可操作的原因；
+        # 剩下的只知道「一行都没匹配上」，那就如实说这一句。
+        #
+        # 措辞是「没有查到数据」而不是「不存在」：高基数维度的取值可能只是抽样
+        # 发布，我们并不知道数据里真的没有（2026-09-03 口径）。
+        return QueryDiagnosis(
+            category=QueryDiagnosticCategory.DATABASE_EXECUTION,
+            stage=QueryStage.EXECUTING.value,
+            severity="warning",
+            summary="聚合结果是在零行上算出来的空值",
+            recommendation=(
+                "这个条件下没有任何记录参与计算：要么该范围里确实没有匹配数据，"
+                "要么查询落在了不该落的分析范围（实机见过模型把凭证分录的问题"
+                "落到科目余额上）。核对 corrected_s2sql 的 FROM 与过滤条件。"
+            ),
+            user_hint="没有查到数据。这个条件下没有任何记录参与计算，结果不是 0 而是空。",
+        )
     if parser == "rule" and llm_enabled:
+        # Rule 选不出时间轴时不再放弃候选（否则 LLM 阶段连入口都没有），但它一旦
+        # 真的成为答案，问题里的时间就没有落进查询——必须说出来，不能混在"可能
+        # 遗漏了排名、占比"这句泛泛的话里。
+        dropped_time = (
+            "问题里的时间范围没有落进这次查询（数据集有多个时间字段，基础规则无法确定用哪个）。"
+            if time_axis_unresolved
+            else ""
+        )
         return QueryDiagnosis(
             category=QueryDiagnosticCategory.RULE_FALLBACK,
             stage=QueryStage.FINAL_PARSING.value,
             severity="warning",
-            summary="LLM 未形成可执行语义查询，系统使用了 Rule fallback",
-            recommendation="检查结果是否遗漏排名、占比、嵌套分析等复杂意图；必要时保持拒答。",
-            user_hint="这个结果是按基础规则得出的，可能遗漏了排名、占比等复杂要求，请核对后再用。",
+            summary=(
+                "LLM 未形成可执行语义查询，系统使用了 Rule fallback"
+                + ("；且时间轴无法确定，时间条件未生效" if time_axis_unresolved else "")
+            ),
+            recommendation=(
+                "检查结果是否遗漏排名、占比、嵌套分析等复杂意图；必要时保持拒答。"
+                + (
+                    "给其中一个时间字段声明分区时间（``partition_time``），"
+                    "或给指标声明 ``agg_time_dimension_id``。"
+                    if time_axis_unresolved
+                    else ""
+                )
+            ),
+            user_hint=(
+                dropped_time
+                + "这个结果是按基础规则得出的，可能遗漏了排名、占比等复杂要求，请核对后再用。"
+            ),
         )
     return QueryDiagnosis(
         category=QueryDiagnosticCategory.SUCCESS,

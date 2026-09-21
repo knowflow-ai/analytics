@@ -170,6 +170,9 @@ _SINCE_RE = re.compile(r"(以来|起|开始)")
 _BEFORE_RE = re.compile(r"(之前|以前)")
 _UNTIL_PREFIX_RE = re.compile(r"(截至|截止)(?:到)?\s*$")
 _DATE_NUMBER_RE = re.compile(r"(?<!\d)(20\d{6})(?!\d)")
+# Rule 选不出时间轴时挂在候选的 ``applied_defaults`` 上。它不是一个时间窗标记，
+# ``parse_time_window_marker`` 认不出它，回答卡的「默认只看…」chip 不会因此出现。
+TIME_AXIS_UNRESOLVED = "time_axis_unresolved"
 _MONTH_RE = re.compile(r"(20\d{2})年(\d{1,2})月")
 _RECENT_RE = re.compile(rf"(?:近|过去)\s*(?P<count>\d+|{_ZH_NUMBER})\s*个?(?P<unit>[天周月年])")
 
@@ -241,6 +244,7 @@ class RuleS2SqlParser:
         now: datetime | None = None,
         selected_time_dimension_id: str | None = None,
         time_override: TimeWindowOverride | None = None,
+        defer_time_ambiguity: bool = False,
     ) -> ParsedSemanticCandidate | None:
         dataset = _dataset(release, mapping.dataset_id)
         # Mapper 证据未必都落在这个数据集里：生成期目录会排除名字随作用域变化的标识列，
@@ -298,6 +302,7 @@ class RuleS2SqlParser:
             now=now or datetime.now(UTC),
             selected_time_dimension_id=selected_time_dimension_id,
             query_type=query_type,
+            defer_axis_ambiguity=defer_time_ambiguity,
         )
         # Parity source: MetricTopNQuery.java:25-55. The rule candidate recognizes
         # only 最大/最高/最多 and uses the governed metric limit. Explicit N parsing
@@ -2040,6 +2045,7 @@ def _apply_time_filters(
     selected_time_dimension_id: str | None = None,
     query_type: SemanticQueryType = SemanticQueryType.AGGREGATE,
     time_override: TimeWindowOverride | None = None,
+    defer_axis_ambiguity: bool = False,
 ) -> tuple[list[QueryFilter], tuple[str, ...]]:
     dimensions = {item.id: item for item in release.dimensions if item.id in dataset.dimension_ids}
     temporal_ids = [item_id for item_id, item in dimensions.items() if item.semantic_type == "time"]
@@ -2133,6 +2139,20 @@ def _apply_time_filters(
     if time_dimension_id is None and len(temporal_ids) == 1:
         time_dimension_id = temporal_ids[0]
     if time_dimension_id is None:
+        if defer_axis_ambiguity:
+            # Rule 三种模式全部因此产不出候选时，最终 LLM 连入口都没有——它需要一个
+            # Rule 候选来固定数据集与 ElementMatches。于是一个模型完全答得对的问题
+            # 变成了一张让用户选日期字段的卡（实机「检查2024年1月所有凭证是否借贷
+            # 平衡」：会计目录 5 个时间维、零个 ``partition_time``；跳过之后模型
+            # 答出了逐张凭证的借贷差额）。
+            #
+            # Rule 候选在发现阶段的职责是「哪个数据集、命中了哪些成员」，时间过滤
+            # 是附带的；为一个附带项放弃整个候选，代价远大于收益。
+            #
+            # **只在 LLM 还有机会时延后。** 没有 LLM 时 Rule 就是答案，丢掉用户
+            # 明说的时间是静默错答，那时照旧追问。延后下来的标记跟着候选走，只要
+            # 它真的成为被执行的那一条，诊断会说清时间没落进查询。
+            return existing_filters, (TIME_AXIS_UNRESOLVED,)
         raise ClarificationSignal(
             code="AMBIGUOUS_TIME_DIMENSION",
             message="问题包含时间范围，但数据集有多个时间维度，请确认使用哪个时间字段。",

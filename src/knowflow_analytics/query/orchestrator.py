@@ -400,6 +400,9 @@ class CandidateOrchestrator:
                     now=now,
                     selected_time_dimension_id=selected_time_dimension_id,
                     time_override=options.default_time_window if options is not None else None,
+                    # 发现阶段的 Rule 候选是最终 LLM 的入口。选不出时间轴就放弃候选，
+                    # LLM 连跑都跑不起来；但没有 LLM 时 Rule 就是答案，那时不能延后。
+                    defer_time_ambiguity=self.llm_enabled,
                 ),
                 effective,
                 None,

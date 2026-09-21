@@ -43,6 +43,7 @@ from knowflow_analytics.query.aggregation import (
     parse_aggregation_intent,
 )
 from knowflow_analytics.query.contracts import (
+    GENERATION_CATALOG_DATASET_ID,
     CorrectedStructuredQuery,
     MappingResult,
     MatchMethod,
@@ -885,6 +886,13 @@ class LlmS2SqlParser:
             if (model := models_by_id.get(model_id)) is not None and model.description.strip()
         ]
         entities_line = f"entities={entities}\n" if entities else ""
+        # 作用域是模型自己在 `FROM` 里说出来的。把多个作用域铺平成一张假表，模型
+        # 就只能写那张假表的名字，真实作用域要靠"逐个改名重试、谁翻得出算谁"反推；
+        # 一条查询能在多个作用域里翻译时反推分不出来（「有哪些部门」每个作用域都
+        # 投影得出部门名称），而模型本来是知道的，只是没地方说。
+        scope_line = _render_scope_catalog(release, dataset, visible_element_ids) or (
+            f"dataset={{'name': '{dataset.name}'}}\n"
+        )
         messages = [
             {
                 "role": "system",
@@ -894,7 +902,7 @@ class LlmS2SqlParser:
                 "role": "user",
                 "content": (
                     f"question={question}\n"
-                    f"dataset={{'name': '{dataset.name}'}}\n"
+                    f"{scope_line}"
                     f"{dataset_context}"
                     f"{topic_context_line}"
                     f"{governed_context_line}"
@@ -1053,6 +1061,47 @@ _DIMENSION_COLUMNS = (
     "aliases",
     "description",
 )
+
+
+def _render_scope_catalog(
+    release: SemanticRelease,
+    dataset: DatasetSpec,
+    visible_element_ids: frozenset[str] | None = None,
+) -> str:
+    """生成期目录：把每个真实作用域和它拥有的成员一行一行交给模型。
+
+    只在多作用域生成时出现（``dataset`` 是生成期临时目录）；单作用域仍旧只给
+    ``dataset=`` 一行，措辞一字不变。``FROM`` 写哪个名字就是模型的作用域声明，
+    绑定与治理随后在那个真实作用域上校验——声明了 A 却用了 B 的成员会被当场拒绝，
+    而不是"碰巧还能翻出来就算数"。
+    """
+
+    if dataset.id != GENERATION_CATALOG_DATASET_ID:
+        return ""
+    routed = {item.dataset_id for item in release.analysis_topic_routes}
+    names = {item.id: item.name for item in (*release.metrics, *release.dimensions)}
+
+    def visible(element_ids: tuple[str, ...]) -> str:
+        # 列权限白名单在这里和成员表同样生效：作用域清单也是模型看得见的目录，
+        # 漏一个就是把不该看的名字念了出来。
+        return "、".join(
+            names[item]
+            for item in element_ids
+            if item in names and (visible_element_ids is None or item in visible_element_ids)
+        )
+
+    rows = [
+        f"  {scope.name} | 指标: {visible(scope.metric_ids)} | 维度: {visible(scope.dimension_ids)}"
+        for scope in release.datasets
+        if scope.id != GENERATION_CATALOG_DATASET_ID and scope.id in routed
+    ]
+    if not rows:
+        return ""
+    return (
+        "scopes=（可用的业务分析范围，每行一个：名称 | 它拥有的指标 | 它拥有的维度）\n"
+        + "\n".join(rows)
+        + "\nFROM 必须写上面 scopes 里的某一个名称，并且只使用该名称那一行里的成员。\n"
+    )
 
 
 def _render_member_table(entries: Sequence[Mapping[str, Any]], columns: Sequence[str]) -> str:

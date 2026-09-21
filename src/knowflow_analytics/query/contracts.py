@@ -17,6 +17,10 @@ from knowflow_analytics.contracts import (
 )
 from knowflow_analytics.semantic.index import SemanticElementType
 
+# 生成阶段的临时目录：把全部候选作用域的成员并在一起交给模型。它不是任何人能观察
+# 的作用域，也不是模型能写进 `FROM` 的名字——`FROM` 里必须是某个真实作用域的业务名。
+GENERATION_CATALOG_DATASET_ID = "dataset:union:generation"
+
 
 class MapMode(StrEnum):
     STRICT = "strict"

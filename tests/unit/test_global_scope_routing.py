@@ -78,9 +78,11 @@ class _ReleaseProvider:
 class _Executor:
     def __init__(self) -> None:
         self.calls = 0
+        self.statements: list[str] = []
 
     def execute(self, *, query, release):
         self.calls += 1
+        self.statements.append(getattr(query, "sql", "") or str(query))
         return QueryResult(columns=("value",), rows=((1,),), row_count=1)
 
 
@@ -733,11 +735,13 @@ def test_same_root_internal_scope_variants_are_not_user_choices(
 
     first = service.query(QueryRequest(project_id="sales", question="共享口径"))
 
-    # 同一事实根的两个内部作用域差异对用户不可见，他答不了。此前出的是一张零选项的
-    # 澄清卡——那本质就是拒答，只是穿了卡片的壳。改为直说，并把话讲给能修的人听。
-    assert first.state is QueryState.FAILED
-    assert "重新发布" in first.diagnostics.user_hint or "重新发布" in str(first.error.message)
-    assert executor.calls == 0
+    # 同一事实根的两个内部作用域差异对用户不可见，此前反推两个都成立、解不开，于是
+    # 整条拒答。作用域改由模型在 `FROM` 里声明之后，「销售经营」是它明确写下的那个，
+    # 两个作用域的事实根与冻结路由又完全一样——执行结果逐位相同，没有可错的余地。
+    # 重复作用域仍然是建模缺口，但那是建模诊断的事，不该拿一个答得出的问题去提醒他。
+    assert first.state is QueryState.COMPLETED, first.model_dump_json(indent=2)
+    assert "销售经营" in first.corrected_s2sql, first.corrected_s2sql
+    assert executor.calls == 1
 
 
 def test_semantic_options_never_map_an_element_to_a_dataset_outside_the_request(
@@ -1768,9 +1772,7 @@ class TestScopeIsNeverAskedAboutDirectly:
         kinds = {item.kind for item in getattr(response, "options", ())}
         assert "analysis_object" not in kinds, response.model_dump_json(indent=2)
 
-    def test_a_meaningless_question_is_refused_not_turned_into_a_menu(
-        self, sales_release
-    ) -> None:
+    def test_a_meaningless_question_is_refused_not_turned_into_a_menu(self, sales_release) -> None:
         """一条证据都没有的问题，选完指标也走不下去——给菜单是把死路包装成选择。
 
         并集之前这里出的是指标卡。现在生成阶段直接告诉我们模型什么都表达不出来，
@@ -1894,12 +1896,18 @@ class TestCrossScopeNameCollisionInTheUnion:
         from knowflow_analytics.contracts import Aggregation, DatasetSpec, MetricSpec
 
         customer_metric = MetricSpec(
-            id="customer_revenue", name="净收入", model_id="customers",
-            field_id="customers.id", aggregation=Aggregation.COUNT_DISTINCT,
+            id="customer_revenue",
+            name="净收入",
+            model_id="customers",
+            field_id="customers.id",
+            aggregation=Aggregation.COUNT_DISTINCT,
         )
         customer_scope = DatasetSpec(
-            id="customer_scope", name="客户范围", model_ids=("customers",),
-            metric_ids=(customer_metric.id,), dimension_ids=("customer_segment",),
+            id="customer_scope",
+            name="客户范围",
+            model_ids=("customers",),
+            metric_ids=(customer_metric.id,),
+            dimension_ids=("customer_segment",),
         )
         return _routed_release(sales_release).model_copy(
             update={
@@ -1981,8 +1989,11 @@ class TestCrossScopeNameCollisionInTheUnion:
 
         # 同一个模型里的重名：限定名区分不了，仍由既有的同名澄清处理。
         twin = MetricSpec(
-            id="orders_twin", name="净收入", model_id="orders",
-            field_id="orders.net_amount", aggregation=Aggregation.SUM,
+            id="orders_twin",
+            name="净收入",
+            model_id="orders",
+            field_id="orders.net_amount",
+            aggregation=Aggregation.SUM,
         )
         release = _routed_release(sales_release).model_copy(
             update={
@@ -1992,8 +2003,11 @@ class TestCrossScopeNameCollisionInTheUnion:
                         update={"metric_ids": (*sales_release.datasets[0].metric_ids, twin.id)}
                     ),
                     DatasetSpec(
-                        id="customer_scope", name="客户范围", model_ids=("customers",),
-                        metric_ids=(), dimension_ids=("customer_segment",),
+                        id="customer_scope",
+                        name="客户范围",
+                        model_ids=("customers",),
+                        metric_ids=(),
+                        dimension_ids=("customer_segment",),
                     ),
                 ),
             }
@@ -2001,25 +2015,35 @@ class TestCrossScopeNameCollisionInTheUnion:
 
         assert _union_scope(release, ("sales_dataset", "customer_scope")) is None
 
-    def test_a_non_nested_tie_is_the_only_case_left_that_asks(self, sales_release) -> None:
-        """并集之后，唯一还需要问人的是「生成完了仍有多个互不嵌套的事实根能执行」。
+    def test_a_non_nested_tie_no_longer_has_to_ask(self, sales_release) -> None:
+        """非嵌套的并列曾经是唯一还要问人的场合，现在也不用问了。
 
-        嵌套的作用域由粒度收敛解开，同一事实根的重复由建模者去修——剩下的这种在冻结
-        路由下极少见，正说明卡片已经退成兜底而不是常态。这里钉的是机制本身：非嵌套的
-        并列解不开，而嵌套的能解开。
+        它之所以要问，是因为反推按「谁能翻译出来」判定，两个互不嵌套的事实根都成立
+        时解不开，只能把内部执行计划摆到用户面前。模型是知道自己在问哪一个的，写在
+        `FROM` 里就行。粒度收敛（``_coarsest_scope``）随之退役，不要再引入。
         """
 
         release = _routed_release(sales_release)
-        service, _gateway, _executor = _service(release, query_embedding=False)
-
-        # 订单 —many_to_one→ 客户：嵌套，取最粗的那个。
-        assert (
-            service._coarsest_scope(release, ("sales_dataset", "customer_scope"))
-            == "customer_scope"
+        # 「有哪些客户分层」两个作用域都投影得出来。粒度收敛会取最粗的「客户范围」，
+        # 声明说的是「销售经营」——以声明为准。扇出仍由翻译器那道门管，不靠选作用域绕开。
+        gateway = _SequenceGateway('SELECT DISTINCT "客户分层" FROM "销售经营"')
+        service, _embedding, executor = _service(
+            release, llm_gateway=gateway, query_embedding=False
         )
-        # 没有从属关系时解不开——那时才问人。
-        flat = release.model_copy(update={"relations": ()})
-        assert service._coarsest_scope(flat, ("sales_dataset", "customer_scope")) is None
+
+        response = service.query(
+            QueryRequest(
+                project_id="sales",
+                question="有哪些客户分层",
+                dataset_ids=("sales_dataset", "customer_scope"),
+            ),
+            actor_id="tenant-1",
+        )
+
+        assert response.state is QueryState.COMPLETED, response.model_dump_json(indent=2)
+        assert "销售经营" in response.corrected_s2sql, response.corrected_s2sql
+        assert executor.calls == 1
+        assert not hasattr(AnalyticsQueryService, "_coarsest_scope")
 
     def test_the_card_names_members_that_tell_the_scopes_apart(self, sales_release) -> None:
         """兜底卡的选项是能区分这几个范围的成员——选中成员即定下拥有它的范围。"""
@@ -2125,9 +2149,7 @@ class TestUnionRespectsColumnPermissions:
         for name in hidden:
             assert name not in prompts, f"白名单外的「{name}」出现在了 Prompt 里"
 
-    def test_a_hidden_metric_cannot_be_used_even_if_the_model_names_it(
-        self, sales_release
-    ) -> None:
+    def test_a_hidden_metric_cannot_be_used_even_if_the_model_names_it(self, sales_release) -> None:
         """模型硬写一个被隐藏的成员时必须失败，不能靠"它看不到"当唯一防线。"""
 
         release = _routed_release(sales_release)
@@ -2149,21 +2171,6 @@ class TestUnionRespectsColumnPermissions:
 
         assert response.state is not QueryState.COMPLETED
         assert executor.calls == 0
-
-
-class _PromptCapturingGateway:
-    """记下模型实际看到的 Prompt——不抓下来，权限断言就是空转。"""
-
-    def __init__(self, sql: str) -> None:
-        self.sql = sql
-        self.calls = 0
-        self.prompts: list[object] = []
-
-    def generate_json(self, **kwargs):
-        self.calls += 1
-        self.prompts.append(kwargs.get("messages"))
-        return {"thought": "t", "sql": self.sql}
-
 
 
 def _two_facts_one_entity(sales_release):
@@ -2273,7 +2280,13 @@ class _SequenceGateway:
 
 
 class TestUnionSurvivesTheRetryPath:
-    """并集只在生成阶段存在，而生成会发生两次（第一遍 + ALL 重试）。
+    """生成期目录只在生成阶段存在，而生成会发生两次（第一遍 + ALL 重试）。
+
+    ``test_choosing_a_member_from_that_card_actually_runs`` 随「生成完再问你要哪个
+    分析范围」那张卡一起退役了：作用域改由模型在 `FROM` 里声明之后，这条路径不再
+    产生卡片。续跑本身仍被 resolver 那条路径的用例覆盖（见
+    ``test_business_object_continuation_keeps_the_confirmed_dimension_without_scope_leak``）。
+
 
     第二次要是拿不到并集，第一次写得出来的查询第二次就写不出来了——重试反而
     比第一次弱，且没有任何报错说明原因。
@@ -2304,13 +2317,12 @@ class TestUnionSurvivesTheRetryPath:
         assert response.state is QueryState.COMPLETED, response.model_dump_json(indent=2)
         assert executor.calls == 1
 
-    def test_a_scope_clarification_is_not_swallowed_by_the_retry(
-        self, sales_release
-    ) -> None:
-        """澄清不是"这遍没写好"，重试写一百遍也还是同一个问题。
+    def test_a_scope_clarification_is_not_swallowed_by_the_retry(self, sales_release) -> None:
+        """生成完还要问「你要哪个分析范围」的那张卡，随反推一起退役了。
 
-        它必须直接抵达用户，而不是被当成解析失败塞进 ALL 重试——那样用户看到的
-        会是"没答上来"，而不是本该出现的选择。
+        它当初的存在理由是反推分不出来：一条只用共有成员的查询在两个事实根上都能
+        翻译。模型是知道自己在问哪一个的，写在 `FROM` 里就是答案，不必把内部执行
+        计划摆到用户面前。真正会改变数字的选择（用哪个指标）仍然在回答卡上可见。
         """
 
         release = _two_facts_one_entity(sales_release)
@@ -2328,59 +2340,9 @@ class TestUnionSurvivesTheRetryPath:
             actor_id="tenant-1",
         )
 
-        assert response.state is QueryState.CLARIFICATION_REQUIRED, (
-            response.model_dump_json(indent=2)
-        )
-        # 卡片必须是能答的：两个范围各自都要有代表，否则选哪个都到不了另一边。
-        labels = {item.label for item in response.options}
-        assert "净收入" in labels, labels
-        assert "退货单量" in labels, labels
-        # 共有成员不构成区分，出现在选项里等于给了一个选了也没用的答案。
-        assert "客户分层" not in labels, labels
-        # 作用域名本身永远不出现在用户面前。
-        assert not {"销售经营", "退货分析"} & labels, labels
-        assert gateway.calls == 1, "澄清被当成解析失败重试了"
-        assert executor.calls == 0
-
-    def test_choosing_a_member_from_that_card_actually_runs(self, sales_release) -> None:
-        """卡片有选项不等于卡片能用。
-
-        选中的成员必须真的把事实根定下来并跑出结果；否则用户点了一圈又回到同一
-        张卡，比直接拒答更糟。
-        """
-
-        release = _two_facts_one_entity(sales_release)
-        gateway = _SequenceGateway(
-            'SELECT "客户分层" FROM "销售经营" GROUP BY "客户分层"',
-            'SELECT "退货单量", "客户分层" FROM "退货分析" GROUP BY "客户分层"',
-        )
-        service, _embedding, executor = _service(
-            release, llm_gateway=gateway, query_embedding=False
-        )
-        request = QueryRequest(
-            project_id="sales",
-            question="客户分层",
-            dataset_ids=("sales_dataset", "returns_scope"),
-        )
-
-        clarification = service.query(request, actor_id="tenant-1")
-        chosen = next(
-            item for item in clarification.options if item.label == "退货单量"
-        )
-
-        completed = service.query(
-            request.model_copy(
-                update={
-                    "selected_candidate_id": chosen.candidate_id,
-                    "expected_release_id": clarification.release_id,
-                    "expected_spec_hash": clarification.spec_hash,
-                    "expected_index_snapshot_id": clarification.index_snapshot_id,
-                }
-            ),
-            actor_id="tenant-1",
-        )
-
-        assert completed.state is QueryState.COMPLETED, completed.model_dump_json(indent=2)
+        assert response.state is QueryState.COMPLETED, response.model_dump_json(indent=2)
+        assert "销售经营" in response.corrected_s2sql, response.corrected_s2sql
+        assert gateway.calls == 1, "声明成立就不该有第二次生成"
         assert executor.calls == 1
 
     def test_the_bound_sql_leaves_no_trace_of_the_union(self, sales_release) -> None:
@@ -2392,9 +2354,9 @@ class TestUnionSurvivesTheRetryPath:
         """
 
         release = _two_facts_one_entity(sales_release)
-        # 模型只看得见并集，所以它写的是并集那个名字（这里是「销售经营」）。
+        # 模型看得见按作用域分组的目录，所以它写的就是真实作用域名。
         gateway = _SequenceGateway(
-            'SELECT "退货单量", "客户分层" FROM "销售经营" GROUP BY "客户分层"'
+            'SELECT "退货单量", "客户分层" FROM "退货分析" GROUP BY "客户分层"'
         )
         service, _embedding, _executor = _service(
             release, llm_gateway=gateway, query_embedding=False
@@ -2413,13 +2375,11 @@ class TestUnionSurvivesTheRetryPath:
         # 普通 wire 里连并集这个词都不该出现。（诊断投影是另一回事：它对 owner
         # 如实说明生成确实跑在并集上，那是解释而不是泄漏。）
         assert _UNION_DATASET_ID not in response.model_dump_json()
-        # 并集借用的是另一个作用域的名字，绑定后必须换成真正执行的那个。
+        # 执行在模型声明的那个作用域上，口径说明读的也是它。
         assert "销售经营" not in response.corrected_s2sql, response.corrected_s2sql
         assert "退货分析" in response.corrected_s2sql
 
-    def test_a_broken_query_is_not_reported_as_a_cross_root_question(
-        self, sales_release
-    ) -> None:
+    def test_a_broken_query_is_not_reported_as_a_cross_root_question(self, sales_release) -> None:
         """一个作用域都绑不上，不等于问题跨了事实根。
 
         实测（demo_cafe「每个门店卖得最好的商品是什么」）：模型写了 CTE，引用自己
@@ -2453,9 +2413,7 @@ class TestUnionSurvivesTheRetryPath:
         )
         assert executor.calls == 0
 
-    def test_a_join_query_broken_everywhere_reports_its_own_defect(
-        self, sales_release
-    ) -> None:
+    def test_a_join_query_broken_everywhere_reports_its_own_defect(self, sales_release) -> None:
         """一个认得全部成员的作用域仍翻不出，说出的必须是这条查询自己的毛病。
 
         实机「卖得最好的产品是哪个」：模型把聚合只写在 ORDER BY 里，每个作用域都
@@ -2510,19 +2468,18 @@ class TestUnionSurvivesTheRetryPath:
         )
         assert executor.calls == 0
 
-    def test_retargeting_leaves_the_querys_own_cte_names_alone(self, sales_release) -> None:
-        """改表名只改作用域表，不动这条查询自己定义的 CTE。
+    def test_a_cte_name_is_not_mistaken_for_a_scope_declaration(self, sales_release) -> None:
+        """作用域声明只看受治理表，不看这条查询自己定义的 CTE。
 
-        把 `FROM agg` 也改成作用域名，`ranked` 就转去读受治理表，CTE 里定义的别名随即
-        失效——「每组取前 N」这类必然带 CTE 的查询会整条失败（实机「每个门店卖得最好的
-        商品是什么」正是这样挂掉的）。
+        把 `FROM agg` 也当成声明，「每组取前 N」这类必然带 CTE 的查询就会因为
+        "agg 不是任何一个分析范围"整条失败（实机「每个门店卖得最好的商品是什么」）。
         """
 
         release = _two_facts_one_entity(sales_release)
         gateway = _SequenceGateway(
-            'WITH agg AS ('
-            ' SELECT "客户分层", SUM("退货单量") AS x FROM "销售经营" GROUP BY "客户分层"'
-            '), ranked AS ('
+            "WITH agg AS ("
+            ' SELECT "客户分层", SUM("退货单量") AS x FROM "退货分析" GROUP BY "客户分层"'
+            "), ranked AS ("
             ' SELECT "客户分层", x, RANK() OVER (ORDER BY x DESC) AS rn FROM agg'
             ') SELECT "客户分层", x FROM ranked WHERE rn = 1'
         )
@@ -2541,5 +2498,131 @@ class TestUnionSurvivesTheRetryPath:
 
         assert response.state is QueryState.COMPLETED, response.model_dump_json(indent=2)
         assert executor.calls == 1
-        # CTE 名字原样保留，没有被改成作用域名。
+        # CTE 名字原样保留，声明落在受治理表「退货分析」上。
         assert " agg" in response.corrected_s2sql, response.corrected_s2sql
+        assert "退货分析" in response.corrected_s2sql, response.corrected_s2sql
+
+
+class _PromptCapturingGateway:
+    """记下模型实际看到的 Prompt——不抓下来，权限断言就是空转。"""
+
+    def __init__(self, sql: str) -> None:
+        self.sql = sql
+        self.calls = 0
+        self.prompts: list[object] = []
+
+    def generate_json(self, **kwargs):
+        self.calls += 1
+        self.prompts.append(kwargs.get("messages"))
+        return {"thought": "t", "sql": self.sql}
+
+
+class TestTheModelDeclaresItsScope:
+    """作用域是模型在 `FROM` 里**说出来**的，不是我们按翻译成败猜出来的。
+
+    并集把多个作用域铺平成一张假表，于是模型只能写那张假表借来的名字，真实作用域
+    要靠"逐个改名重试、谁能翻出来算谁"反推。反推有个结构性死角：一条查询能在多个
+    作用域里翻译时（「有哪些部门」每个作用域都投影得出部门名称），它分不出来，而
+    模型本来是知道的——只是没地方说。
+
+    改为按作用域分组呈现目录，`FROM` 就是那句声明。校验比反推更严：声明了 A 却用了
+    B 的成员会被当场拒绝，而不是"碰巧还能翻出来就算数"。
+    """
+
+    def test_the_prompt_lists_every_candidate_scope_instead_of_one_merged_table(
+        self, sales_release
+    ) -> None:
+        release = _two_facts_one_entity(sales_release)
+        gateway = _PromptCapturingGateway(
+            'SELECT "客户分层", "退货单量" FROM "退货分析" GROUP BY "客户分层"'
+        )
+        service, _embedding, _executor = _service(
+            release, llm_gateway=gateway, query_embedding=False
+        )
+
+        service.query(
+            QueryRequest(
+                project_id="sales",
+                question="各客户分层的退货单量",
+                dataset_ids=("sales_dataset", "returns_scope"),
+            ),
+            actor_id="tenant-1",
+        )
+
+        prompt = "\n".join(item["content"] for item in gateway.prompts[0])
+        assert "scopes=" in prompt, prompt
+        assert "销售经营" in prompt and "退货分析" in prompt, prompt
+        # 并集那张假表没有名字可写：`dataset=` 这一行整个不出现。
+        assert "dataset={" not in prompt, prompt
+
+    def test_the_declared_scope_is_not_overwritten(self, sales_release) -> None:
+        release = _two_facts_one_entity(sales_release)
+        gateway = _PromptCapturingGateway(
+            'SELECT "客户分层", "退货单量" FROM "退货分析" GROUP BY "客户分层"'
+        )
+        service, _embedding, executor = _service(
+            release, llm_gateway=gateway, query_embedding=False
+        )
+
+        response = service.query(
+            QueryRequest(
+                project_id="sales",
+                question="各客户分层的退货单量",
+                dataset_ids=("sales_dataset", "returns_scope"),
+            ),
+            actor_id="tenant-1",
+        )
+
+        assert response.state is QueryState.COMPLETED, response.model_dump_json(indent=2)
+        assert executor.calls == 1
+        assert "退货分析" in response.corrected_s2sql, response.corrected_s2sql
+        assert _UNION_DATASET_ID not in response.model_dump_json()
+
+    def test_a_query_expressible_in_several_scopes_binds_to_the_declared_one(
+        self, sales_release
+    ) -> None:
+        """「有哪些客户分层」两个作用域都投影得出来——反推分不出，声明分得出。"""
+
+        release = _two_facts_one_entity(sales_release)
+        gateway = _PromptCapturingGateway('SELECT "客户分层" FROM "退货分析" GROUP BY "客户分层"')
+        service, _embedding, executor = _service(
+            release, llm_gateway=gateway, query_embedding=False
+        )
+
+        response = service.query(
+            QueryRequest(
+                project_id="sales",
+                question="有哪些客户分层",
+                dataset_ids=("sales_dataset", "returns_scope"),
+            ),
+            actor_id="tenant-1",
+        )
+
+        assert response.state is QueryState.COMPLETED, response.model_dump_json(indent=2)
+        assert executor.calls == 1
+        assert "退货分析" in response.corrected_s2sql, response.corrected_s2sql
+
+    def test_declaring_one_scope_while_using_another_scopes_member_is_refused(
+        self, sales_release
+    ) -> None:
+        """声明是要被校验的：说了销售经营却用退货单量，不得悄悄绑到退货分析上。"""
+
+        release = _two_facts_one_entity(sales_release)
+        gateway = _PromptCapturingGateway(
+            'SELECT "客户分层", "退货单量" FROM "销售经营" GROUP BY "客户分层"'
+        )
+        service, _embedding, executor = _service(
+            release, llm_gateway=gateway, query_embedding=False
+        )
+
+        response = service.query(
+            QueryRequest(
+                project_id="sales",
+                question="各客户分层的退货单量",
+                dataset_ids=("sales_dataset", "returns_scope"),
+            ),
+            actor_id="tenant-1",
+        )
+
+        assert response.state is QueryState.FAILED, response.model_dump_json(indent=2)
+        assert executor.calls == 0

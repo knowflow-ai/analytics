@@ -51,6 +51,7 @@ from knowflow_analytics.query.ambiguity import (
     structural_member_ids,
 )
 from knowflow_analytics.query.contracts import (
+    GENERATION_CATALOG_DATASET_ID,
     ClarificationOption,
     ClarificationQueryResponse,
     CompletedQueryResponse,
@@ -1016,23 +1017,24 @@ class AnalyticsQueryService:
                     diagnostic_context["last_candidate"] = candidate.model_dump(mode="json")
                 dialect = self._targets.for_project(release.project_id).dialect
 
-                def translate(dataset_id: str, *, retarget: bool = False):
+                def translate(dataset_id: str, *, restore_names: bool = False):
                     """返回 (翻译结果, 该作用域口径下的 S2SQL)。
 
                     第二个值不是中间产物：绑定之后，查询规则、多轮历史、口径说明和
-                    过程面板全都读 ``corrected_s2sql``。留着生成期的限定名和并集表名，
-                    规则一旦命中就会拿它去真实作用域上重新翻译。
+                    过程面板全都读 ``corrected_s2sql``。留着生成期的限定名，规则一旦
+                    命中就会拿它去真实作用域上重新翻译。
+
+                    **表名不动**：模型写进 ``FROM`` 的那个名字就是它的作用域声明。
                     """
 
                     s2sql = candidate.corrected_s2sql
-                    if retarget:
+                    if restore_names:
                         scope = next(d for d in release.datasets if d.id == dataset_id)
                         s2sql = _restore_union_names(
                             s2sql,
                             union_renames,
                             frozenset((*scope.metric_ids, *scope.dimension_ids)),
                         )
-                        s2sql = _retarget_tables(s2sql, scope.name)
                     return (
                         self._s2sql_translator.translate(
                             release=release,
@@ -1049,85 +1051,26 @@ class AnalyticsQueryService:
                 if candidate.dataset_id != _UNION_DATASET_ID:
                     translation_holder["value"] = translate(candidate.dataset_id)[0]
                     return
-                # 并集只用于生成。真实作用域由「哪个能确定性地翻译出这条查询」反推：
-                # 翻译已经在验证成员归属、冻结路由可达性与治理规则，比另写一套集合
-                # 判断更严也更少一处漂移。恰好一个成功即绑定；零个说明这条查询跨了
-                # 事实根（实测模型确实会写出来），多个按粒度收敛取最粗的那个。
-                bound: dict[str, tuple[object, str]] = {}
-                own_defects: dict[str, AnalyticsError] = {}
-                for dataset_id in dataset_ids:
-                    try:
-                        bound[dataset_id] = translate(dataset_id, retarget=True)
-                    except (AnalyticsError, ValueError) as exc:
-                        if isinstance(exc, AnalyticsError) and not _is_membership_error(exc):
-                            own_defects[dataset_id] = exc
-                        continue
-                if not bound:
-                    # 一个作用域都翻译不出来有三种原因，对用户完全不同：这条 SQL
-                    # 自己有毛病、名字写错了、或者查询真的跨了事实根。
-                    #
-                    # 某个作用域认得全部成员却仍翻不出，那是查询自己的毛病，原样
-                    # 说出来（实机「卖得最好的产品是哪个」：聚合只写在 ORDER BY
-                    # 里，每个作用域都拒；此前接着去"问并集"，并集的路由是拼出来
-                    # 的，需要 JOIN 的查询在它上面只会撞出与用户无关的建模码）。
-                    if own_defects:
-                        raise next(iter(own_defects.values()))
-                    # 每个作用域都说"有成员不是我的"：问并集分清写错名字与真跨根。
-                    # 它是模型当时看到的那份目录——名字在并集里也不认得，就是写错
-                    # 了，翻译器那句话就是诚实的答案；名字都认得却没有任何一个
-                    # 真实作用域拥有全部成员，那才是"成员各自合法、放一起不行"，
-                    # 「拆开提问」是对的。编一句"请拆开提问"送给一个根本不用拆的
-                    # 问题，是把用户支开。
-                    try:
-                        self._s2sql_translator.translate(
-                            release=generation_release,
-                            dataset_id=_UNION_DATASET_ID,
-                            corrected_s2sql=candidate.corrected_s2sql,
-                            visible_element_ids=allowed_element_ids,
-                            row_filters=row_filters,
-                            dialect=dialect,
-                            row_limits=request.options.row_limits(),
-                        )
-                    except AnalyticsError as exc:
-                        if _is_membership_error(exc):
-                            raise
+                # 生成期目录只用于生成。真实作用域由模型**写在 `FROM` 里**的那个
+                # 名字确定：它看到的是按作用域分组的目录，声明是它自己做的。
+                #
+                # 这里曾经是"把表名逐个作用域改写、谁能翻出来算谁"的反推。反推有个
+                # 结构性死角：一条查询能在多个作用域里翻译时它分不出来（「有哪些
+                # 部门」每个作用域都投影得出部门名称），只能再按粒度收敛或弹卡，
+                # 而模型本来是知道的，只是没地方说。读声明比反推更严：声明了 A 却
+                # 用了 B 的成员，翻译会当场拒绝，而不是"碰巧还能翻出来就算数"。
+                declared = _declared_scope_id(
+                    candidate.corrected_s2sql, release, tuple(dataset_ids)
+                )
+                if declared is None:
                     raise MappingError(
-                        "这个问题用到的业务对象不能放在同一次分析里；请拆开提问。",
-                        code="CROSS_FACT_METRICS_UNSUPPORTED",
+                        "这条查询没有落在任何一个业务分析范围上。",
+                        code="LLM_S2SQL_UNKNOWN_SCOPE",
                     )
-                chosen = self._coarsest_scope(release, tuple(bound))
-                if chosen is None:
-                    # 并列有两种，用户能不能回答完全不同：
-                    # 同一事实根的多个内部作用域是编译产物重复，差异对用户不可见也
-                    # 无从判断——这要建模者去修，给卡等于把锅甩给他答不了的人。
-                    if self._scopes_duplicate_a_root(release, tuple(bound)):
-                        raise MappingError(
-                            "当前发布版本存在无法区分的内部分析路径。",
-                            code="QUERY_SCOPE_DUPLICATE_ROOTS",
-                        )
-                    # 不同事实根的并列才是真正需要问人的场合。问的是「你要看什么」，
-                    # 不是「你要哪个分析范围」——作用域始终不出现在用户面前。
-                    # 卡片给的是能区分这几个范围的**成员**：选中哪个成员就等于定下了
-                    # 拥有它的那个范围。作用域本身不出现在选项里。
-                    # 卡必须和路由器那条走同一种：选项自带所属作用域，用户点下去
-                    # 才有东西可续跑。只带成员 ID 的普通语义卡在续跑时会走另一条
-                    # 校验分支，重算不出"当时展示过什么"，于是点了就是
-                    # CANDIDATE_NOT_FOUND——一张答不了的卡比拒答更糟。
-                    scope_choice_holder["value"] = tuple(bound)
-                    raise ClarificationSignal(
-                        code="AMBIGUOUS_QUERY_SCOPE",
-                        message="这个问题可以从几个角度分析，请确认你要看什么。",
-                        element_ids=tuple(
-                            element_id
-                            for (_kind, element_id), scopes in self._scope_choice_owners(
-                                release, tuple(bound), allowed_element_ids
-                            ).items()
-                            if len(scopes) == 1
-                        ),
-                        stage=QueryStage.FINAL_PARSING.value,
-                    )
-                bound_scope_holder["value"] = chosen
-                translation_holder["value"], bound_s2sql_holder["value"] = bound[chosen]
+                bound_scope_holder["value"] = declared
+                translation_holder["value"], bound_s2sql_holder["value"] = translate(
+                    declared, restore_names=True
+                )
 
             corrected = self._orchestrator.final_parse(
                 question=effective_question,
@@ -3163,26 +3106,6 @@ class AnalyticsQueryService:
         )
 
     @staticmethod
-    def _coarsest_scope(release: SemanticRelease, dataset_ids: tuple[str, ...]) -> str | None:
-        """多个作用域都能执行同一条查询时，取粒度最粗的那个。
-
-        明细/主表这类嵌套作用域对同一条查询都成立，但答案不同：细粒度会因扇出重复
-        计数。取链的最粗端是唯一无扇出的解释。构不成全序从属链就 fail-closed。
-        """
-
-        if len(dataset_ids) == 1:
-            return dataset_ids[0]
-        resolver = QueryScopeResolver.from_release(release)
-        coarsest = [
-            item
-            for item in dataset_ids
-            if not any(
-                resolver._fine_to_coarse(item, other) for other in dataset_ids if other != item
-            )
-        ]
-        return coarsest[0] if len(coarsest) == 1 else None
-
-    @staticmethod
     def _scope_roots(release: SemanticRelease, dataset_ids: tuple[str, ...]) -> dict[str, object]:
         """候选作用域各自的业务事实根。
 
@@ -4429,7 +4352,7 @@ def _filter_operator_label(value: str) -> str:
 
 # 并集作用域：只在生成阶段存在，用来让最终 LLM 看到全部候选作用域的成员。
 # 它不是发布资源、不参与授权、也不执行——执行永远发生在反推出的那个真实作用域上。
-_UNION_DATASET_ID = "dataset:union:generation"
+_UNION_DATASET_ID = GENERATION_CATALOG_DATASET_ID
 
 _SUGGESTION_SIMILARITY = 0.6
 # 作用域澄清卡的选项上限：再多用户就挑不动了，与其铺满不如让建模者去补词典。
@@ -4594,30 +4517,43 @@ def _restore_union_names(
     return tree.sql(dialect="postgres")
 
 
-def _retarget_tables(corrected_s2sql: str, dataset_name: str) -> str:
-    """把 S2SQL 里的表名换成目标作用域的业务名。
+def _declared_scope_id(
+    corrected_s2sql: str,
+    release: SemanticRelease,
+    dataset_ids: tuple[str, ...],
+) -> str | None:
+    """模型写在 ``FROM`` 里的业务名就是它的作用域声明，这里解析成作用域 ID。
 
-    并集在 Prompt 里必须有个名字，模型会把它写进 `FROM`。拿这条 S2SQL 去按各个真实
-    作用域翻译时表名对不上，翻译一律失败（实测：所有 `COUNT(*)` 问题整条挂掉）。
-    表名在 S2SQL 里不承载语义——成员归属由列名决定——所以按目标作用域改写是安全的。
+    **只看受治理表，不看这条查询自己定义的名字。** ``FROM agg`` 里的 agg 是 CTE，
+    把它当成声明会让「每组取前 N」这类必然带 CTE 的查询无处落脚（实机「每个门店卖得
+    最好的商品是什么」）。
 
-    **只改作用域表，不动 CTE / 子查询的名字。** ``FROM agg`` 里的 agg 是这条查询自己
-    定义的，把它也改成作用域名，`ranked` 就会转去读受治理表，CTE 里定义的别名随即
-    失效——「每组取前 N」这类必然带 CTE 的查询会以"不认识这个名字"整条失败（实测
-    「每个门店卖得最好的商品是什么」）。
+    三种情况返回 ``None``、由调用方拒答，都不猜——猜出来的作用域就是一个看起来正常的
+    错数字：名字不是任何一个已发布作用域（模型写错了）；一条查询同时落在多个作用域上
+    （真跨事实根）；两个作用域重名（编译产物重复，要建模者去修）。
     """
 
     tree = sqlglot.parse_one(corrected_s2sql, read="postgres")
     local_sources = {
         item.alias_or_name.strip().strip('"').casefold() for item in tree.find_all(exp.CTE)
     }
-    for table in tree.find_all(exp.Table):
-        if table.name.strip().strip('"').casefold() in local_sources:
-            continue
-        table.set("this", exp.to_identifier(dataset_name, quoted=True))
-        table.set("db", None)
-        table.set("catalog", None)
-    return tree.sql(dialect="postgres")
+    declared = {
+        name
+        for table in tree.find_all(exp.Table)
+        if (name := table.name.strip().strip('"').casefold()) not in local_sources
+    }
+    if len(declared) != 1:
+        return None
+    wanted = normalize_text(next(iter(declared)))
+    allowed = frozenset(dataset_ids)
+    matched = [
+        scope.id
+        for scope in release.datasets
+        if scope.id in allowed
+        and scope.id != _UNION_DATASET_ID
+        and normalize_text(scope.name) == wanted
+    ]
+    return matched[0] if len(matched) == 1 else None
 
 
 def _qualified_union_names(

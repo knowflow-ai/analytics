@@ -135,13 +135,14 @@ def render_catalog() -> str:
     out = ["## 分析范围（选一个）"]
     for d in r.datasets:
         root = roots.get(d.id)
-        ms = [mets[i].name for i in d.metric_ids if i in mets]
+        ms = [mets[i].name for i in d.metric_ids if i in mets and visible(i)]
         own, borrowed = [], []
         for i in d.dimension_ids:
             dm = dims.get(i)
             if dm is None:
                 continue
-            (own if dm.model_id == root else borrowed).append(dm.name)
+            if visible(i):
+                (own if dm.model_id == root else borrowed).append(dm.name)
         out.append(f"\n### {d.name}")
         out.append(f"  指标: {', '.join(ms)}")
         out.append(f"  本表自己的维度（优先用这些）: {', '.join(sorted(set(own)))}")
@@ -152,7 +153,7 @@ def render_catalog() -> str:
     for d in r.datasets:
         for i in d.dimension_ids:
             dm = dims.get(i)
-            if dm is not None:
+            if dm is not None and visible(i):
                 named.setdefault(dm.name, []).append(i)
     for name, ids in sorted(named.items()):
         f = fields.get(dims[ids[0]].field_id)
@@ -188,8 +189,8 @@ def render_catalog() -> str:
     if r.terms:
         out.append("\n## 业务词典（建模者声明：用户这么说时，指的是这些成员）")
         for t in r.terms:
-            tgt = [mets[i].name for i in t.metric_ids if i in mets] + [
-                dims[i].name for i in t.dimension_ids if i in dims
+            tgt = [mets[i].name for i in t.metric_ids if i in mets and visible(i)] + [
+                dims[i].name for i in t.dimension_ids if i in dims and visible(i)
             ]
             if not tgt:
                 continue
@@ -217,6 +218,16 @@ RULES = """你把用户的问题填成槽位。**不要写 SQL。**
   shape=aggregate（默认）表示算合计。
 - 需要占比、环比、同比、排名、字符串拼接、或其它槽位表达不了的形态时，
   把 unsupported 填成一句话说明，其余留空。"""
+
+# 行列级权限：None 表示不收窄。**两处都要过**——目录渲染时不能让模型看见，
+# 组装层还要再判一次。只做前者是"前端显隐当安全边界"，只做后者是把不该看的
+# 名字摆给模型（它会照着填，然后被拒，用户看到一句莫名其妙的拒答）。
+VISIBLE: frozenset[str] | None = None
+
+
+def visible(element_id: str) -> bool:
+    return VISIBLE is None or element_id in VISIBLE
+
 
 HIER = hierarchy_trees()
 print(f"层级树: {list(HIER)}")
@@ -284,12 +295,16 @@ def to_query(slots: dict) -> SemanticQuery:
     def metric_id(name):
         for i in d.metric_ids:
             if i in mets and mets[i].name == name:
+                if not visible(i):
+                    raise SlotRejected(f"没有权限访问指标 {name!r}")
                 return i
         raise SlotRejected(f"「{d.name}」里没有指标 {name!r}")
 
     def dim_id(name):
         for i in d.dimension_ids:
             if i in dims and dims[i].name == name:
+                if not visible(i):
+                    raise SlotRejected(f"没有权限访问维度 {name!r}")
                 return i
         raise SlotRejected(f"「{d.name}」里没有维度 {name!r}")
 
@@ -352,7 +367,11 @@ for case in SUITE["cases"]:
             print(f"  {cid}  槽位路 ✓  {json.dumps(slots, ensure_ascii=False)[:120]}")
             continue
         resp = svc.query_structured(
-            StructuredQueryRequest(project_id=PID, semantic_query=query),
+            StructuredQueryRequest(
+                project_id=PID,
+                semantic_query=query,
+                allowed_element_ids=None if VISIBLE is None else tuple(sorted(VISIBLE)),
+            ),
             actor_id=SUITE["actor_id"],
         )
         rows = tuple(

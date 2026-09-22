@@ -1,0 +1,817 @@
+diff --git a/docs/supersonic-parser-fallback-parity.md b/docs/supersonic-parser-fallback-parity.md
+index bd2fd12..d6310a7 100644
+--- a/docs/supersonic-parser-fallback-parity.md
++++ b/docs/supersonic-parser-fallback-parity.md
+@@ -1,6 +1,8 @@
+ # SuperSonic Parser fallback 对齐合同
+ 
+ 状态：2026-08-29 用户已评审并批准实施。
++**2026-09-21 起 Fallback 合同已作废**——Rule 不再接管，见下节。阶段顺序与
++Candidate 准入合同不变。
+ 
+ ## 冻结的自然语言阶段顺序
+ 
+@@ -61,18 +63,32 @@ textual candidate，文本仍是后续链路的唯一权威。
+ 该校验不选择 Dataset、Metric、Dimension、过滤、聚合或 QueryType，也不把
+ 残缺 SQL 补成新语义。
+ 
+-## Fallback 合同
++## Fallback 合同（2026-09-21 作废）
+ 
+-- LLM 没有形成 candidate：同一次 pass 的 RuleSqlParser 可以接管。
+-- LLM 已形成 candidate：同一次 pass 的 RuleSqlParser 必须退出；Corrector 或
+-  Translator 后续拒绝不得复活 discovery Rule candidate。
+-- 完整 final pass 失败：外层进入 ALL retry。
+-- ALL retry 仍是 `LLM_OR_RULE`：ALL-LLM 没有形成 candidate 时，RuleSqlParser
+-  使用本次 ALL Mapping 重新生成 candidate；不得复用旧 discovery candidate。
+-- ALL-LLM 已形成 candidate、但后续被拒绝：不得再运行 ALL-Rule。
+-- ALL-Rule 没有从本次 Mapping 生成 candidate：保留最后一个 LLM 失败并正常结束
+-  FINAL_PARSING，不得把 `None` 当 candidate 或产生内部错误。
+-- 治理阻断错误继续 fail-closed，不得由 Rule fallback 绕过。
++**Rule 不再接管。** 原合同（LLM 没形成 candidate → 同一 pass 的 RuleSqlParser 可以
++接管；ALL 那趟仍是 `LLM_OR_RULE`）整段退役，理由是实测：
++
++- 线上 47 次最终解析 **全部是 `llm`**，Rule 一次都没赢过。
++- 它唯一的实际产出是静默错答。Rule 不理解问句、只做模式匹配，顶出来的答案会丢掉
++  表达不了的那部分（条件、占比），给出一个看起来正常的数字。2026-09-05 实机记录
++  在案：「各城市有多少家门店」首次调用超时后，两次 Rule 兜底给出门店名单。
++- 拒答比静默错答好：用户知道自己没拿到答案。
++
++现行合同：
++
++- LLM 没有形成 candidate：记下错误，进入 ALL retry。**不跑 Rule。**
++- LLM 已形成 candidate 后被 Corrector / Translator 拒绝：同上，进入 ALL retry。
++- ALL 那趟是 **LLM only**。它也没形成 candidate 时，以 `SemanticParsingError`
++  拒答（沿用最后一个失败的错误码）。
++- 治理阻断错误继续 fail-closed。
++- **Rule 仍然留在发现阶段**：它的职责是固定「哪个数据集、命中了哪些成员」，
++  最终 LLM 需要这两样。它只是不再回答问题。
++- 没有 LLM 的部署（两处运行时都无条件构造 `LlmS2SqlParser`，所以现实中不存在）
++  仍走 Rule；那条路上它就是答案，各道时间澄清照旧抛出。
++
++连带退役：`QueryDiagnosticCategory.RULE_FALLBACK` 那条 warning 的条件是
++`parser == "rule" and llm_enabled`，现在两种情况都进不来，分支已删（枚举值保留，
++历史诊断产物里存着它）。降级不再需要"报告降级"，因为不再降级。
+ 
+ ## 兼容性证明
+ 
+@@ -80,7 +96,10 @@ textual candidate，文本仍是后续链路的唯一权威。
+ 
+ 1. 空投影 `SELECT` 的空白、大小写、注释和嵌套变体都在 candidate 入队前拒绝；
+ 2. 至少一个投影项的普通查询仍可形成 LLM candidate；
+-3. 首次 LLM 无 candidate 时 Rule 接管；
++3. 首次 LLM 无 candidate 时**不**跑 Rule，两趟都无 candidate 即拒答
++   （`test_incomplete_llm_sql_never_forms_a_candidate_and_the_query_is_refused`）；
+ 4. 合法 LLM candidate 后续失败仍只进入 ALL retry，不复活 discovery Rule；
+-5. ALL-LLM 无 candidate 时使用 `MapMode.ALL` 生成新的 Rule candidate；
+-6. ALL-LLM 已形成 candidate 后续失败时仍不运行 Rule。
++5. ALL 那趟是 LLM only，Rule 在 `final_parse` 里一次都不被调用，而发现阶段照旧调用
++   （`test_the_all_retry_is_llm_only_and_refuses_when_it_has_no_candidate`）；
++6. Rule 与 LLM 并存时不再产生 `RULE_FALLBACK` 诊断
++   （`TestRuleCanNoLongerBecomeTheAnswer`）。
+diff --git a/src/knowflow_analytics/query/orchestrator.py b/src/knowflow_analytics/query/orchestrator.py
+index 304c4c5..acb187d 100644
+--- a/src/knowflow_analytics/query/orchestrator.py
++++ b/src/knowflow_analytics/query/orchestrator.py
+@@ -462,7 +462,6 @@ class CandidateOrchestrator:
+         rule_fallback_allowed = self._llm_parser is None
+         # 模型写出来过、被治理规则拒掉：说明这个问题的写法当前表达不了。规则兜底只会
+         # 丢掉它表达不了的那部分（条件、占比），给出一个看起来正常的数字。
+-        candidate_rejected = False
+         if self._llm_parser is not None:
+             try:
+                 llm_candidate = self._llm_parser.parse(
+@@ -492,7 +491,16 @@ class CandidateOrchestrator:
+                 # The LLM parser runs before the rule parser.  When the
+                 # LLM parser adds no candidate, RuleSqlParser may still take over.
+                 errors.append(exc)
+-                rule_fallback_allowed = True
++                # **模型产不出候选时不再让 Rule 接管**（2026-09-21）。
++                #
++                # 上游 NL2SQLParser 在这里让 RuleSqlParser 顶上，我们照抄了。但 Rule 不理解
++                # 问句、只做模式匹配，它顶出来的答案会丢掉表达不了的那部分（条件、占比），
++                # 给出一个看起来正常的数字——2026-09-05 实机记录在案：「各城市有多少家门店」
++                # 首次调用超时后，两次 Rule 兜底给出门店名单的静默错答。线上 47 次最终解析
++                # 全部是 llm，Rule 一次都没赢过。
++                #
++                # 拒答比静默错答好：用户知道自己没拿到答案。发现阶段仍然用 Rule 固定
++                # 「哪个数据集、命中了哪些成员」，它只是不再回答问题。
+             else:
+                 emit("llm_candidate", llm_candidate.model_dump(mode="json"))
+                 candidate_under_review = llm_candidate
+@@ -538,7 +546,6 @@ class CandidateOrchestrator:
+                     # of resurrecting the discovery-stage Rule candidate.
+                     errors.append(exc)
+                     rule_fallback_allowed = False
+-                    candidate_rejected = True
+         if rule_fallback_allowed:
+             emit("rule_fallback_candidate", selected.model_dump(mode="json"))
+             try:
+@@ -589,7 +596,6 @@ class CandidateOrchestrator:
+             emit("all_mapping", all_mapping.model_dump(mode="json"))
+             if rejection is not None:
+                 emit("retry_feedback", rejection)
+-            all_rule_fallback_allowed = False
+             try:
+                 all_candidate = self._llm_parser.parse(
+                     question=question,
+@@ -618,7 +624,6 @@ class CandidateOrchestrator:
+                 # The ALL retry keeps Text2SQLType.LLM_OR_RULE upstream.  A
+                 # failed LLMSqlParser therefore leaves the fresh ALL-pass
+                 # candidate list empty and allows RuleSqlParser to run.
+-                all_rule_fallback_allowed = not candidate_rejected
+             else:
+                 emit("all_candidate", all_candidate.model_dump(mode="json"))
+                 try:
+@@ -646,53 +651,6 @@ class CandidateOrchestrator:
+                     # A candidate already exists in this ALL pass, so the
+                     # immediately following RuleSqlParser must still exit.
+                     errors.append(exc)
+-                    candidate_rejected = True
+-            if all_rule_fallback_allowed:
+-                try:
+-                    all_rule_candidate = self._rule_parser.parse(
+-                        question=question,
+-                        release=release,
+-                        mapping=all_mapping,
+-                        now=now,
+-                        selected_time_dimension_id=selected_time_dimension_id,
+-                        time_override=(
+-                            options.default_time_window if options is not None else None
+-                        ),
+-                    )
+-                    if all_rule_candidate is None:
+-                        emit(
+-                            "all_rule_fallback_empty",
+-                            {
+-                                "dataset_id": all_mapping.dataset_id,
+-                                "map_mode": all_mapping.mode.value,
+-                            },
+-                        )
+-                    else:
+-                        emit(
+-                            "all_rule_fallback_candidate",
+-                            all_rule_candidate.model_dump(mode="json"),
+-                        )
+-                        corrected = self._textual_corrector.correct(
+-                            tenant_id=tenant_id,
+-                            candidate=all_rule_candidate,
+-                            question=question,
+-                            query_id=query_id,
+-                            release=release,
+-                            now=now,
+-                            selected_time_dimension_id=selected_time_dimension_id,
+-                        )
+-                        if candidate_validator is not None:
+-                            candidate_validator(corrected)
+-                        emit("selected_candidate", corrected.model_dump(mode="json"))
+-                        return corrected
+-                except AnalyticsError as exc:
+-                    emit(
+-                        "all_rule_fallback_rejected",
+-                        {"code": exc.code, "stage": exc.stage, "message": str(exc)},
+-                    )
+-                    if exc.code in GOVERNANCE_BLOCKING_S2SQL_CODES:
+-                        raise
+-                    errors.append(exc)
+         detail = errors[-1] if errors else None
+         raise SemanticParsingError(
+             "规则与模型均无法生成合法的语义查询",
+diff --git a/src/knowflow_analytics/query/parser.py b/src/knowflow_analytics/query/parser.py
+index dc9c8b8..434af5d 100644
+--- a/src/knowflow_analytics/query/parser.py
++++ b/src/knowflow_analytics/query/parser.py
+@@ -2086,6 +2086,12 @@ def _apply_time_filters(
+             if metric.id in selected_metric_ids
+         )
+         if required:
++            if defer_axis_ambiguity:
++                # 这条规则的真正强制点在编译器（``_TimeGovernanceParser`` 对最终
++                # S2SQL 检查 ``EXPLICIT_TIME_REQUIRED``）。发现阶段再判一次只会
++                # 在模型还没写出 SQL 之前就掐死候选——而模型完全可能自己补上时间
++                # 条件。判定留给看得到成品的那一层。
++                return existing_filters, (TIME_AXIS_UNRESOLVED,)
+             raise ClarificationSignal(
+                 code="EXPLICIT_TIME_REQUIRED",
+                 message="该指标必须指定时间范围，请补充日期。",
+@@ -2129,6 +2135,10 @@ def _apply_time_filters(
+                     time_dimension_id = logical_axis.id
+                     declared = set()
+             if len(declared) > 1:
++                # **这一条不延后**（2026-09-05 评审，2026-09-21 试图延后后撤回）：
++                # 两个指标各自声明了不同的聚合时间轴时，选哪根另一个指标的数都是
++                # 错的，而编译器无从知道每个指标想要哪根轴——它看到的 S2SQL 只有
++                # 一个时间条件，完全合法。翻译器接不住，所以只能在这里追问。
+                 raise ClarificationSignal(
+                     code="AMBIGUOUS_TIME_DIMENSION",
+                     message="本次选中的指标声明了不同的聚合时间轴，请确认按哪个时间字段统计。",
+diff --git a/src/knowflow_analytics/query/service.py b/src/knowflow_analytics/query/service.py
+index 2c1eb30..c2bbc67 100644
+--- a/src/knowflow_analytics/query/service.py
++++ b/src/knowflow_analytics/query/service.py
+@@ -707,12 +707,11 @@ class AnalyticsQueryService:
+                                 else {"clarification_kind": "semantic_element"}
+                             ),
+                         )
+-                        return ClarificationQueryResponse(
++                        return _clarification(
+                             query_id=query_id,
+-                            release_id=release.id,
+-                            spec_hash=release.spec_hash,
+-                            index_snapshot_id=index.id,
+-                            trace=tuple(trace),
++                            release=release,
++                            index=index,
++                            trace=trace,
+                             diagnostics=QueryDiagnosis(
+                                 category=QueryDiagnosticCategory.AMBIGUITY,
+                                 stage=QueryStage.CANDIDATE_DISCOVERY.value,
+@@ -765,12 +764,11 @@ class AnalyticsQueryService:
+                                 "请换一种说法，或在业务词典中补充你的说法。"
+                             )
+                         )
+-                        return ClarificationQueryResponse(
++                        return _clarification(
+                             query_id=query_id,
+-                            release_id=release.id,
+-                            spec_hash=release.spec_hash,
+-                            index_snapshot_id=index.id,
+-                            trace=tuple(trace),
++                            release=release,
++                            index=index,
++                            trace=trace,
+                             diagnostics=QueryDiagnosis(
+                                 category=QueryDiagnosticCategory.AMBIGUITY,
+                                 stage=QueryStage.CANDIDATE_DISCOVERY.value,
+@@ -948,12 +946,11 @@ class AnalyticsQueryService:
+                         detail=clarification_detail,
+                     )
+                 )
+-                return ClarificationQueryResponse(
++                return _clarification(
+                     query_id=query_id,
+-                    release_id=release.id,
+-                    spec_hash=release.spec_hash,
+-                    index_snapshot_id=index.id,
+-                    trace=tuple(trace),
++                    release=release,
++                    index=index,
++                    trace=trace,
+                     diagnostics=QueryDiagnosis(
+                         category=QueryDiagnosticCategory.AMBIGUITY,
+                         stage=QueryStage.CANDIDATE_DISCOVERY.value,
+@@ -1585,12 +1582,11 @@ class AnalyticsQueryService:
+                         else option_dataset_ids
+                     ),
+                 )
+-            return ClarificationQueryResponse(
++            return _clarification(
+                 query_id=query_id,
+-                release_id=published.release.id,
+-                spec_hash=published.release.spec_hash,
+-                index_snapshot_id=published.index_snapshot.id,
+-                trace=tuple(trace),
++                release=published.release,
++                index=published.index_snapshot,
++                trace=trace,
+                 # A clarification is itself a warning about the question; the
+                 # caller needs it to know why options appeared at all.
+                 diagnostics=QueryDiagnosis(
+@@ -4926,37 +4922,14 @@ def _success_diagnosis(
+             ),
+             user_hint="没有查到数据。这个条件下没有任何记录参与计算，结果不是 0 而是空。",
+         )
+-    if parser == "rule" and llm_enabled:
+-        # Rule 选不出时间轴时不再放弃候选（否则 LLM 阶段连入口都没有），但它一旦
+-        # 真的成为答案，问题里的时间就没有落进查询——必须说出来，不能混在"可能
+-        # 遗漏了排名、占比"这句泛泛的话里。
+-        dropped_time = (
+-            "问题里的时间范围没有落进这次查询（数据集有多个时间字段，基础规则无法确定用哪个）。"
+-            if time_axis_unresolved
+-            else ""
+-        )
+-        return QueryDiagnosis(
+-            category=QueryDiagnosticCategory.RULE_FALLBACK,
+-            stage=QueryStage.FINAL_PARSING.value,
+-            severity="warning",
+-            summary=(
+-                "LLM 未形成可执行语义查询，系统使用了 Rule fallback"
+-                + ("；且时间轴无法确定，时间条件未生效" if time_axis_unresolved else "")
+-            ),
+-            recommendation=(
+-                "检查结果是否遗漏排名、占比、嵌套分析等复杂意图；必要时保持拒答。"
+-                + (
+-                    "给其中一个时间字段声明分区时间（``partition_time``），"
+-                    "或给指标声明 ``agg_time_dimension_id``。"
+-                    if time_axis_unresolved
+-                    else ""
+-                )
+-            ),
+-            user_hint=(
+-                dropped_time
+-                + "这个结果是按基础规则得出的，可能遗漏了排名、占比等复杂要求，请核对后再用。"
+-            ),
+-        )
++    # **Rule fallback 告警已随 Rule 兜底一起退役**（2026-09-21）。
++    #
++    # 它的条件是 ``parser == "rule" and llm_enabled``——模型失败后 Rule 顶上。那条
++    # 路已经不存在：有 LLM 时 ``rule_fallback_allowed`` 恒为假，没有 LLM 时
++    # ``llm_enabled`` 为假，两种情况都进不来。降级不再需要"报告降级"，因为不再降级。
++    #
++    # ``QueryDiagnosticCategory.RULE_FALLBACK`` 保留在枚举里不删：历史诊断产物里
++    # 存着这个值，删掉会让旧诊断读不出来。
+     return QueryDiagnosis(
+         category=QueryDiagnosticCategory.SUCCESS,
+         stage=QueryStage.FINISHED.value,
+@@ -4966,6 +4939,35 @@ def _success_diagnosis(
+     )
+ 
+ 
++def _clarification(
++    *,
++    query_id: str,
++    release: SemanticRelease,
++    index: SemanticIndexSnapshot,
++    trace: list[QueryTraceStep],
++    diagnostics: QueryDiagnosis,
++    question: str,
++    options: tuple[ClarificationOption, ...],
++) -> ClarificationQueryResponse:
++    """澄清响应的信封。
++
++    四处澄清出口原先各自重复同一组五个字段（query_id / release_id / spec_hash /
++    index_snapshot_id / trace），差别只在诊断、问法和选项上。把信封收在一处之后，
++    每个出口剩下的就只是它真正不同的那三样。
++    """
++
++    return ClarificationQueryResponse(
++        query_id=query_id,
++        release_id=release.id,
++        spec_hash=release.spec_hash,
++        index_snapshot_id=index.id,
++        trace=tuple(trace),
++        diagnostics=diagnostics,
++        question=question,
++        options=options,
++    )
++
++
+ def _shipped_diagnosis(
+     diagnosis: QueryDiagnosis, *, include_diagnostics: bool
+ ) -> QueryDiagnosis | None:
+diff --git a/tests/unit/test_degraded_answer_warnings_always_ship.py b/tests/unit/test_degraded_answer_warnings_always_ship.py
+index 904e71a..2944d62 100644
+--- a/tests/unit/test_degraded_answer_warnings_always_ship.py
++++ b/tests/unit/test_degraded_answer_warnings_always_ship.py
+@@ -46,24 +46,23 @@ def _service(sales_release, sales_index, *, llm):
+     )
+ 
+ 
+-def test_rule_fallback_warning_ships_even_when_diagnostics_were_not_requested(
+-    sales_release, sales_index
+-):
+-    """Rule fallback 给出的是一个看起来正常、可能漏掉排名/占比意图的数字。
+-
+-    此前它和 info 级的"成功"诊断一起挂在 include_diagnostics（默认 False）后面，
+-    默认调用方对降级一无所知 —— 这正是静默降级。失败路径早就无条件返回诊断，
+-    理由同样适用：降级只报告一次、请求不可重放。
++def test_a_broken_model_refuses_instead_of_degrading_to_rule(sales_release, sales_index):
++    """2026-09-21：模型产不出候选时不再退给 Rule，直接拒答。
++
++    这条测试原本钉的是"降级必须报告"——Rule fallback 会给出一个看起来正常、
++    可能漏掉排名/占比意图的数字，所以必须无条件带 warning。新合同更强：**不降级**。
++    Rule 不理解问句、只做模式匹配，它顶出来的答案是静默错答的来源（2026-09-05
++    实机：两次 Rule 兜底给出门店名单）。线上 47 次最终解析全部是 llm，Rule 一次
++    都没赢过。拒答比静默错答好：用户知道自己没拿到答案。
+     """
+ 
+     response = _service(sales_release, sales_index, llm=True).query(
+         QueryRequest(project_id="sales", question="各区域净收入", dataset_ids=("sales_dataset",))
+     )
+ 
+-    assert response.state is QueryState.COMPLETED
++    assert response.state is QueryState.FAILED
+     assert response.diagnostics is not None
+-    assert response.diagnostics.category == "rule_fallback"
+-    assert response.diagnostics.severity == "warning"
++    assert response.diagnostics.severity == "error"
+ 
+ 
+ def test_a_clean_success_still_keeps_the_info_diagnosis_behind_the_flag(sales_release, sales_index):
+diff --git a/tests/unit/test_diagnosis_user_hints.py b/tests/unit/test_diagnosis_user_hints.py
+index 0ff5e58..dc04490 100644
+--- a/tests/unit/test_diagnosis_user_hints.py
++++ b/tests/unit/test_diagnosis_user_hints.py
+@@ -54,13 +54,13 @@ def test_routing_and_translation_failures_get_different_hints():
+ 
+ 
+ def test_degraded_success_warnings_also_carry_a_user_hint():
+-    fallback = _success_diagnosis(parser="rule", llm_enabled=True, audit_complete=True)
++    """Rule fallback 那一半已随兜底退役（2026-09-21），只剩"投影不完整"。"""
++
+     lossy = _success_diagnosis(parser="llm", llm_enabled=True, audit_complete=False)
+ 
+-    assert fallback.user_hint.strip()
+     assert lossy.user_hint.strip()
+     for word in _MODELER_JARGON:
+-        assert word not in fallback.user_hint
++        assert word not in lossy.user_hint
+ 
+ 
+ class TestEmptyResultCausedByAnUnpublishedFilterValue:
+diff --git a/tests/unit/test_query_stage_pipeline.py b/tests/unit/test_query_stage_pipeline.py
+index 0312b93..01299eb 100644
+--- a/tests/unit/test_query_stage_pipeline.py
++++ b/tests/unit/test_query_stage_pipeline.py
+@@ -105,26 +105,9 @@ class _RejectLlmCorrector:
+         return candidate
+ 
+ 
+-class _RuleParserWithoutAllCandidate:
+-    def __init__(self) -> None:
+-        self._delegate = RuleS2SqlParser()
+ 
+-    def parse(self, **kwargs):
+-        if kwargs["mapping"].mode is MapMode.ALL:
+-            return None
+-        return self._delegate.parse(**kwargs)
+ 
+ 
+-class _RuleParserBlockingOnAll:
+-    def __init__(self, error_code: str) -> None:
+-        self.error_code = error_code
+-        self._delegate = RuleS2SqlParser()
+-
+-    def parse(self, **kwargs):
+-        if kwargs["mapping"].mode is MapMode.ALL:
+-            raise SemanticParsingError("synthetic ALL Rule block", code=self.error_code)
+-        return self._delegate.parse(**kwargs)
+-
+ 
+ def _mapping(dataset_id: str = "sales_dataset") -> MappingResult:
+     return MappingResult(
+@@ -366,16 +349,18 @@ def test_prompt_keeps_primary_key_partition_time_and_count_binding_outside_mappi
+         "SELECT * FROM (SELECT) AS empty_query",
+     ),
+ )
+-def test_incomplete_llm_sql_never_forms_a_candidate_and_rule_takes_over(
++def test_incomplete_llm_sql_never_forms_a_candidate_and_the_query_is_refused(
+     sales_release,
+     sales_index,
+     invalid_sql,
+ ):
+-    """Reviewed candidate-admission parity with JSQLParser 4.9.
++    """候选准入边界不变（JSQLParser 4.9 的空投影判定），后续处置改了。
+ 
+-    This freezes the LLMSqlParser input boundary, before QueryTypeParser or any
+-    Corrector runs.  Rejecting an empty SELECT does not invent query meaning: it
+-    leaves the candidate list empty so the existing RuleSqlParser can run.
++    空投影仍然"没有形成 candidate"——这道边界一个字没动，它只拒绝残缺结构，
++    不补造列、Dataset 或 QueryType。**变的是接下来谁上**：2026-09-21 起 Rule 不再
++    接管。它不理解问句、只做模式匹配，顶出来的答案会丢掉表达不了的那部分（条件、
++    占比），给出一个看起来正常的数字；2026-09-05 实机记录在案。两趟（STRICT 与 ALL）
++    都产不出候选时以 ``SemanticParsingError`` 拒答。
+     """
+ 
+     gateway = _Gateway({"thought": "invalid", "sql": invalid_sql})
+@@ -395,114 +380,52 @@ def test_incomplete_llm_sql_never_forms_a_candidate_and_rule_takes_over(
+     )
+ 
+     events: list[str] = []
+-    parsed = orchestrator.final_parse(
+-        question="各区域净收入",
+-        query_id="rule-fallback",
+-        release=sales_release,
+-        index=sales_index,
+-        selected=candidates.candidates[0],
+-        diagnostic_sink=lambda event, _detail: events.append(event),
+-    )
++    with pytest.raises(SemanticParsingError):
++        orchestrator.final_parse(
++            question="各区域净收入",
++            query_id="no-rule-fallback",
++            release=sales_release,
++            index=sales_index,
++            selected=candidates.candidates[0],
++            diagnostic_sink=lambda event, _detail: events.append(event),
++        )
+ 
+-    assert parsed.parser == "rule"
+-    assert parsed.map_mode is MapMode.STRICT
+-    assert parsed.mapping.mode is MapMode.STRICT
+-    assert gateway.calls == 1
+-    assert events == [
+-        "final_mapping",
+-        "llm_parse_failed",
+-        "rule_fallback_candidate",
+-        "selected_candidate",
+-    ]
++    assert "rule_fallback_candidate" not in events
++    assert "all_rule_fallback_candidate" not in events
++    assert "selected_candidate" not in events
+ 
+ 
+-def test_all_retry_runs_rule_on_all_mapping_when_all_llm_has_no_candidate(
++def test_the_all_retry_is_llm_only_and_refuses_when_it_has_no_candidate(
+     sales_release,
+     sales_index,
+ ):
+-    """Reviewed parity: the ALL pass remains LLM_OR_RULE, not LLM-only.
++    """ALL 那趟不再是 LLM_OR_RULE，是 LLM only（2026-09-21）。
++
++    取代原先三条合同：`..._runs_rule_on_all_mapping...`、
++    `..._all_rule_with_no_semantic_candidate_fails_cleanly`、
++    `..._governance_blocking_all_rule_failure_is_rethrown`。后两条的前提——ALL 那趟
++    会跑 Rule——已经不存在了，所以它们钉的不再是任何真实分支。
+ 
+-    规则兜底只剩一个合法入口：模型没形成候选。两趟都没形成时，ALL 那趟才可以让
+-    RuleSqlParser 用 ALL 映射重新造一个候选。
+-    （2026-09-16 用户评审：模型写出来过、被治理规则拒掉之后，任何一趟都不再退给规则
+-    兜底——它只会丢掉表达不了的那部分，给出一个看起来正常的错数字。）
++    上游 NL2SQLParser 在 ALL 那趟保持 LLM_OR_RULE，我们照抄了。但 Rule 在线上 47 次
++    最终解析里一次都没赢过，它唯一的实际产出是静默错答（2026-09-05 实机：首次调用
++    超时后两次 Rule 兜底给出门店名单）。两趟都产不出候选，说明这个问题当前表达不了。
+     """
+ 
+     gateway = _SequenceGateway(
+         {"thought": "no candidate", "sql": "SELECT"},
+         {"thought": "invalid ALL candidate", "sql": "SELECT"},
+     )
+-    orchestrator = CandidateOrchestrator(
+-        mapper=SemanticMapper(),
+-        llm_parser=LlmS2SqlParser(
+-            gateway,
+-            max_attempts=1,
+-            self_consistency_number=1,
+-        ),
+-    )
+-    candidates = orchestrator.discover(
+-        question="各区域净收入",
+-        release=sales_release,
+-        index=sales_index,
+-        dataset_ids=("sales_dataset",),
+-    )
+-    validations: list[tuple[str, MapMode]] = []
+-    events: list[str] = []
+-
+-    def validate(candidate):
+-        validations.append((candidate.parser, candidate.map_mode))
+-        if len(validations) == 1:
+-            raise SemanticParsingError(
+-                "translator rejected the first complete workflow",
+-                code="SYNTHETIC_TRANSLATION_FAILED",
+-            )
+-
+-    parsed = orchestrator.final_parse(
+-        question="各区域净收入",
+-        query_id="all-rule-fallback",
+-        release=sales_release,
+-        index=sales_index,
+-        selected=candidates.candidates[0],
+-        candidate_validator=validate,
+-        diagnostic_sink=lambda event, _detail: events.append(event),
+-    )
++    rule_calls: list[str] = []
+ 
+-    assert parsed.parser == "rule"
+-    assert parsed.map_mode is MapMode.ALL
+-    assert parsed.mapping.mode is MapMode.ALL
+-    assert parsed.id != candidates.candidates[0].id
+-    assert gateway.calls == 2
+-    assert validations == [("rule", MapMode.STRICT), ("rule", MapMode.ALL)]
+-    assert events == [
+-        "final_mapping",
+-        "llm_parse_failed",
+-        "rule_fallback_candidate",
+-        "rule_fallback_rejected",
+-        "all_mapping",
+-        "all_llm_parse_failed",
+-        "all_rule_fallback_candidate",
+-        "selected_candidate",
+-    ]
+-
+-
+-def test_all_rule_with_no_semantic_candidate_fails_cleanly(
+-    sales_release,
+-    sales_index,
+-):
+-    """An empty ALL Rule result is not a candidate and must never become a 500."""
++    class _CountingRuleParser(RuleS2SqlParser):
++        def parse(self, **kwargs):
++            rule_calls.append(kwargs["mapping"].mode.value)
++            return super().parse(**kwargs)
+ 
+-    gateway = _SequenceGateway(
+-        {"thought": "no candidate", "sql": "SELECT"},
+-        {"thought": "invalid ALL candidate", "sql": "SELECT"},
+-    )
+     orchestrator = CandidateOrchestrator(
+         mapper=SemanticMapper(),
+-        rule_parser=_RuleParserWithoutAllCandidate(),
+-        llm_parser=LlmS2SqlParser(
+-            gateway,
+-            max_attempts=1,
+-            self_consistency_number=1,
+-        ),
++        rule_parser=_CountingRuleParser(),
++        llm_parser=LlmS2SqlParser(gateway, max_attempts=1, self_consistency_number=1),
+     )
+     candidates = orchestrator.discover(
+         question="各区域净收入",
+@@ -510,31 +433,29 @@ def test_all_rule_with_no_semantic_candidate_fails_cleanly(
+         index=sales_index,
+         dataset_ids=("sales_dataset",),
+     )
+-    validations = 0
+-    events: list[str] = []
+-
+-    def validate(_candidate):
+-        nonlocal validations
+-        validations += 1
+-        if validations == 1:
+-            raise SemanticParsingError(
+-                "translator rejected the first complete workflow",
+-                code="SYNTHETIC_TRANSLATION_FAILED",
+-            )
++    discovery_calls = len(rule_calls)
++    assert discovery_calls > 0, "发现阶段仍然用 Rule 固定数据集与 ElementMatches"
+ 
+-    with pytest.raises(SemanticParsingError) as raised:
++    events: list[str] = []
++    with pytest.raises(SemanticParsingError):
+         orchestrator.final_parse(
+             question="各区域净收入",
+-            query_id="empty-all-rule",
++            query_id="all-llm-only",
+             release=sales_release,
+             index=sales_index,
+             selected=candidates.candidates[0],
+-            candidate_validator=validate,
+             diagnostic_sink=lambda event, _detail: events.append(event),
+         )
+ 
+-    assert raised.value.code == "LLM_S2SQL_INVALID"
+-    assert "all_rule_fallback_empty" in events
++    # 两趟模型都问过，Rule 在 final_parse 里一次都没被调用。
++    assert gateway.calls == 2
++    assert len(rule_calls) == discovery_calls
++    assert "all_mapping" in events
++    assert "all_llm_parse_failed" in events
++    assert not [event for event in events if "rule_fallback" in event]
++    assert "selected_candidate" not in events
++
++
+ 
+ 
+ def test_governance_blocking_code_registry_is_frozen():
+@@ -611,43 +532,6 @@ def test_governance_blocking_all_llm_failure_never_runs_all_rule(
+     assert llm_parser.calls == 2
+ 
+ 
+-@pytest.mark.parametrize("blocking_code", _EXPECTED_GOVERNANCE_BLOCKING_CODES)
+-def test_governance_blocking_all_rule_failure_is_rethrown(
+-    sales_release,
+-    sales_index,
+-    blocking_code,
+-):
+-    llm_parser = _AlwaysErrorLlmParser("LLM_S2SQL_INVALID")
+-    orchestrator = CandidateOrchestrator(
+-        mapper=SemanticMapper(),
+-        rule_parser=_RuleParserBlockingOnAll(blocking_code),
+-        llm_parser=llm_parser,
+-    )
+-    candidates = orchestrator.discover(
+-        question="各区域净收入",
+-        release=sales_release,
+-        index=sales_index,
+-        dataset_ids=("sales_dataset",),
+-    )
+-
+-    def reject_first_candidate(_candidate):
+-        raise SemanticParsingError(
+-            "translator rejected the first complete workflow",
+-            code="SYNTHETIC_TRANSLATION_FAILED",
+-        )
+-
+-    with pytest.raises(SemanticParsingError) as raised:
+-        orchestrator.final_parse(
+-            question="各区域净收入",
+-            query_id="blocking-all-rule",
+-            release=sales_release,
+-            index=sales_index,
+-            selected=candidates.candidates[0],
+-            candidate_validator=reject_first_candidate,
+-        )
+-
+-    assert raised.value.code == blocking_code
+-    assert llm_parser.calls == 2
+ 
+ 
+ def test_corrector_failure_after_llm_candidate_skips_rule_and_retries_all(
+@@ -814,16 +698,6 @@ def test_cross_dataset_sort_uses_semantic_parse_comparator():
+     assert _cross_dataset_sort_key(dataset_exact) < _cross_dataset_sort_key(metric_only)
+ 
+ 
+-class _AlwaysErrorLlmParser:
+-    """两趟都没形成候选：规则兜底仍然有资格接手。"""
+-
+-    def __init__(self, error_code: str) -> None:
+-        self.error_code = error_code
+-        self.calls = 0
+-
+-    def parse(self, **_kwargs):
+-        self.calls += 1
+-        raise SemanticParsingError("synthetic no candidate", code=self.error_code)
+ 
+ 
+ class _RuleParserSpy:
+diff --git a/tests/unit/test_time_axis_does_not_block_discovery.py b/tests/unit/test_time_axis_does_not_block_discovery.py
+index 217c8ce..effe1a6 100644
+--- a/tests/unit/test_time_axis_does_not_block_discovery.py
++++ b/tests/unit/test_time_axis_does_not_block_discovery.py
+@@ -131,6 +131,55 @@ class TestAnUnresolvableTimeAxis:
+         assert {item.dimension_id for item in filters} == {order_date.id}
+         assert TIME_AXIS_UNRESOLVED not in defaults
+ 
++    def test_a_metric_that_requires_time_defers_to_the_compiler(self, sales_release) -> None:
++        """``EXPLICIT_TIME_REQUIRED`` 的强制点在编译器，发现阶段不该重复判一次。
++
++        ``_TimeGovernanceParser`` 对最终 S2SQL 检查同一条规则。在模型还没写出 SQL
++        之前就掐死候选，掐掉的是「模型自己补上时间条件」这个完全正常的结局。
++        """
++
++        release = sales_release
++        metric_id = release.metrics[0].id
++        release = release.model_copy(
++            update={
++                "metrics": tuple(
++                    item.model_copy(update={"requires_explicit_time": True})
++                    if item.id == metric_id
++                    else item
++                    for item in release.metrics
++                )
++            }
++        )
++
++        filters, defaults = _run(
++            release,
++            question="销售额是多少",
++            selected_metric_ids=[metric_id],
++            defer_axis_ambiguity=True,
++        )
++
++        assert filters == []
++        assert TIME_AXIS_UNRESOLVED in defaults
++
++    def test_without_an_llm_a_metric_that_requires_time_still_asks(self, sales_release) -> None:
++        release = sales_release
++        metric_id = release.metrics[0].id
++        release = release.model_copy(
++            update={
++                "metrics": tuple(
++                    item.model_copy(update={"requires_explicit_time": True})
++                    if item.id == metric_id
++                    else item
++                    for item in release.metrics
++                )
++            }
++        )
++
++        with pytest.raises(ClarificationSignal) as raised:
++            _run(release, question="销售额是多少", selected_metric_ids=[metric_id])
++
++        assert raised.value.code == "EXPLICIT_TIME_REQUIRED"
++
+     def test_conflicting_declared_axes_still_ask(self, sales_release) -> None:
+         """指标各自声明了不同的时间轴是另一回事：那是建模者说了话且互相矛盾。"""
+ 
+@@ -169,8 +218,16 @@ class TestAnUnresolvableTimeAxis:
+         assert raised.value.code == "AMBIGUOUS_TIME_DIMENSION"
+ 
+ 
+-class TestTheDroppedTimeIsReportedWhenRuleAnswers:
+-    def test_rule_fallback_says_the_time_was_dropped(self) -> None:
++class TestRuleCanNoLongerBecomeTheAnswer:
++    """反向钉住：Rule 兜底已退役（2026-09-21），所以不再有"降级答案"这条告警。
++
++    原本这里钉的是「Rule 一旦真的成为答案，就必须说清时间没落进查询」。那个前提
++    没有了——有 LLM 时 ``rule_fallback_allowed`` 恒为假。延后时间轴因此也不再有
++    安全代价：延后下来的候选永远不会被执行。
++    谁把 Rule 兜底加回来，这条先红。
++    """
++
++    def test_a_rule_answer_alongside_an_llm_is_no_longer_a_reportable_state(self) -> None:
+         diagnosis = _success_diagnosis(
+             parser="rule",
+             llm_enabled=True,
+@@ -178,9 +235,7 @@ class TestTheDroppedTimeIsReportedWhenRuleAnswers:
+             time_axis_unresolved=True,
+         )
+ 
+-        assert diagnosis.severity == "warning"
+-        assert diagnosis.category is QueryDiagnosticCategory.RULE_FALLBACK
+-        assert "时间" in diagnosis.user_hint
++        assert diagnosis.category is not QueryDiagnosticCategory.RULE_FALLBACK
+ 
+     def test_the_llm_answer_is_not_accused_of_dropping_time(self) -> None:
+         """标记只挂在 Rule 候选上；LLM 赢下这一轮时不该出现这句话。"""

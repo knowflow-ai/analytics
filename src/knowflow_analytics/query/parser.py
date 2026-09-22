@@ -1468,7 +1468,16 @@ def _validate_exact_value_grounding(
     symbols = SemanticSymbolTable.from_release(release, dataset_id=dataset.id)
     tree = validate_textual_s2sql(s2sql)
     grounded: set[tuple[str, tuple[str, str]]] = set()
-    for predicate in tree.find_all(exp.EQ):
+    # 这道校验问的是「模型有没有**把这个值丢了**」，那与用什么算子无关：值的
+    # 字面量只要出现在约束该维度的比较谓词里，它就没被丢。
+    #
+    # 实机（2026-09-22，客户现场截图）：「2024年1月到3月差旅费总额是多少」。Mapper
+    # 精确命中月份取值 1 和 3，模型写出完全正确的
+    # ``"月份" BETWEEN 1 AND 3``——两个值明明白白写在那儿，却因为只扫 `=`/`IN`
+    # 被判成「模型遗漏了已确认的精确维度值约束」，3/3 稳定拒答。而被它放行的
+    # Rule 兜底写的是 ``"月份" IN (3, 1)``：能过校验，语义却是错的（只有一月和
+    # 三月，丢了二月）。**这道门在把系统从正确答案往错答案上推。**
+    for predicate in tree.find_all(exp.EQ, exp.NEQ, exp.GT, exp.GTE, exp.LT, exp.LTE):
         for column_side, value_side in (
             (predicate.this, predicate.expression),
             (predicate.expression, predicate.this),
@@ -1476,6 +1485,14 @@ def _validate_exact_value_grounding(
             dimension_id = _grounded_dimension_id(column_side, symbols)
             value = _grounded_literal(value_side)
             if dimension_id is not None and value is not _MISSING_GROUNDING:
+                grounded.add((dimension_id, _grounding_key(value)))
+    for predicate in tree.find_all(exp.Between):
+        dimension_id = _grounded_dimension_id(predicate.this, symbols)
+        if dimension_id is None:
+            continue
+        for bound in (predicate.args.get("low"), predicate.args.get("high")):
+            value = _grounded_literal(bound) if bound is not None else _MISSING_GROUNDING
+            if value is not _MISSING_GROUNDING:
                 grounded.add((dimension_id, _grounding_key(value)))
     for predicate in tree.find_all(exp.In):
         dimension_id = _grounded_dimension_id(predicate.this, symbols)

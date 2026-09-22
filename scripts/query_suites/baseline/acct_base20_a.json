@@ -1,0 +1,1311 @@
+{
+  "suite": "acct",
+  "runs": 3,
+  "source": "/tmp/armA/knowflow_analytics/query/service.py",
+  "results": [
+    {
+      "id": "D001",
+      "question": "2024年1月销售费用-差旅费是多少",
+      "expect": "answer",
+      "note": "月份+科目精确 · 优先级高",
+      "truth_rows": 1,
+      "truth_note": "",
+      "verdicts": {
+        "correct": 3
+      },
+      "stable": true,
+      "attempts": [
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_voucher_entry",
+            "code": null,
+            "diagnosis": "success/info",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_voucher_entry:debit_amount"
+            ],
+            "row_count": 1,
+            "all_null": false,
+            "s2sql": "SELECT SUM(\"借方金额\") AS \"_销售费用_差旅费_\" FROM \"凭证分录分析\" WHERE \"科目名称\" = '销售费用-差旅费' AND \"年份\" = 2024 AND \"月份\" = 1",
+            "options": []
+          },
+          "elapsed_ms": 5699
+        },
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_voucher_entry",
+            "code": null,
+            "diagnosis": "success/info",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_voucher_entry:debit_amount"
+            ],
+            "row_count": 1,
+            "all_null": false,
+            "s2sql": "SELECT SUM(\"借方金额\") AS \"_销售费用_差旅费_\" FROM \"凭证分录分析\" WHERE \"科目名称\" = '销售费用-差旅费' AND \"年份\" = 2024 AND \"月份\" = 1",
+            "options": []
+          },
+          "elapsed_ms": 2256
+        },
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_voucher_entry",
+            "code": null,
+            "diagnosis": "success/info",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_voucher_entry:debit_amount"
+            ],
+            "row_count": 1,
+            "all_null": false,
+            "s2sql": "SELECT SUM(\"借方金额\") AS \"_销售费用_差旅费_\" FROM \"凭证分录分析\" WHERE \"科目名称\" = '销售费用-差旅费' AND \"年份\" = 2024 AND \"月份\" = 1",
+            "options": []
+          },
+          "elapsed_ms": 2093
+        }
+      ]
+    },
+    {
+      "id": "D002",
+      "question": "2024年2月销售费用-业务招待费是多少",
+      "expect": "answer",
+      "note": "月份+科目精确 · 优先级高",
+      "truth_rows": 1,
+      "truth_note": "",
+      "verdicts": {
+        "empty": 3
+      },
+      "stable": true,
+      "attempts": [
+        {
+          "verdict": "empty",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_account_balance",
+            "code": null,
+            "diagnosis": "database_execution/warning",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_account_balance:period_debit"
+            ],
+            "row_count": 1,
+            "all_null": true,
+            "s2sql": "SELECT SUM(\"本期借方发生额\") AS \"_销售费用_业务招待费_\" FROM \"科目余额分析\" WHERE \"科目名称\" = '销售费用-业务招待费' AND \"年份\" = 2024 AND \"月份\" = 2",
+            "options": []
+          },
+          "elapsed_ms": 2955
+        },
+        {
+          "verdict": "empty",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_account_balance",
+            "code": null,
+            "diagnosis": "database_execution/warning",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_account_balance:period_debit"
+            ],
+            "row_count": 1,
+            "all_null": true,
+            "s2sql": "SELECT SUM(\"本期借方发生额\") AS \"_销售费用_业务招待费_\" FROM \"科目余额分析\" WHERE \"科目名称\" = '销售费用-业务招待费' AND \"年份\" = 2024 AND \"月份\" = 2",
+            "options": []
+          },
+          "elapsed_ms": 1755
+        },
+        {
+          "verdict": "empty",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_account_balance",
+            "code": null,
+            "diagnosis": "database_execution/warning",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_account_balance:period_debit"
+            ],
+            "row_count": 1,
+            "all_null": true,
+            "s2sql": "SELECT SUM(\"本期借方发生额\") AS \"_销售费用_业务招待费_\" FROM \"科目余额分析\" WHERE \"科目名称\" = '销售费用-业务招待费' AND \"年份\" = 2024 AND \"月份\" = 2",
+            "options": []
+          },
+          "elapsed_ms": 1960
+        }
+      ]
+    },
+    {
+      "id": "D003",
+      "question": "2024年3月管理费用-办公费是多少",
+      "expect": "answer",
+      "note": "月份+科目精确 · 优先级高",
+      "truth_rows": 1,
+      "truth_note": "",
+      "verdicts": {
+        "correct": 3
+      },
+      "stable": true,
+      "attempts": [
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_account_balance",
+            "code": null,
+            "diagnosis": "database_execution/warning",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_account_balance:period_debit"
+            ],
+            "row_count": 1,
+            "all_null": true,
+            "s2sql": "SELECT SUM(\"本期借方发生额\") AS \"_管理费用_办公费_\" FROM \"科目余额分析\" WHERE \"科目名称\" = '管理费用-办公费' AND \"年份\" = 2024 AND \"月份\" = 3",
+            "options": []
+          },
+          "elapsed_ms": 3615
+        },
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_account_balance",
+            "code": null,
+            "diagnosis": "database_execution/warning",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_account_balance:period_debit"
+            ],
+            "row_count": 1,
+            "all_null": true,
+            "s2sql": "SELECT SUM(\"本期借方发生额\") AS \"_管理费用_办公费_\" FROM \"科目余额分析\" WHERE \"科目名称\" = '管理费用-办公费' AND \"年份\" = 2024 AND \"月份\" = 3",
+            "options": []
+          },
+          "elapsed_ms": 2456
+        },
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_account_balance",
+            "code": null,
+            "diagnosis": "database_execution/warning",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_account_balance:period_debit"
+            ],
+            "row_count": 1,
+            "all_null": true,
+            "s2sql": "SELECT SUM(\"本期借方发生额\") AS \"_管理费用_办公费_\" FROM \"科目余额分析\" WHERE \"科目名称\" = '管理费用-办公费' AND \"年份\" = 2024 AND \"月份\" = 3",
+            "options": []
+          },
+          "elapsed_ms": 2213
+        }
+      ]
+    },
+    {
+      "id": "D004",
+      "question": "2024年1月差旅费是多少",
+      "expect": "answer",
+      "note": "月份+科目模糊 · 优先级中",
+      "truth_rows": 1,
+      "truth_note": "",
+      "verdicts": {
+        "correct": 3
+      },
+      "stable": true,
+      "attempts": [
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_voucher_entry",
+            "code": null,
+            "diagnosis": "success/info",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_voucher_entry:debit_amount"
+            ],
+            "row_count": 1,
+            "all_null": false,
+            "s2sql": "SELECT SUM(\"借方金额\") AS \"差旅费\" FROM \"凭证分录分析\" WHERE \"科目名称\" = '销售费用-差旅费' AND \"月份\" = 1 AND \"年份\" = 2024",
+            "options": []
+          },
+          "elapsed_ms": 3188
+        },
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_voucher_entry",
+            "code": null,
+            "diagnosis": "success/info",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_voucher_entry:debit_amount"
+            ],
+            "row_count": 1,
+            "all_null": false,
+            "s2sql": "SELECT SUM(\"借方金额\") AS \"差旅费\" FROM \"凭证分录分析\" WHERE \"科目名称\" = '销售费用-差旅费' AND \"年份\" = 2024 AND \"月份\" = 1",
+            "options": []
+          },
+          "elapsed_ms": 2300
+        },
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_voucher_entry",
+            "code": null,
+            "diagnosis": "success/info",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_voucher_entry:debit_amount"
+            ],
+            "row_count": 1,
+            "all_null": false,
+            "s2sql": "SELECT SUM(\"借方金额\") AS \"差旅费\" FROM \"凭证分录分析\" WHERE \"科目名称\" = '销售费用-差旅费' AND \"年份\" = 2024 AND \"月份\" = 1",
+            "options": []
+          },
+          "elapsed_ms": 2054
+        }
+      ]
+    },
+    {
+      "id": "D005",
+      "question": "2024年2月招待费是多少",
+      "expect": "answer",
+      "note": "月份+科目模糊 · 优先级中",
+      "truth_rows": 1,
+      "truth_note": "",
+      "verdicts": {
+        "wrong": 3
+      },
+      "stable": true,
+      "attempts": [
+        {
+          "verdict": "wrong",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_voucher_entry",
+            "code": null,
+            "diagnosis": "success/info",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_voucher_entry:debit_amount"
+            ],
+            "row_count": 1,
+            "all_null": false,
+            "s2sql": "SELECT SUM(\"借方金额\") AS \"招待费\" FROM \"凭证分录分析\" WHERE \"年份\" = 2024 AND \"月份\" = 2",
+            "options": []
+          },
+          "elapsed_ms": 2967
+        },
+        {
+          "verdict": "wrong",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_voucher_entry",
+            "code": null,
+            "diagnosis": "success/info",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_voucher_entry:debit_amount"
+            ],
+            "row_count": 1,
+            "all_null": false,
+            "s2sql": "SELECT SUM(\"借方金额\") AS \"招待费\" FROM \"凭证分录分析\" WHERE \"年份\" = 2024 AND \"月份\" = 2",
+            "options": []
+          },
+          "elapsed_ms": 1966
+        },
+        {
+          "verdict": "wrong",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_voucher_entry",
+            "code": null,
+            "diagnosis": "success/info",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_voucher_entry:debit_amount"
+            ],
+            "row_count": 1,
+            "all_null": false,
+            "s2sql": "SELECT SUM(\"借方金额\") AS \"招待费\" FROM \"凭证分录分析\" WHERE \"年份\" = 2024 AND \"月份\" = 2",
+            "options": []
+          },
+          "elapsed_ms": 1758
+        }
+      ]
+    },
+    {
+      "id": "D006",
+      "question": "2024年1月销售部差旅费是多少",
+      "expect": "answer",
+      "note": "月份+部门+科目 · 优先级高",
+      "truth_rows": 1,
+      "truth_note": "",
+      "verdicts": {
+        "correct": 3
+      },
+      "stable": true,
+      "attempts": [
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_voucher_entry",
+            "code": null,
+            "diagnosis": "success/info",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_voucher_entry:debit_amount"
+            ],
+            "row_count": 1,
+            "all_null": false,
+            "s2sql": "SELECT SUM(\"借方金额\") AS \"_差旅费_\" FROM \"凭证分录分析\" WHERE \"摘要\" = '销售部差旅费' AND \"年份\" = 2024 AND \"月份\" = 1",
+            "options": []
+          },
+          "elapsed_ms": 3213
+        },
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_voucher_entry",
+            "code": null,
+            "diagnosis": "success/info",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_voucher_entry:debit_amount"
+            ],
+            "row_count": 1,
+            "all_null": false,
+            "s2sql": "SELECT SUM(\"借方金额\") AS \"_差旅费_\" FROM \"凭证分录分析\" WHERE \"摘要\" = '销售部差旅费' AND \"年份\" = 2024 AND \"月份\" = 1",
+            "options": []
+          },
+          "elapsed_ms": 1860
+        },
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_voucher_entry",
+            "code": null,
+            "diagnosis": "success/info",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_voucher_entry:debit_amount"
+            ],
+            "row_count": 1,
+            "all_null": false,
+            "s2sql": "SELECT SUM(\"借方金额\") AS \"_差旅费_\" FROM \"凭证分录分析\" WHERE \"摘要\" = '销售部差旅费' AND \"年份\" = 2024 AND \"月份\" = 1",
+            "options": []
+          },
+          "elapsed_ms": 2179
+        }
+      ]
+    },
+    {
+      "id": "D007",
+      "question": "2024年3月研发部差旅费是多少",
+      "expect": "answer",
+      "note": "月份+部门+科目 · 优先级高",
+      "truth_rows": 1,
+      "truth_note": "",
+      "verdicts": {
+        "correct": 3
+      },
+      "stable": true,
+      "attempts": [
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_voucher_entry",
+            "code": null,
+            "diagnosis": "success/info",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_voucher_entry:debit_amount"
+            ],
+            "row_count": 1,
+            "all_null": false,
+            "s2sql": "SELECT SUM(\"借方金额\") AS \"_差旅费_\" FROM \"凭证分录分析\" WHERE \"摘要\" = '研发部差旅费' AND \"月份\" = 3 AND \"年份\" = 2024",
+            "options": []
+          },
+          "elapsed_ms": 3139
+        },
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_voucher_entry",
+            "code": null,
+            "diagnosis": "success/info",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_voucher_entry:debit_amount"
+            ],
+            "row_count": 1,
+            "all_null": false,
+            "s2sql": "SELECT SUM(\"借方金额\") AS \"差旅费金额\" FROM \"凭证分录分析\" WHERE \"摘要\" = '研发部差旅费' AND \"月份\" = 3 AND \"年份\" = 2024",
+            "options": []
+          },
+          "elapsed_ms": 1894
+        },
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_voucher_entry",
+            "code": null,
+            "diagnosis": "success/info",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_voucher_entry:debit_amount"
+            ],
+            "row_count": 1,
+            "all_null": false,
+            "s2sql": "SELECT SUM(\"借方金额\") AS \"差旅费金额\" FROM \"凭证分录分析\" WHERE \"摘要\" = '研发部差旅费' AND \"月份\" = 3 AND \"年份\" = 2024",
+            "options": []
+          },
+          "elapsed_ms": 1972
+        }
+      ]
+    },
+    {
+      "id": "D008",
+      "question": "2024年1月甲公司的应收账款是多少",
+      "expect": "answer",
+      "note": "月份+往来单位 · 优先级高",
+      "truth_rows": 1,
+      "truth_note": "",
+      "verdicts": {
+        "empty": 1,
+        "wrong": 2
+      },
+      "stable": false,
+      "attempts": [
+        {
+          "verdict": "empty",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_ar_ap",
+            "code": null,
+            "diagnosis": "database_execution/warning",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_ar_ap:amount"
+            ],
+            "row_count": 1,
+            "all_null": true,
+            "s2sql": "SELECT SUM(\"账款金额\") AS \"应收账款金额\" FROM \"应收应付分析\" WHERE \"往来单位名称\" = '甲公司' AND \"报表项目\" = '应收账款' AND \"年份\" = 2024 AND \"月份\" = 1",
+            "options": []
+          },
+          "elapsed_ms": 2923
+        },
+        {
+          "verdict": "wrong",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_account_balance",
+            "code": null,
+            "diagnosis": "success/info",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_account_balance:end_debit"
+            ],
+            "row_count": 1,
+            "all_null": false,
+            "s2sql": "SELECT SUM(\"期末借方余额\") AS \"应收账款金额\" FROM \"科目余额分析\" WHERE \"科目名称\" = '应收账款' AND \"年份\" = 2024 AND \"月份\" = 1",
+            "options": []
+          },
+          "elapsed_ms": 2157
+        },
+        {
+          "verdict": "wrong",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_account_balance",
+            "code": null,
+            "diagnosis": "success/info",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_account_balance:end_debit"
+            ],
+            "row_count": 1,
+            "all_null": false,
+            "s2sql": "SELECT SUM(\"期末借方余额\") AS \"应收账款金额\" FROM \"科目余额分析\" WHERE \"科目名称\" = '应收账款' AND \"年份\" = 2024 AND \"月份\" = 1",
+            "options": []
+          },
+          "elapsed_ms": 1827
+        }
+      ]
+    },
+    {
+      "id": "D009",
+      "question": "2024年3月丙供应商的应付账款是多少",
+      "expect": "answer",
+      "note": "月份+往来单位 · 优先级高",
+      "truth_rows": 1,
+      "truth_note": "",
+      "verdicts": {
+        "correct": 3
+      },
+      "stable": true,
+      "attempts": [
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_ar_ap",
+            "code": null,
+            "diagnosis": "success/info",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_ar_ap:amount"
+            ],
+            "row_count": 1,
+            "all_null": false,
+            "s2sql": "SELECT SUM(\"账款金额\") AS \"应付账款金额\" FROM \"应收应付分析\" WHERE \"科目名称\" = '应付账款' AND \"月份\" = 3 AND \"年份\" = 2024 AND \"往来单位名称\" = '丙供应商'",
+            "options": []
+          },
+          "elapsed_ms": 2700
+        },
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_ar_ap",
+            "code": null,
+            "diagnosis": "success/info",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_ar_ap:amount"
+            ],
+            "row_count": 1,
+            "all_null": false,
+            "s2sql": "SELECT SUM(\"账款金额\") AS \"应付账款金额\" FROM \"应收应付分析\" WHERE \"科目名称\" = '应付账款' AND \"月份\" = 3 AND \"年份\" = 2024 AND \"往来单位名称\" = '丙供应商'",
+            "options": []
+          },
+          "elapsed_ms": 1953
+        },
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_ar_ap",
+            "code": null,
+            "diagnosis": "success/info",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_ar_ap:amount"
+            ],
+            "row_count": 1,
+            "all_null": false,
+            "s2sql": "SELECT SUM(\"账款金额\") AS \"应付账款金额\" FROM \"应收应付分析\" WHERE \"科目名称\" = '应付账款' AND \"月份\" = 3 AND \"年份\" = 2024 AND \"往来单位名称\" = '丙供应商'",
+            "options": []
+          },
+          "elapsed_ms": 1722
+        }
+      ]
+    },
+    {
+      "id": "D010",
+      "question": "2024年3月销项税额是多少",
+      "expect": "answer",
+      "note": "月份+税务 · 优先级中",
+      "truth_rows": 1,
+      "truth_note": "",
+      "verdicts": {
+        "empty": 3
+      },
+      "stable": true,
+      "attempts": [
+        {
+          "verdict": "empty",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_tax_detail",
+            "code": null,
+            "diagnosis": "database_execution/warning",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_tax_detail:tax_amount"
+            ],
+            "row_count": 1,
+            "all_null": true,
+            "s2sql": "SELECT SUM(\"税额\") AS \"_销项税额_\" FROM \"税务明细分析\" WHERE \"月份\" = 3 AND \"摘要\" = '销项税额'",
+            "options": []
+          },
+          "elapsed_ms": 3241
+        },
+        {
+          "verdict": "empty",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_tax_detail",
+            "code": null,
+            "diagnosis": "database_execution/warning",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_tax_detail:tax_amount"
+            ],
+            "row_count": 1,
+            "all_null": true,
+            "s2sql": "SELECT SUM(\"税额\") AS \"_销项税额_\" FROM \"税务明细分析\" WHERE \"月份\" = 3 AND \"摘要\" = '销项税额'",
+            "options": []
+          },
+          "elapsed_ms": 3205
+        },
+        {
+          "verdict": "empty",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_tax_detail",
+            "code": null,
+            "diagnosis": "database_execution/warning",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_tax_detail:tax_amount"
+            ],
+            "row_count": 1,
+            "all_null": true,
+            "s2sql": "SELECT SUM(\"税额\") AS \"_销项税额_\" FROM \"税务明细分析\" WHERE \"月份\" = 3 AND \"摘要\" = '销项税额'",
+            "options": []
+          },
+          "elapsed_ms": 2018
+        }
+      ]
+    },
+    {
+      "id": "D011",
+      "question": "2024年3月进项税额是多少",
+      "expect": "answer",
+      "note": "月份+税务 · 优先级中",
+      "truth_rows": 1,
+      "truth_note": "",
+      "verdicts": {
+        "correct": 3
+      },
+      "stable": true,
+      "attempts": [
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_tax_detail",
+            "code": null,
+            "diagnosis": "success/info",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_tax_detail:tax_amount"
+            ],
+            "row_count": 1,
+            "all_null": false,
+            "s2sql": "SELECT SUM(\"税额\") AS \"_进项税额_\" FROM \"税务明细分析\" WHERE \"年份\" = 2024 AND \"月份\" = 3 AND \"税种类型\" = '进项'",
+            "options": []
+          },
+          "elapsed_ms": 3371
+        },
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_tax_detail",
+            "code": null,
+            "diagnosis": "success/info",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_tax_detail:tax_amount"
+            ],
+            "row_count": 1,
+            "all_null": false,
+            "s2sql": "SELECT SUM(\"税额\") AS \"_进项税额_\" FROM \"税务明细分析\" WHERE \"年份\" = 2024 AND \"月份\" = 3 AND \"摘要\" = '进项税额'",
+            "options": []
+          },
+          "elapsed_ms": 1946
+        },
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_tax_detail",
+            "code": null,
+            "diagnosis": "success/info",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_tax_detail:tax_amount"
+            ],
+            "row_count": 1,
+            "all_null": false,
+            "s2sql": "SELECT SUM(\"税额\") AS \"_进项税额_\" FROM \"税务明细分析\" WHERE \"年份\" = 2024 AND \"月份\" = 3 AND \"摘要\" = '进项税额'",
+            "options": []
+          },
+          "elapsed_ms": 1910
+        }
+      ]
+    },
+    {
+      "id": "D012",
+      "question": "2024年3月货币资金期末余额是多少",
+      "expect": "answer",
+      "note": "月份+报表口径 · 优先级高",
+      "truth_rows": 1,
+      "truth_note": "",
+      "verdicts": {
+        "clarify": 3
+      },
+      "stable": true,
+      "attempts": [
+        {
+          "verdict": "clarify",
+          "fingerprint": {
+            "state": "CLARIFICATION_REQUIRED",
+            "dataset_id": null,
+            "code": null,
+            "diagnosis": "ambiguity/warning",
+            "columns": [],
+            "row_count": 0,
+            "all_null": false,
+            "s2sql": null,
+            "options": [
+              "期末借方余额",
+              "期末贷方余额"
+            ]
+          },
+          "elapsed_ms": 4550
+        },
+        {
+          "verdict": "clarify",
+          "fingerprint": {
+            "state": "CLARIFICATION_REQUIRED",
+            "dataset_id": null,
+            "code": null,
+            "diagnosis": "ambiguity/warning",
+            "columns": [],
+            "row_count": 0,
+            "all_null": false,
+            "s2sql": null,
+            "options": [
+              "期末借方余额",
+              "期末贷方余额"
+            ]
+          },
+          "elapsed_ms": 2386
+        },
+        {
+          "verdict": "clarify",
+          "fingerprint": {
+            "state": "CLARIFICATION_REQUIRED",
+            "dataset_id": null,
+            "code": null,
+            "diagnosis": "ambiguity/warning",
+            "columns": [],
+            "row_count": 0,
+            "all_null": false,
+            "s2sql": null,
+            "options": [
+              "期末借方余额",
+              "期末贷方余额"
+            ]
+          },
+          "elapsed_ms": 2327
+        }
+      ]
+    },
+    {
+      "id": "D013",
+      "question": "2023年12月库存现金余额是多少",
+      "expect": "answer",
+      "note": "月份+科目 · 优先级高",
+      "truth_rows": 0,
+      "truth_note": "",
+      "verdicts": {
+        "correct": 3
+      },
+      "stable": true,
+      "attempts": [
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_account_balance",
+            "code": null,
+            "diagnosis": "database_execution/warning",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_account_balance:end_debit"
+            ],
+            "row_count": 1,
+            "all_null": true,
+            "s2sql": "SELECT SUM(\"期末借方余额\") AS \"_期末借方余额_\" FROM \"科目余额分析\" WHERE \"科目名称\" = '库存现金' AND \"年份\" = 2023 AND \"月份\" = 12",
+            "options": []
+          },
+          "elapsed_ms": 3620
+        },
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_account_balance",
+            "code": null,
+            "diagnosis": "database_execution/warning",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_account_balance:end_debit"
+            ],
+            "row_count": 1,
+            "all_null": true,
+            "s2sql": "SELECT SUM(\"期末借方余额\") AS \"_库存现金余额_\" FROM \"科目余额分析\" WHERE \"科目名称\" = '库存现金' AND \"年份\" = 2023 AND \"月份\" = 12",
+            "options": []
+          },
+          "elapsed_ms": 2116
+        },
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_account_balance",
+            "code": null,
+            "diagnosis": "database_execution/warning",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_account_balance:end_debit"
+            ],
+            "row_count": 1,
+            "all_null": true,
+            "s2sql": "SELECT SUM(\"期末借方余额\") AS \"_库存现金余额_\" FROM \"科目余额分析\" WHERE \"科目名称\" = '库存现金' AND \"年份\" = 2023 AND \"月份\" = 12",
+            "options": []
+          },
+          "elapsed_ms": 3615
+        }
+      ]
+    },
+    {
+      "id": "D014",
+      "question": "2024年1月销售费用-业务招待费是多少",
+      "expect": "answer",
+      "note": "易遗漏-连字符 · 优先级高",
+      "truth_rows": 1,
+      "truth_note": "",
+      "verdicts": {
+        "correct": 3
+      },
+      "stable": true,
+      "attempts": [
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_account_balance",
+            "code": null,
+            "diagnosis": "database_execution/warning",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_account_balance:period_debit"
+            ],
+            "row_count": 1,
+            "all_null": true,
+            "s2sql": "SELECT SUM(\"本期借方发生额\") AS \"_销售费用_业务招待费_\" FROM \"科目余额分析\" WHERE \"科目名称\" = '销售费用-业务招待费' AND \"年份\" = 2024 AND \"月份\" = 1",
+            "options": []
+          },
+          "elapsed_ms": 2982
+        },
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_account_balance",
+            "code": null,
+            "diagnosis": "database_execution/warning",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_account_balance:period_debit"
+            ],
+            "row_count": 1,
+            "all_null": true,
+            "s2sql": "SELECT SUM(\"本期借方发生额\") AS \"_销售费用_业务招待费_\" FROM \"科目余额分析\" WHERE \"科目名称\" = '销售费用-业务招待费' AND \"年份\" = 2024 AND \"月份\" = 1",
+            "options": []
+          },
+          "elapsed_ms": 1773
+        },
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_account_balance",
+            "code": null,
+            "diagnosis": "database_execution/warning",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_account_balance:period_debit"
+            ],
+            "row_count": 1,
+            "all_null": true,
+            "s2sql": "SELECT SUM(\"本期借方发生额\") AS \"_销售费用_业务招待费_\" FROM \"科目余额分析\" WHERE \"科目名称\" = '销售费用-业务招待费' AND \"年份\" = 2024 AND \"月份\" = 1",
+            "options": []
+          },
+          "elapsed_ms": 1918
+        }
+      ]
+    },
+    {
+      "id": "D015",
+      "question": "2024年2月管理费用-办公费是多少",
+      "expect": "answer",
+      "note": "易遗漏-连字符 · 优先级高",
+      "truth_rows": 1,
+      "truth_note": "",
+      "verdicts": {
+        "empty": 3
+      },
+      "stable": true,
+      "attempts": [
+        {
+          "verdict": "empty",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_account_balance",
+            "code": null,
+            "diagnosis": "database_execution/warning",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_account_balance:period_debit"
+            ],
+            "row_count": 1,
+            "all_null": true,
+            "s2sql": "SELECT SUM(\"本期借方发生额\") AS \"_管理费用_办公费_\" FROM \"科目余额分析\" WHERE \"科目名称\" = '管理费用-办公费' AND \"年份\" = 2024 AND \"月份\" = 2",
+            "options": []
+          },
+          "elapsed_ms": 2939
+        },
+        {
+          "verdict": "empty",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_account_balance",
+            "code": null,
+            "diagnosis": "database_execution/warning",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_account_balance:period_debit"
+            ],
+            "row_count": 1,
+            "all_null": true,
+            "s2sql": "SELECT SUM(\"本期借方发生额\") AS \"_管理费用_办公费_\" FROM \"科目余额分析\" WHERE \"科目名称\" = '管理费用-办公费' AND \"年份\" = 2024 AND \"月份\" = 2",
+            "options": []
+          },
+          "elapsed_ms": 1791
+        },
+        {
+          "verdict": "empty",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_account_balance",
+            "code": null,
+            "diagnosis": "database_execution/warning",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_account_balance:period_debit"
+            ],
+            "row_count": 1,
+            "all_null": true,
+            "s2sql": "SELECT SUM(\"本期借方发生额\") AS \"_管理费用_办公费_\" FROM \"科目余额分析\" WHERE \"科目名称\" = '管理费用-办公费' AND \"年份\" = 2024 AND \"月份\" = 2",
+            "options": []
+          },
+          "elapsed_ms": 2108
+        }
+      ]
+    },
+    {
+      "id": "D016",
+      "question": "2023年12月销售费用-差旅费是多少",
+      "expect": "answer",
+      "note": "跨年月份 · 优先级高",
+      "truth_rows": 1,
+      "truth_note": "",
+      "verdicts": {
+        "correct": 3
+      },
+      "stable": true,
+      "attempts": [
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_voucher_entry",
+            "code": null,
+            "diagnosis": "database_execution/warning",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_voucher_entry:debit_amount"
+            ],
+            "row_count": 1,
+            "all_null": true,
+            "s2sql": "SELECT SUM(\"借方金额\") AS \"_销售费用_差旅费_\" FROM \"凭证分录分析\" WHERE \"科目名称\" = '销售费用-差旅费' AND \"年份\" = 2023 AND \"月份\" = 12",
+            "options": []
+          },
+          "elapsed_ms": 4344
+        },
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_voucher_entry",
+            "code": null,
+            "diagnosis": "database_execution/warning",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_voucher_entry:debit_amount"
+            ],
+            "row_count": 1,
+            "all_null": true,
+            "s2sql": "SELECT SUM(\"借方金额\") AS \"_销售费用_差旅费_\" FROM \"凭证分录分析\" WHERE \"科目名称\" = '销售费用-差旅费' AND \"年份\" = 2023 AND \"月份\" = 12",
+            "options": []
+          },
+          "elapsed_ms": 1774
+        },
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_voucher_entry",
+            "code": null,
+            "diagnosis": "database_execution/warning",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_voucher_entry:debit_amount"
+            ],
+            "row_count": 1,
+            "all_null": true,
+            "s2sql": "SELECT SUM(\"借方金额\") AS \"_销售费用_差旅费_\" FROM \"凭证分录分析\" WHERE \"科目名称\" = '销售费用-差旅费' AND \"年份\" = 2023 AND \"月份\" = 12",
+            "options": []
+          },
+          "elapsed_ms": 2200
+        }
+      ]
+    },
+    {
+      "id": "D017",
+      "question": "2024年1月结转凭证有几张",
+      "expect": "answer",
+      "note": "月份+凭证类型 · 优先级中",
+      "truth_rows": 1,
+      "truth_note": "",
+      "verdicts": {
+        "correct": 3
+      },
+      "stable": true,
+      "attempts": [
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_voucher",
+            "code": null,
+            "diagnosis": "success/info",
+            "columns": [
+              "metric:default_count:model:knowflow_analytics:fact_voucher"
+            ],
+            "row_count": 1,
+            "all_null": false,
+            "s2sql": "SELECT COUNT(*) AS \"_凭证数量_\" FROM \"会计凭证分析\" WHERE \"年份\" = 2024 AND \"月份\" = 1 AND \"凭证类型\" = '结转凭证'",
+            "options": []
+          },
+          "elapsed_ms": 2760
+        },
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_voucher",
+            "code": null,
+            "diagnosis": "success/info",
+            "columns": [
+              "metric:default_count:model:knowflow_analytics:fact_voucher"
+            ],
+            "row_count": 1,
+            "all_null": false,
+            "s2sql": "SELECT COUNT(*) AS \"_凭证数量_\" FROM \"会计凭证分析\" WHERE \"年份\" = 2024 AND \"月份\" = 1 AND \"凭证类型\" = '结转凭证'",
+            "options": []
+          },
+          "elapsed_ms": 1554
+        },
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_voucher",
+            "code": null,
+            "diagnosis": "success/info",
+            "columns": [
+              "metric:default_count:model:knowflow_analytics:fact_voucher"
+            ],
+            "row_count": 1,
+            "all_null": false,
+            "s2sql": "SELECT COUNT(*) AS \"_凭证数量_\" FROM \"会计凭证分析\" WHERE \"年份\" = 2024 AND \"月份\" = 1 AND \"凭证类型\" = '结转凭证'",
+            "options": []
+          },
+          "elapsed_ms": 1800
+        }
+      ]
+    },
+    {
+      "id": "D018",
+      "question": "2024年1月到3月差旅费总额是多少",
+      "expect": "answer",
+      "note": "月份范围+科目 · 优先级高",
+      "truth_rows": 1,
+      "truth_note": "",
+      "verdicts": {
+        "correct": 3
+      },
+      "stable": true,
+      "attempts": [
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_voucher_entry",
+            "code": null,
+            "diagnosis": "success/info",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_voucher_entry:debit_amount"
+            ],
+            "row_count": 1,
+            "all_null": false,
+            "s2sql": "SELECT SUM(\"借方金额\") AS \"_差旅费总额_\" FROM \"凭证分录分析\" WHERE \"科目名称\" = '销售费用-差旅费' AND \"年份\" = 2024 AND \"月份\" IN (1, 2, 3)",
+            "options": []
+          },
+          "elapsed_ms": 4681
+        },
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_voucher_entry",
+            "code": null,
+            "diagnosis": "success/info",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_voucher_entry:debit_amount"
+            ],
+            "row_count": 1,
+            "all_null": false,
+            "s2sql": "SELECT SUM(\"借方金额\") AS \"差旅费总额\" FROM \"凭证分录分析\" WHERE \"科目名称\" = '销售费用-差旅费' AND \"年份\" = 2024 AND \"月份\" IN (1, 2, 3)",
+            "options": []
+          },
+          "elapsed_ms": 3699
+        },
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_voucher_entry",
+            "code": null,
+            "diagnosis": "success/info",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_voucher_entry:debit_amount"
+            ],
+            "row_count": 1,
+            "all_null": false,
+            "s2sql": "SELECT SUM(\"借方金额\") AS \"差旅费总额\" FROM \"凭证分录分析\" WHERE \"科目名称\" = '销售费用-差旅费' AND \"年份\" = 2024 AND \"月份\" IN (1, 2, 3)",
+            "options": []
+          },
+          "elapsed_ms": 2657
+        }
+      ]
+    },
+    {
+      "id": "D019",
+      "question": "2024年第一季度业务招待费是多少",
+      "expect": "answer",
+      "note": "季度+科目 · 优先级高",
+      "truth_rows": 1,
+      "truth_note": "",
+      "verdicts": {
+        "empty": 3
+      },
+      "stable": true,
+      "attempts": [
+        {
+          "verdict": "empty",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_account_balance",
+            "code": null,
+            "diagnosis": "database_execution/warning",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_account_balance:period_debit"
+            ],
+            "row_count": 1,
+            "all_null": true,
+            "s2sql": "SELECT SUM(\"本期借方发生额\") AS \"_业务招待费_\" FROM \"科目余额分析\" WHERE \"科目名称\" = '销售费用-业务招待费' AND \"年份\" = 2024 AND \"月份\" IN (1, 2, 3)",
+            "options": []
+          },
+          "elapsed_ms": 3689
+        },
+        {
+          "verdict": "empty",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_account_balance",
+            "code": null,
+            "diagnosis": "database_execution/warning",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_account_balance:period_debit"
+            ],
+            "row_count": 1,
+            "all_null": true,
+            "s2sql": "SELECT SUM(\"本期借方发生额\") AS \"_业务招待费_\" FROM \"科目余额分析\" WHERE \"科目名称\" = '销售费用-业务招待费' AND \"年份\" = 2024 AND \"月份\" IN (1, 2, 3)",
+            "options": []
+          },
+          "elapsed_ms": 1981
+        },
+        {
+          "verdict": "empty",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_account_balance",
+            "code": null,
+            "diagnosis": "database_execution/warning",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_account_balance:period_debit"
+            ],
+            "row_count": 1,
+            "all_null": true,
+            "s2sql": "SELECT SUM(\"本期借方发生额\") AS \"_业务招待费_\" FROM \"科目余额分析\" WHERE \"科目名称\" = '销售费用-业务招待费' AND \"年份\" = 2024 AND \"月份\" IN (1, 2, 3)",
+            "options": []
+          },
+          "elapsed_ms": 1999
+        }
+      ]
+    },
+    {
+      "id": "D020",
+      "question": "2024年销售费用-差旅费总额是多少",
+      "expect": "answer",
+      "note": "年份+科目 · 优先级中",
+      "truth_rows": 1,
+      "truth_note": "",
+      "verdicts": {
+        "correct": 3
+      },
+      "stable": true,
+      "attempts": [
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_voucher_entry",
+            "code": null,
+            "diagnosis": "success/info",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_voucher_entry:debit_amount"
+            ],
+            "row_count": 1,
+            "all_null": false,
+            "s2sql": "SELECT SUM(\"借方金额\") AS \"_总额_\" FROM \"凭证分录分析\" WHERE \"科目名称\" = '销售费用-差旅费' AND \"年份\" = 2024",
+            "options": []
+          },
+          "elapsed_ms": 4351
+        },
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_voucher_entry",
+            "code": null,
+            "diagnosis": "success/info",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_voucher_entry:debit_amount"
+            ],
+            "row_count": 1,
+            "all_null": false,
+            "s2sql": "SELECT SUM(\"借方金额\") AS \"_销售费用_差旅费_总额_\" FROM \"凭证分录分析\" WHERE \"科目名称\" = '销售费用-差旅费' AND \"年份\" = 2024",
+            "options": []
+          },
+          "elapsed_ms": 2518
+        },
+        {
+          "verdict": "correct",
+          "fingerprint": {
+            "state": "COMPLETED",
+            "dataset_id": "dataset:topic:model:knowflow_analytics:fact_voucher_entry",
+            "code": null,
+            "diagnosis": "success/info",
+            "columns": [
+              "metric:field:knowflow_analytics:fact_voucher_entry:debit_amount"
+            ],
+            "row_count": 1,
+            "all_null": false,
+            "s2sql": "SELECT SUM(\"借方金额\") AS \"_销售费用_差旅费总额_\" FROM \"凭证分录分析\" WHERE \"科目名称\" = '销售费用-差旅费' AND \"年份\" = 2024",
+            "options": []
+          },
+          "elapsed_ms": 2217
+        }
+      ]
+    }
+  ]
+}

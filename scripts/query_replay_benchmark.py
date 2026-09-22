@@ -111,6 +111,17 @@ def _texts(rows: tuple[tuple[Any, ...], ...]) -> list[str]:
     return sorted(out)
 
 
+def _blank(rows: tuple[tuple[Any, ...], ...]) -> bool:
+    """「没有数据」的两种长相是同一件事。
+
+    MySQL 里 `SUM(x) WHERE 无匹配` 给**一行 NULL**，而 `SELECT 列 WHERE 无匹配` 给
+    **零行**。两者都是"这个条件下没有记录"，用户看到的也是同一句话。按行数硬比会把
+    它们判成不同（实测 D013 因此被记成 `wrong`，而系统其实诚实地答了"没有数据"）。
+    """
+
+    return not rows or all(cell is None for row in rows for cell in row)
+
+
 def _matches_truth(actual: tuple[tuple[Any, ...], ...], truth: tuple[tuple[Any, ...], ...]) -> bool:
     """行数相同，且真值的每个数字都能在答案里找到。
 
@@ -120,6 +131,8 @@ def _matches_truth(actual: tuple[tuple[Any, ...], ...], truth: tuple[tuple[Any, 
     无关数字」，那是已知的良性差异（CLAUDE.md 2026-09-05：多投影一列绝对值，
     占比数字逐位相同），远不如错数字重要。
     """
+    if _blank(actual) or _blank(truth):
+        return _blank(actual) and _blank(truth)
     if len(actual) != len(truth):
         return False
     got = _numbers(actual)
@@ -159,16 +172,38 @@ def _classify(dump: dict[str, Any], truth: tuple[tuple[Any, ...], ...] | None) -
     if state != "COMPLETED":
         return "refuse"
     rows = tuple(tuple(r) for r in ((dump.get("data") or {}).get("rows") or []))
-    blank = not rows or all(cell is None for row in rows for cell in row)
+    blank = _blank(rows)
     if truth is None:
         return "empty" if blank else "answered"
-    truth_blank = not truth or all(cell is None for row in truth for cell in row)
-    if blank and not truth_blank:
+    truth_blank = _blank(truth)
+    if truth_blank:
+        # 真值本身没有数据（demo 库缺这个期间/科目）。这道题考的是**零行诚实性**：
+        # 必须说"没有数据"，不能给 0 也不能编一个数字。
+        return "correct" if blank else "wrong"
+    if blank:
         # 真值有数据、答案是 0 行或全 NULL。界面会说「没有返回数据」，用户读成
         # 「我业务上没有这件事」——一句关于他自己业务的假话。与「数字算错了」
         # 是两种失败，分开计。
         return "empty"
     return "correct" if _matches_truth(rows, truth) else "wrong"
+
+
+def _resolve_version(app, suite: dict[str, Any]) -> dict[str, Any]:
+    """`etag` 与 `schema_hash` 现场从目录读，不写进题集。
+
+    写死它们等于每次有人碰一下 Revision，整套基准就跑不了——实测 20 道全以
+    `RevisionConflictError: revision etag changed` 报错、0ms、看起来像系统坏了。
+    题集该描述"问什么、正确答案是什么"，版本是运行时事实。
+    """
+
+    if suite.get("entry") == "release":
+        return suite
+    revision = app.catalog.get_revision(suite["revision_id"])
+    return {
+        **suite,
+        "etag": revision.etag,
+        "schema_hash": revision.schema_snapshot_hash,
+    }
 
 
 def _run_once(app, suite: dict[str, Any], question: str) -> tuple[dict[str, Any], float]:
@@ -376,6 +411,9 @@ def main() -> None:
 
     print(f"跑的代码: {service_module.__file__}")
     app = _load_application()
+    suite = _resolve_version(app, suite)
+    if suite.get("entry") != "release":
+        print(f"Revision {suite['revision_id']} etag={suite['etag']}")
     results = [_run_case(app, suite, case, args.runs) for case in cases]
     payload = {
         "suite": suite.get("name", args.suite),

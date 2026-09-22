@@ -1319,6 +1319,17 @@ export interface AnalyticsDictionaryPreview {
   candidates: AnalyticsDictionaryCandidate[];
 }
 
+/**
+ * 应用字典采集的返回：**两层**——审计用的 preview 与写好的 revision。
+ *
+ * 此前这里按 `AnalyticsRevision` 接，于是 `acceptRevision` 拿到的是这个壳，
+ * `next.id` 为 undefined、`semantic_catalog` 不存在，整棵树抛错卸载——点「应用」白屏。
+ */
+export interface AnalyticsDictionaryApplyResult {
+  preview: AnalyticsDictionaryPreview;
+  revision: AnalyticsRevision;
+}
+
 export interface AnalyticsDictionaryDecision {
   candidate_id: string;
   accept: boolean;

@@ -3,6 +3,7 @@ import type {
   AnalyticsCatalogDimension,
   AnalyticsCatalogHierarchy,
   AnalyticsDictionaryDecision,
+  AnalyticsDictionaryApplyResult,
   AnalyticsDimensionValue,
   AnalyticsEvaluationReport,
   AnalyticsFactCheckEntry,
@@ -420,7 +421,7 @@ export const applyDictionaryPreview = (
   previewId: string,
   decisions: AnalyticsDictionaryDecision[],
 ) =>
-  request<AnalyticsRevision>(
+  request<AnalyticsDictionaryApplyResult>(
     `${revisionPath(projectId, revisionId)}/dimension-dictionary/previews/${previewId}/apply`,
     { method: 'POST', projectId, body: { ...version, confirmation: 'apply', decisions } },
   );

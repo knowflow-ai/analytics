@@ -83,7 +83,10 @@ export function DimensionDictionarySection({
         }),
       ),
     onSuccess: (next) => {
-      acceptRevision(next);
+      // 服务端返回的是 {preview, revision} 两层，只有 revision 能进工作台状态。
+      // 直接把整个壳喂进去时 next.id 是 undefined、semantic_catalog 不存在，
+      // 整棵树抛错卸载——点「应用」白屏。
+      acceptRevision(next.revision);
       setPreview(null);
       toast.success('维度值字典已应用。');
     },

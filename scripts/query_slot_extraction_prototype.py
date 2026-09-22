@@ -32,7 +32,8 @@ from knowflow_analytics.contracts import (
 )
 from knowflow_analytics.query.contracts import StructuredQueryRequest
 
-with open("/tmp/bench/query_suites/acct.json", encoding="utf-8") as _fh:
+_SUITE_PATH = sys.argv[1] if len(sys.argv) > 1 else "/tmp/bench/query_suites/acct.json"
+with open(_SUITE_PATH, encoding="utf-8") as _fh:
     SUITE = json.load(_fh)
 PID = SUITE["project_id"]
 LOW_CARD = 25  # 取值不超过这么多就整个内联——它顺带教会模型格式
@@ -212,7 +213,9 @@ RULES = """你把用户的问题填成槽位。**不要写 SQL。**
 - 问题问"多少/金额"选金额类指标，问"几张/几笔/多少个"选数量类指标。
 - 业务词典说了某个说法指哪些成员，就按它填——那是建模者明确声明的。
 - 只按问题**明说的**条件填 filters，不要自己加时间或其它限制。
-- 需要占比、环比、同比、排名、前 N、集合运算、或其它槽位表达不了的形态时，
+- shape=detail 表示列明细行（"列出/明细/清单/有哪些"），此时 metric 可以不填；
+  shape=aggregate（默认）表示算合计。
+- 需要占比、环比、同比、排名、字符串拼接、或其它槽位表达不了的形态时，
   把 unsupported 填成一句话说明，其余留空。"""
 
 HIER = hierarchy_trees()
@@ -223,8 +226,12 @@ print(f"目录 {len(CATALOG)} 字，规则 {len(RULES)} 字")
 SLOT_SCHEMA = {
     "type": "object",
     "properties": {
-        "scope": {"type": "string"},
-        "metric": {"type": "string"},
+        # 允许 null：模型判断"槽位表达不了"时，scope/metric 本来就没有值。
+        # 标成 required string 会让它**正确的拒答被网关拒掉**——实测预警题集里
+        # 5 道（逗号拼接字符串聚合、维度不存在、以及一句根本不是查询的话）
+        # 都是这么丢掉的，看起来像模型出错，其实是契约不允许它说"不行"。
+        "scope": {"type": ["string", "null"]},
+        "metric": {"type": ["string", "null"]},
         "filters": {
             "type": "array",
             "items": {
@@ -238,9 +245,13 @@ SLOT_SCHEMA = {
             },
         },
         "group_by": {"type": "array", "items": {"type": "string"}},
+        "shape": {"type": ["string", "null"], "enum": ["aggregate", "detail", None]},
         "unsupported": {"type": ["string", "null"]},
     },
-    "required": ["scope", "metric", "filters"],
+    # 一个 required 都不留：模型说"表达不了"时任何字段都可能没有值，
+    # 把它们标成必填会让**正确的拒答被网关拒掉**（实测预警题集丢了 5~7 道）。
+    # 合法性由组装层判，不由 JSON schema 判。
+    "required": [],
 }
 
 OPS = {"eq": FilterOperator.EQ, "between": FilterOperator.BETWEEN, "in": FilterOperator.IN}
@@ -304,31 +315,44 @@ def to_query(slots: dict) -> SemanticQuery:
             fs.append(QueryFilter(dimension_id=did, operator=OPS[op], value=val))
         else:
             raise SlotRejected(f"不支持的算子 {op!r}")
+    detail = (slots.get("shape") or "aggregate") == "detail"
+    metric = slots.get("metric")
     return SemanticQuery(
         dataset_id=d.id,
-        query_type=SemanticQueryType.AGGREGATE,
-        metric_ids=(metric_id(slots["metric"]),),
+        query_type=SemanticQueryType.DETAIL if detail else SemanticQueryType.AGGREGATE,
+        metric_ids=(metric_id(metric),) if metric else (),
         dimension_ids=tuple(dim_id(n) for n in (slots.get("group_by") or [])),
         filters=tuple(fs),
     )
 
 
-ok = bad = unsup = exc = rej = 0
+ok = bad = unsup = exc = rej = slotted = 0
 for case in SUITE["cases"]:
     cid, q = case["id"], case["q"]
     try:
         slots = extract(q)
+        if slots.get("unsupported") or not slots.get("scope"):
+            reason = slots.get("unsupported") or "没有给出分析范围"
+            print(f"  {cid}  文本路（槽位表达不了）: {reason[:70]}")
+            unsup += 1
+            continue
         try:
             to_query(slots)
         except SlotRejected as first:
             print(f"  {cid}  （第一次被拒：{first}）")
             slots = extract(q, rejection=str(first))
         if slots.get("unsupported"):
-            print(f"  {cid}  unsupported: {slots['unsupported'][:60]}")
+            print(f"  {cid}  文本路（槽位表达不了）: {slots['unsupported'][:70]}")
             unsup += 1
             continue
+        query = to_query(slots)
+        slotted += 1
+        if not case.get("truth_sql"):
+            # 无真值题集：只量分流，答案对不对量不了
+            print(f"  {cid}  槽位路 ✓  {json.dumps(slots, ensure_ascii=False)[:120]}")
+            continue
         resp = svc.query_structured(
-            StructuredQueryRequest(project_id=PID, semantic_query=to_query(slots)),
+            StructuredQueryRequest(project_id=PID, semantic_query=query),
             actor_id=SUITE["actor_id"],
         )
         rows = tuple(
@@ -352,8 +376,11 @@ for case in SUITE["cases"]:
     except SlotRejected as e:
         rej += 1
         print(f"  {cid}  refuse(槽位越界)   {e}")
-        print(f"        槽位={json.dumps(slots, ensure_ascii=False)[:190]}")
     except Exception as e:
         exc += 1
         print(f"  {cid}  **EXC** {type(e).__name__}: {str(e)[:110]}")
-print(f"\n抽取原型: 对 {ok} / 错 {bad} / 拒(槽位越界) {rej} / 自称表达不了 {unsup} / 异常 {exc}")
+
+total = len(SUITE["cases"])
+print(f"\n分流: 槽位路 {slotted}/{total} · 文本路 {unsup} · 拒 {rej} · 异常 {exc}")
+if ok or bad:
+    print(f"槽位路里带真值的: 对 {ok} / 错 {bad}")

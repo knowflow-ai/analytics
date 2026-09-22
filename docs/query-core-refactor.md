@@ -522,6 +522,35 @@ demo_cafe 不在这台机器上（只有「财务1」「etst」「zxwei」三个
 - **要有 `shape: aggregate|detail` 槽位**：`SemanticQueryType.DETAIL` 本来就支持明细查询，
   原型把它写死成 AGGREGATE，于是"列出账号、日期、触发原因"这类被误判成"槽位表达不了"。
 
+### 已落地：`hierarchies` 的树收进 release（2026-09-21）
+
+三个"声明了但不读"里最具体的那个已经做完。
+
+**契约**：`DimensionValueSpec.parent_value`——同一维度里这个取值的上级取值。
+挂在取值上而不是另开一张边表，因为树就是"带父指针的取值"，而 `dimension_values`
+已经有完整的发布→编译→release 链路，复用它不新增概念。
+
+**发布期**：`DimensionValueProfiler.resolve_hierarchy_parents()` 按声明的
+`HierarchySpec` 读一次父子配对，`_with_hierarchy_parents()` 把它落进取值。
+读不到不阻断发布——层级是锦上添花。
+
+**最容易被后人优化掉的那条判据**：只有**能唯一标识节点**的维度才配有"上级取值"。
+层级声明在模型上，但同模型的普通属性列套上去只会得到连接的副产物——子行
+`is_leaf=1`、父行 `is_leaf=0`，于是产出「1 的上级是 0」，照它展开会让
+`是否末级科目=0` 把 1 也算进去，**比不展开更糟**。
+
+判据不能是"映射一不一致"（那条实测不够：所有行都是 `(1, 0)`，完全一致却毫无意义），
+必须是"这个取值能不能唯一标识一行"——行数多于去重后的取值数就丢弃。实测在真实
+会计目录上正确留下 `科目编码` / `科目ID` / `科目名称`，丢掉 `是否末级科目` 与
+`上级科目编码`。合同由 `tests/unit/test_hierarchy_parents_are_published.py` 固定。
+
+**消费**：原型优先读 release 的 `parent_value`，读不到才回落读一次客户库——升级期
+两种 release 并存。两条路产出的科目树**逐字一致**（验过）。带 `parent_value` 的
+release 跑完整 20 题：两遍都是 **18/18 对、零错答**（各有 2 次网关超时，每次打中
+不同的题，属基础设施抖动）。
+
+**还剩两个"声明了但不读"**：Term → metric/dimension 链接、`display_name` 进提示词。
+
 ### 表达力边界：必须是两条路
 
 槽位表达不了 CTE、窗口函数、`RATIO_*` 期间比、`ENTITY_SHARE`/`RANK_OF`、集合运算——

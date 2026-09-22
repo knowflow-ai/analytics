@@ -649,9 +649,22 @@ class DimensionValueSpec(FrozenModel):
     display_name: str = Field(min_length=1, max_length=256)
     aliases: tuple[str, ...] = Field(default=(), max_length=100)
     enabled: bool = True
+    # 同一维度里这个取值的上级取值。只有该维度参与自引用层级（`HierarchySpec`
+    # 声明了 上级列 → 主键列，两列都在同一个模型上）时才有值。
+    #
+    # **为什么挂在取值上而不是另开一张边表**：树就是"带父指针的取值"，而
+    # `dimension_values` 已经有完整的发布→编译→release 链路，复用它不新增概念。
+    # 问数期需要的也正是这个形状——用户说「应收账款」（一个父科目）时，要把它
+    # 和它的下级一起算；父指针让这一步是确定性的查表，不必在运行时读客户库。
+    #
+    # 不填它的代价实测过：明细通常只记在末级上，按父科目精确筛返回 0 行，
+    # 界面说"没有返回数据"，而用户读到的是一句关于他自己业务的假话。
+    parent_value: str | int | float | bool | None = None
 
     @model_validator(mode="after")
     def aliases_are_bounded_and_unambiguous(self) -> DimensionValueSpec:
+        if self.parent_value is not None and self.parent_value == self.value:
+            raise ValueError("dimension value cannot be its own parent")
         if not self.display_name.strip():
             raise ValueError("dimension value display name cannot be blank")
         normalized: set[str] = set()

@@ -68,15 +68,50 @@ def _walk(lines, name_of, children, codes, *, depth):
 def hierarchy_trees() -> dict[str, str]:
     """按声明的 `hierarchies` 把层级维度渲染成一棵树。
 
-    **为什么要读一次库**：`hierarchies` 只声明了层级用哪两个字段
-    （`parent_code` → `account_code`），树本身没有收进 release——
-    `dimension_values` 是三份互不配对的取值列表。所以消费这条声明必须
-    按它去取一次父子配对。这里在**目录渲染时**读一次（不是每次查询），
-    与发布期采样取值同一性质。产品里该由发布期把树一起收进 release。
+    **优先读 release 里的 `DimensionValueSpec.parent_value`**（2026-09-21 起由发布期
+    写入），读不到才回落到按声明去客户库取一次父子配对——升级期两种 release 并存。
 
-    不读它的代价实测得到：D008 问「应收账款」（父科目），凭证只记在
+    不消费这条声明的代价实测得到：D008 问「应收账款」（父科目），凭证只记在
     `应收账款-甲公司` 上，按父科目精确筛返回 0 行，界面说"没有数据"。
     """
+    published = _trees_from_release()
+    if published:
+        print(f"层级树来自 release（{len(published)} 个维度）")
+        return published
+    print("层级树：release 里没有 parent_value，回落读一次客户库")
+    return _trees_from_database()
+
+
+def _trees_from_release() -> dict[str, str]:
+    by_dim: dict[str, dict[object, object]] = {}
+    label: dict[str, str] = {}
+    for v in r.dimension_values:
+        if v.parent_value is None:
+            continue
+        by_dim.setdefault(v.dimension_id, {})[v.value] = v.parent_value
+        label[v.dimension_id] = dims[v.dimension_id].name if v.dimension_id in dims else ""
+    out = {}
+    for dimension_id, pairs in by_dim.items():
+        # 树里要有该维度的**全部已发布取值**，不只是有父子关系的那些。
+        # 只放有父指针的会让「库存现金」这种没有上下级的科目整个消失，
+        # 而模型要照这棵树挑名字。
+        name_of = {v.value: str(v.value) for v in values_by_dim.get(dimension_id, [])}
+        for value in pairs:
+            name_of.setdefault(value, str(value))
+        for parent in pairs.values():
+            name_of.setdefault(parent, str(parent))
+        children: dict[object, list[object]] = {}
+        for child, parent in pairs.items():
+            children.setdefault(parent, []).append(child)
+        roots = [value for value in name_of if value not in pairs]
+        lines: list[str] = []
+        _walk(lines, name_of, children, roots, depth=0)
+        if lines and label.get(dimension_id):
+            out[label[dimension_id]] = "\n".join(lines)
+    return out
+
+
+def _trees_from_database() -> dict[str, str]:
     out = {}
     for h in r.hierarchies:
         levels = [dims.get(i) for i in h.levels]
@@ -341,65 +376,73 @@ def to_query(slots: dict) -> SemanticQuery:
     )
 
 
-ok = bad = unsup = exc = rej = slotted = 0
-for case in SUITE["cases"]:
-    cid, q = case["id"], case["q"]
-    try:
-        slots = extract(q)
-        if slots.get("unsupported") or not slots.get("scope"):
-            reason = slots.get("unsupported") or "没有给出分析范围"
-            print(f"  {cid}  文本路（槽位表达不了）: {reason[:70]}")
-            unsup += 1
-            continue
+def run_suite():
+    ok = bad = unsup = exc = rej = slotted = 0
+    for case in SUITE["cases"]:
+        cid, q = case["id"], case["q"]
         try:
-            to_query(slots)
-        except SlotRejected as first:
-            print(f"  {cid}  （第一次被拒：{first}）")
-            slots = extract(q, rejection=str(first))
-        if slots.get("unsupported"):
-            print(f"  {cid}  文本路（槽位表达不了）: {slots['unsupported'][:70]}")
-            unsup += 1
-            continue
-        query = to_query(slots)
-        slotted += 1
-        if not case.get("truth_sql"):
-            # 无真值题集：只量分流，答案对不对量不了
-            print(f"  {cid}  槽位路 ✓  {json.dumps(slots, ensure_ascii=False)[:120]}")
-            continue
-        resp = svc.query_structured(
-            StructuredQueryRequest(
-                project_id=PID,
-                semantic_query=query,
-                allowed_element_ids=None if VISIBLE is None else tuple(sorted(VISIBLE)),
-            ),
-            actor_id=SUITE["actor_id"],
-        )
-        rows = tuple(
-            tuple(x) for x in ((resp.model_dump(mode="json").get("data") or {}).get("rows") or [])
-        )
-        with binding.engine.connect() as c:
-            truth = tuple(tuple(x) for x in c.execute(text(case["truth_sql"])).fetchall())
-        if _blank(rows) and _blank(truth):
-            v, extra = "correct(都空)", ""
-        elif _blank(rows) != _blank(truth):
-            v, extra = "**空/非空不一致**", f"答={_numbers(rows)} 真={_numbers(truth)}"
-        else:
-            g, w = sorted(_numbers(rows)), sorted(_numbers(truth))
-            same = len(g) == len(w) and all(abs(a - b) <= 0.01 for a, b in zip(g, w, strict=True))
-            v, extra = ("correct", "") if same else ("**wrong**", f"答={g} 真={w}")
-        ok += v.startswith("correct")
-        bad += not v.startswith("correct")
-        print(f"  {cid}  {v:<18} {extra}")
-        if not v.startswith("correct"):
-            print(f"        槽位={json.dumps(slots, ensure_ascii=False)[:190]}")
-    except SlotRejected as e:
-        rej += 1
-        print(f"  {cid}  refuse(槽位越界)   {e}")
-    except Exception as e:
-        exc += 1
-        print(f"  {cid}  **EXC** {type(e).__name__}: {str(e)[:110]}")
+            slots = extract(q)
+            if slots.get("unsupported") or not slots.get("scope"):
+                reason = slots.get("unsupported") or "没有给出分析范围"
+                print(f"  {cid}  文本路（槽位表达不了）: {reason[:70]}")
+                unsup += 1
+                continue
+            try:
+                to_query(slots)
+            except SlotRejected as first:
+                print(f"  {cid}  （第一次被拒：{first}）")
+                slots = extract(q, rejection=str(first))
+            if slots.get("unsupported"):
+                print(f"  {cid}  文本路（槽位表达不了）: {slots['unsupported'][:70]}")
+                unsup += 1
+                continue
+            query = to_query(slots)
+            slotted += 1
+            if not case.get("truth_sql"):
+                # 无真值题集：只量分流，答案对不对量不了
+                print(f"  {cid}  槽位路 ✓  {json.dumps(slots, ensure_ascii=False)[:120]}")
+                continue
+            resp = svc.query_structured(
+                StructuredQueryRequest(
+                    project_id=PID,
+                    semantic_query=query,
+                    allowed_element_ids=None if VISIBLE is None else tuple(sorted(VISIBLE)),
+                ),
+                actor_id=SUITE["actor_id"],
+            )
+            rows = tuple(
+                tuple(x)
+                for x in ((resp.model_dump(mode="json").get("data") or {}).get("rows") or [])
+            )
+            with binding.engine.connect() as c:
+                truth = tuple(tuple(x) for x in c.execute(text(case["truth_sql"])).fetchall())
+            if _blank(rows) and _blank(truth):
+                v, extra = "correct(都空)", ""
+            elif _blank(rows) != _blank(truth):
+                v, extra = "**空/非空不一致**", f"答={_numbers(rows)} 真={_numbers(truth)}"
+            else:
+                g, w = sorted(_numbers(rows)), sorted(_numbers(truth))
+                same = len(g) == len(w) and all(
+                    abs(a - b) <= 0.01 for a, b in zip(g, w, strict=True)
+                )
+                v, extra = ("correct", "") if same else ("**wrong**", f"答={g} 真={w}")
+            ok += v.startswith("correct")
+            bad += not v.startswith("correct")
+            print(f"  {cid}  {v:<18} {extra}")
+            if not v.startswith("correct"):
+                print(f"        槽位={json.dumps(slots, ensure_ascii=False)[:190]}")
+        except SlotRejected as e:
+            rej += 1
+            print(f"  {cid}  refuse(槽位越界)   {e}")
+        except Exception as e:
+            exc += 1
+            print(f"  {cid}  **EXC** {type(e).__name__}: {str(e)[:110]}")
 
-total = len(SUITE["cases"])
-print(f"\n分流: 槽位路 {slotted}/{total} · 文本路 {unsup} · 拒 {rej} · 异常 {exc}")
-if ok or bad:
-    print(f"槽位路里带真值的: 对 {ok} / 错 {bad}")
+    total = len(SUITE["cases"])
+    print(f"\n分流: 槽位路 {slotted}/{total} · 文本路 {unsup} · 拒 {rej} · 异常 {exc}")
+    if ok or bad:
+        print(f"槽位路里带真值的: 对 {ok} / 错 {bad}")
+
+
+if __name__ == "__main__":
+    run_suite()

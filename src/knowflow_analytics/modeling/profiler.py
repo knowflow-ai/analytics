@@ -165,6 +165,121 @@ class DimensionValueProfiler:
             warnings=tuple(warnings),
         )
 
+    def resolve_hierarchy_parents(
+        self,
+        *,
+        semantic_spec: SemanticRelease,
+        dimension_ids: tuple[str, ...],
+    ) -> dict[str, dict[object, object]]:
+        """把已声明层级的父子配对读出来，按「取值 → 上级取值」返回。
+
+        `HierarchySpec` 只声明了层级**用哪两列**（上级列 → 主键列），树本身没有
+        地方存：`dimension_values` 是一维的取值表，互不配对。问数期因此拿不到
+        "应收账款有哪些下级"，按父科目精确筛返回 0 行——而明细通常只记在末级上，
+        界面把它渲染成"没有返回数据"，用户读到一句关于自己业务的假话。
+
+        这里在**发布期**读一次，结果落进 `DimensionValueSpec.parent_value`，
+        运行时就是确定性查表，不再碰客户库。
+
+        只处理自引用层级：两级都在同一个模型上。跨模型的层级（省表→市表）是另一种
+        形状，它的父子关系已经由 `RelationSpec` 表达，不需要也不应该塞进取值里。
+        """
+
+        models = {item.id: item for item in semantic_spec.models}
+        fields = {item.id: item for item in semantic_spec.fields}
+        dimensions = {item.id: item for item in semantic_spec.dimensions}
+        wanted = set(dimension_ids)
+        out: dict[str, dict[object, object]] = {}
+
+        for hierarchy in semantic_spec.hierarchies:
+            if len(hierarchy.levels) != 2:
+                continue
+            parent_dim, key_dim = (dimensions.get(i) for i in hierarchy.levels)
+            model = models.get(hierarchy.model_id)
+            if parent_dim is None or key_dim is None or model is None:
+                continue
+            parent_field, key_field = fields.get(parent_dim.field_id), fields.get(key_dim.field_id)
+            if parent_field is None or key_field is None:
+                continue
+            # 自引用才有"同一维度里的上级取值"这回事
+            if {parent_field.model_id, key_field.model_id} != {model.id}:
+                continue
+
+            for dimension_id in sorted(wanted):
+                labelled = dimensions.get(dimension_id)
+                if labelled is None or labelled.model_id != model.id:
+                    continue
+                label_field = fields.get(labelled.field_id)
+                if label_field is None:
+                    continue
+                pairs = self._hierarchy_pairs(
+                    semantic_spec=semantic_spec,
+                    model=model,
+                    label_column=label_field.column,
+                    key_column=key_field.column,
+                    parent_column=parent_field.column,
+                )
+                if pairs:
+                    out.setdefault(dimension_id, {}).update(pairs)
+        return out
+
+    def _hierarchy_pairs(
+        self,
+        *,
+        semantic_spec: SemanticRelease,
+        model: object,
+        label_column: str,
+        key_column: str,
+        parent_column: str,
+    ) -> dict[object, object]:
+        source_sql, source_parameters = compile_governed_model_source(
+            model,
+            semantic_spec,
+            parameter_prefix="hierarchy_filter",
+        )
+        child, parent = _quote_identifier(label_column), _quote_identifier(label_column)
+        key, up = _quote_identifier(key_column), _quote_identifier(parent_column)
+        query = text(
+            to_dialect_sql(
+                f"""
+            SELECT c.{child} AS child_value, p.{parent} AS parent_value
+            FROM ({source_sql}) AS c
+            JOIN ({source_sql}) AS p ON c.{up} = p.{key}
+            WHERE c.{child} IS NOT NULL AND p.{parent} IS NOT NULL
+              AND c.{child} <> p.{parent}
+            LIMIT :pair_rows
+            """,
+                self._dialect,
+            )
+        )
+        with self._engine.connect() as connection, connection.begin():
+            for statement in self._dialect.read_only_session_sql(
+                statement_timeout_ms=self._statement_timeout_ms, lock_timeout_ms=1_000
+            ):
+                connection.exec_driver_sql(statement)
+            rows = connection.execute(
+                query,
+                {**source_parameters, "pair_rows": self._max_values + 1},
+            ).all()
+        # **只有能唯一标识节点的维度才有"上级取值"这回事。**
+        # 层级声明在模型上，但同模型的其它列（`是否末级科目` 这种布尔属性）套上去
+        # 会得到连接的副产物：子行 is_leaf=1、父行 is_leaf=0，于是产出「1 的上级是 0」。
+        # 照它展开会让 `是否末级科目=0` 把 1 也算进去——比不展开更糟。
+        #
+        # 判据是数据给的，不靠字段命名：同一个取值映射到多个不同上级，就说明它不是
+        # 节点标识，整个维度丢弃。实测会正确留下 科目名称 / 科目编码 / 科目ID，
+        # 丢掉 是否末级科目 与 上级科目编码。
+        pairs: dict[object, object] = {}
+        for child_value, up_value in rows:
+            pairs[_normalise_value(child_value)] = _normalise_value(up_value)
+        # 判据是"这个取值能不能唯一标识一行"，不是"映射一不一致"。
+        # `是否末级科目` 的每一行都是 (子 1, 父 0)，映射完全一致却毫无意义——
+        # 行数多于去重后的取值数，说明一个取值对应很多行，它不是节点标识。
+        # 实测正确留下 科目编码 / 科目ID / 科目名称，丢掉 是否末级科目 与 上级科目编码。
+        if len(rows) != len(pairs):
+            return {}
+        return pairs
+
     def _profile_dimension(
         self,
         *,

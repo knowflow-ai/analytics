@@ -533,6 +533,40 @@ _DISLIKE_REASON_LABELS = {
 }
 
 
+def _with_hierarchy_parents(
+    values,
+    *,
+    profiler,
+    semantic_spec,
+    dimension_ids: tuple[str, ...],
+):
+    """把已声明层级的父子配对落进取值上的 ``parent_value``。
+
+    `HierarchySpec` 只声明了层级用哪两列，树本身此前没有地方存，问数期因此拿不到
+    "这个父科目有哪些下级"。明细通常只记在末级上，按父科目精确筛返回 0 行，界面
+    渲染成"没有返回数据"——一句关于用户自己业务的假话（实机：问「甲公司的应收账款」
+    落到父科目 `应收账款`，而分录记在 `应收账款-甲公司` 上）。
+
+    读一次库；读不到就原样返回——层级是锦上添花，不该让整次发布失败。
+    """
+
+    try:
+        parents = profiler.resolve_hierarchy_parents(
+            semantic_spec=semantic_spec,
+            dimension_ids=dimension_ids,
+        )
+    except Exception:  # noqa: BLE001 - 层级读不到不阻断发布
+        return values
+    if not parents:
+        return values
+    return tuple(
+        item.model_copy(update={"parent_value": parents[item.dimension_id][item.value]})
+        if item.dimension_id in parents and item.value in parents[item.dimension_id]
+        else item
+        for item in values
+    )
+
+
 class AnalyticsApplication:
     """Authoritative modeling/query use cases shared by every API client.
 
@@ -2813,6 +2847,12 @@ class AnalyticsApplication:
         values = merge_complete_profiled_dimension_values(
             current_values=updated.semantic_catalog.dimension_values,
             profile=profile,
+            dimension_ids=targets,
+        )
+        values = _with_hierarchy_parents(
+            values,
+            profiler=semantic_profiler,
+            semantic_spec=updated.semantic_spec,
             dimension_ids=targets,
         )
         if values == updated.semantic_catalog.dimension_values:

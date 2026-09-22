@@ -791,11 +791,35 @@ class LlmS2SqlParser:
             for item in mapping.matches
             if item.method is not MatchMethod.ALL_FIELD and _nameable(item.dimension_id)
         ]
-        values = [
-            {
+        # 业务名与原始值都给。**只给原始值等于把编码摆给模型看**：`账款方向` 存的是
+        # 1/2，业务含义「应收/应付」写在取值的 ``display_name`` 与别名里，模型看不到
+        # 就只能去找别的、字面像的维度（实机：用 `报表项目='应收账款'` 代替方向）。
+        # 两者相同时不重复——绝大多数取值本来就是业务名。
+        business_value_names: dict[tuple[str, object], tuple[str, tuple[str, ...]]] = {
+            (item.dimension_id, item.value): (item.display_name, ())
+            for item in release.dimension_values
+            if item.enabled
+        }
+
+        def _value_entry(item) -> dict[str, object]:
+            entry: dict[str, object] = {
                 "field_name": symbols.canonical_name(item.dimension_id),
                 "raw_value": item.raw_value,
             }
+            declared = business_value_names.get((item.dimension_id, item.raw_value))
+            if declared is None:
+                return entry
+            display, _aliases = declared
+            if display and display != str(item.raw_value):
+                entry["business_name"] = display
+            # **别名不进这里。** 第一版把取值别名无条件加了进来，以为是空操作——
+            # 冻结基线上 2 处回归（D004 correct→empty、D018 correct→refuse），
+            # 而基线自身噪声是 0/20。别名是新增的模型可见文本，不是"换个写法"。
+            # 用户说的别名本来就由召回负责命中，模型不需要再看一遍。
+            return entry
+
+        values = [
+            _value_entry(item)
             for item in mapping.matches
             if item.element_type is SemanticElementType.DIMENSION_VALUE
             and _nameable(item.dimension_id)

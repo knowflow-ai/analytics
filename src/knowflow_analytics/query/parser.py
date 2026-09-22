@@ -864,16 +864,46 @@ class LlmS2SqlParser:
             if count_metric is not None and count_metric.aggregation is not None
             else None
         )
-        terms = [
-            {
+        # 建模者在业务词典里声明的「这个说法指哪些成员」也要给模型。
+        #
+        # 上游 `TermDescMapper` 只重映射术语的**描述文本**，直接的 term→成员 链接
+        # 被当作治理元数据、刻意不用——我们照抄了这条。但我们的产品**强制**用户填
+        # 这些链接（新写入的 Term 必须关联至少一个受治理 Metric 或 Dimension），
+        # 于是成了"用户填了、系统不读"。实测代价：问「2024年2月招待费」时
+        # 词典明明写着「业务招待费」→ 科目名称 + 借方金额，模型却一个科目条件都没写，
+        # 把当月全部借方加了起来。
+        #
+        # 这里给的是**声明**，不是合成的匹配证据——上游避免的是后者。
+        # 两道过滤照旧：不在本作用域的成员不给，权限看不到的不给。
+        def _term_targets(item) -> list[str]:
+            names = []
+            for element_id in (*item.metric_ids, *item.dimension_ids):
+                # 两道过滤缺一不可：`_nameable` 判"这个作用域的符号表叫得出它吗"
+                # （成员归属），`_visible` 判"这次请求的权限看得到它吗"。
+                # 符号表**不管权限**，只用前者就会把不该看的成员名摆给模型。
+                if not _visible(element_id) or not _nameable(element_id):
+                    continue
+                try:
+                    names.append(symbols.canonical_name(element_id))
+                except SemanticParsingError:
+                    continue
+            return list(dict.fromkeys(names))
+
+        terms = []
+        for item in release.terms:
+            if item.id not in mapped_term_ids:
+                continue
+            if item.dataset_ids and dataset.id not in item.dataset_ids:
+                continue
+            entry: dict[str, object] = {
                 "name": item.name,
                 "description": item.description,
                 "aliases": item.aliases,
             }
-            for item in release.terms
-            if item.id in mapped_term_ids
-            and (not item.dataset_ids or dataset.id in item.dataset_ids)
-        ]
+            targets = _term_targets(item)
+            if targets:
+                entry["means"] = targets
+            terms.append(entry)
         normalized_now = now or datetime.now(UTC)
         if normalized_now.tzinfo is None:
             normalized_now = normalized_now.replace(tzinfo=UTC)

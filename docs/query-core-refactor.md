@@ -583,6 +583,43 @@ correct 13 → 14 · wrong 2 → 1
 的题上做 A/B**。我原本以为这个改动在这个目录上量不出效果（以为 display_name 全等于
 raw_value），实测两处都被推翻——既有效果，第一版还有害。
 
+### 已落地：业务词典声明的成员进 prompt（2026-09-21）
+
+第三个、也是最后一个"声明了但不读"。
+
+`mapper.py` 明写直接的 term→成员 链接「are governance metadata and are **deliberately
+not used** as an online semantic shortcut」，理由是对齐上游 `TermDescMapper`——它只重
+映射术语的**描述文本**。我们照抄了这条，但我们自己的产品**强制**用户填这些链接
+（「新写入的 Term 必须关联至少一个受治理 Metric 或 Dimension」），于是成了
+"用户填了、系统不读"。
+
+现在 `domain_terms` 的每条带上 `means`：建模者声明这个说法指哪些成员。
+**给的是声明，不是合成的匹配证据**——上游避免的正是后者，这一条没有违背它。
+
+两道过滤缺一不可：`_nameable` 判"这个作用域的符号表叫得出它吗"（成员归属），
+`_visible` 判"这次请求的权限看得到它吗"。**符号表不管权限**，只用前者会把不该看的
+成员名摆给模型——这个会话里已经在 `_render_scope_catalog` 上踩过一次同样的漏。
+
+**A/B 累积结果（冻结基线 20 道，噪声地板 0/20）**
+
+```
+改善 6   D002 empty→correct · D005 wrong→empty · D008 wrong→empty
+         D010 empty→correct · D015 empty→correct · D019 empty→correct
+回归 0
+
+correct 13 → 17 · empty 4 → 2 · wrong 2 → 0 · clarify 1
+有数字真值的 14 道：8 → 12 对
+```
+
+**静默错答归零。** 这是取值业务名与术语链接两处改动的累积效果；前者单独贡献改善 2
+（D008、D010），术语链接的增量是另外 4 道（D002、D005、D015、D019）。
+
+剩下三道：D005 与 D008 是诚实的空（不再是错答），D012 需要派生的"期末余额"指标——
+那是建模缺口，不是流水线的事。
+
+合同由 `tests/unit/test_prompt_carries_declared_term_targets.py` 固定（3 条，含
+"键只在有内容时出现"与"权限与成员归属是两道过滤"）。
+
 ### 表达力边界：必须是两条路
 
 槽位表达不了 CTE、窗口函数、`RATIO_*` 期间比、`ENTITY_SHARE`/`RANK_OF`、集合运算——

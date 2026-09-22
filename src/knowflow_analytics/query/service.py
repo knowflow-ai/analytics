@@ -1424,6 +1424,12 @@ class AnalyticsQueryService:
                 if audit_complete and (result.row_count == 0 or empty_aggregate)
                 else ()
             )
+            # 答案里用到、但精确证据里根本没出现过的成员＝系统自己猜的。算一次，
+            # 两处用：离线记进问数反馈（建模者的词典缺口清单），以及报进本次回答的
+            # 诊断——拿到这个答案的人有权知道它建立在一次猜测上。
+            inferred_member_names = tuple(
+                _inferred_member_names(release, translated.audit_query, global_evidence)
+            )
             if clarified_choice is not None:
                 # 用户替系统补上了正解：三类信号里唯一自带答案的一类。
                 self._record_vocabulary_gap(
@@ -1436,7 +1442,7 @@ class AnalyticsQueryService:
                     message=f"用户确认要看的是「{clarified_choice}」",
                     resolution=clarified_choice,
                 )
-            for name in _inferred_member_names(release, translated.audit_query, global_evidence):
+            for name in inferred_member_names:
                 # 用户说了个词典里没有的说法，模型自己挑了个成员顶上。它可能猜对了
                 # ——实机「业绩」「营业额」都猜成了销售金额——但猜的结果不稳定，同一
                 # 句话可能这次 SUM(金额) 下次 SUM(数量)。同一说法被猜过很多次，本身
@@ -1503,13 +1509,16 @@ class AnalyticsQueryService:
                 # include_diagnostics is the silent-degradation case. Only the
                 # info-level "success" diagnosis stays optional.
                 diagnostics=_shipped_diagnosis(
-                    _success_diagnosis(
-                        parser=corrected.parser,
-                        llm_enabled=self._orchestrator.llm_enabled,
-                        audit_complete=audit_complete,
-                        unpublished_values=unpublished_values,
-                        empty_aggregate=empty_aggregate,
-                        time_axis_unresolved=TIME_AXIS_UNRESOLVED in defaults,
+                    _with_inferred_members(
+                        _success_diagnosis(
+                            parser=corrected.parser,
+                            llm_enabled=self._orchestrator.llm_enabled,
+                            audit_complete=audit_complete,
+                            unpublished_values=unpublished_values,
+                            empty_aggregate=empty_aggregate,
+                            time_axis_unresolved=TIME_AXIS_UNRESOLVED in defaults,
+                        ),
+                        inferred_members=inferred_member_names,
                     ),
                     include_diagnostics=request.include_diagnostics,
                 ),
@@ -4963,6 +4972,49 @@ def _success_diagnosis(
         severity="info",
         summary="问数完整链路执行成功",
         recommendation="核对语义解释和结果后可加入黄金问题。",
+    )
+
+
+def _with_inferred_members(
+    diagnosis: QueryDiagnosis,
+    *,
+    inferred_members: tuple[str, ...],
+) -> QueryDiagnosis:
+    """把"这个答案里有系统自己猜的成员"报进本次查询，而不只是离线记一笔。
+
+    `_inferred_member_names` 本来就在算它——答案里用到、但精确证据里根本没出现过的
+    成员，说明用户的说法没有被词典覆盖，模型自己挑了一个顶上。此前它只进
+    `QueryFailureRecord`（建模者要去翻问数反馈列表才看得到），**这次回答本身
+    一个字都不说**。
+
+    实机 D012「2024年3月货币资金期末余额是多少」：目录里只有 `期末借方余额` 与
+    `期末贷方余额`，没有派生的"期末余额"（借方 − 贷方）。模型写出
+    ``SUM("期末借方余额") AS "_期末余额_"``——别名叫用户问的那个，用的是另一个成员。
+    六道治理关全绿，数字看起来正常。**拿到这个答案的人有权知道它建立在一次猜测上。**
+
+    严重级别升到 warning：`_shipped_diagnosis` 只无条件放行 warning，info 级要
+    `include_diagnostics` 才出得来——猜测不该藏在开关后面。
+    """
+
+    if not inferred_members:
+        return diagnosis
+    named = "、".join(f"「{item}」" for item in inferred_members)
+    return diagnosis.model_copy(
+        update={
+            "severity": "warning",
+            "recommendation": (
+                f"{diagnosis.recommendation} "
+                f"另外：问句里有说法没被业务词典覆盖，模型自己选了 {named} 顶上。"
+                "同一说法被猜过多次就该补进词典；若它其实需要一个目前没有的派生指标"
+                "（如「期末余额」＝期末借方余额 − 期末贷方余额），那是建模缺口，"
+                "补词典解决不了。"
+            ).strip(),
+            "user_hint": (
+                f"{diagnosis.user_hint} "
+                f"注意：这次把问题里的某个说法理解成了 {named}，那是系统自己选的，"
+                "请核对是不是你要的口径。"
+            ).strip(),
+        }
     )
 
 

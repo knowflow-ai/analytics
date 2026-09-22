@@ -1,0 +1,211 @@
+{
+  "name": "acct",
+  "note": "会计项目基准题集（用户设计，2026-09-21）。20 道覆盖：科目精确/模糊、连字符易遗漏、跨年、部门、往来单位方向、税务税种、报表口径、月份范围、季度、全年。must_filter 记录参考 SQL 必须命中的过滤条件，比行比对更强（能查「漏掉某个条件」），目前只作元数据保存、跑批不校验。",
+  "project_id": "prj_u5326f1f5472a538ec272_44a2cd0ab4a311f19b81f9323e364817",
+  "revision_id": "rev_899c4f2e180144a2993b6a1ae063e8ce",
+  "etag": 77,
+  "schema_hash": "sha256:f69fceead6db441356a3138525db90b6cb9e53102632a2b7a4ed33d52808e624",
+  "actor_id": "41eb620cb19711f1ba3b5afa407b3b17",
+  "cases": [
+    {
+      "id": "D001",
+      "q": "2024年1月销售费用-差旅费是多少",
+      "expect": "answer",
+      "truth_sql": "SELECT SUM(e.debit_amount) AS 金额 FROM fact_voucher_entry e JOIN fact_voucher v ON e.voucher_id=v.voucher_id JOIN dim_account a ON e.account_id=a.account_id WHERE v.period='2024-01' AND a.account_name='销售费用-差旅费'",
+      "must_filter": "v.period='2024-01'、a.account_name='销售费用-差旅费'",
+      "category": "月份+科目精确",
+      "priority": "高",
+      "note": "月份+科目精确 · 优先级高"
+    },
+    {
+      "id": "D002",
+      "q": "2024年2月销售费用-业务招待费是多少",
+      "expect": "answer",
+      "truth_sql": "SELECT SUM(e.debit_amount) AS 金额 FROM fact_voucher_entry e JOIN fact_voucher v ON e.voucher_id=v.voucher_id JOIN dim_account a ON e.account_id=a.account_id WHERE v.period='2024-02' AND a.account_name='销售费用-业务招待费'",
+      "must_filter": "v.period='2024-02'、a.account_name='销售费用-业务招待费'",
+      "category": "月份+科目精确",
+      "priority": "高",
+      "note": "月份+科目精确 · 优先级高"
+    },
+    {
+      "id": "D003",
+      "q": "2024年3月管理费用-办公费是多少",
+      "expect": "answer",
+      "truth_sql": "SELECT SUM(e.debit_amount) AS 金额 FROM fact_voucher_entry e JOIN fact_voucher v ON e.voucher_id=v.voucher_id JOIN dim_account a ON e.account_id=a.account_id WHERE v.period='2024-03' AND a.account_name='管理费用-办公费'",
+      "must_filter": "v.period='2024-03'、a.account_name='管理费用-办公费'",
+      "category": "月份+科目精确",
+      "priority": "高",
+      "note": "月份+科目精确 · 优先级高"
+    },
+    {
+      "id": "D004",
+      "q": "2024年1月差旅费是多少",
+      "expect": "answer",
+      "truth_sql": "SELECT SUM(e.debit_amount) AS 金额 FROM fact_voucher_entry e JOIN fact_voucher v ON e.voucher_id=v.voucher_id JOIN dim_account a ON e.account_id=a.account_id WHERE v.period='2024-01' AND a.account_name LIKE '%差旅费%'",
+      "must_filter": "v.period='2024-01'、a.account_name LIKE '%差旅费%'",
+      "category": "月份+科目模糊",
+      "priority": "中",
+      "note": "月份+科目模糊 · 优先级中"
+    },
+    {
+      "id": "D005",
+      "q": "2024年2月招待费是多少",
+      "expect": "answer",
+      "truth_sql": "SELECT SUM(e.debit_amount) AS 金额 FROM fact_voucher_entry e JOIN fact_voucher v ON e.voucher_id=v.voucher_id JOIN dim_account a ON e.account_id=a.account_id WHERE v.period='2024-02' AND a.account_name LIKE '%业务招待费%'",
+      "must_filter": "v.period='2024-02'、a.account_name LIKE '%业务招待费%'",
+      "category": "月份+科目模糊",
+      "priority": "中",
+      "note": "月份+科目模糊 · 优先级中"
+    },
+    {
+      "id": "D006",
+      "q": "2024年1月销售部差旅费是多少",
+      "expect": "answer",
+      "truth_sql": "SELECT SUM(e.debit_amount) AS 金额 FROM fact_voucher_entry e JOIN fact_voucher v ON e.voucher_id=v.voucher_id JOIN dim_account a ON e.account_id=a.account_id JOIN dim_dept d ON e.dept_id=d.dept_id WHERE v.period='2024-01' AND d.dept_name='销售部' AND a.account_name LIKE '%差旅费%'",
+      "must_filter": "v.period='2024-01'、d.dept_name='销售部'、a.account_name LIKE '%差旅费%'",
+      "category": "月份+部门+科目",
+      "priority": "高",
+      "note": "月份+部门+科目 · 优先级高"
+    },
+    {
+      "id": "D007",
+      "q": "2024年3月研发部差旅费是多少",
+      "expect": "answer",
+      "truth_sql": "SELECT SUM(e.debit_amount) AS 金额 FROM fact_voucher_entry e JOIN fact_voucher v ON e.voucher_id=v.voucher_id JOIN dim_account a ON e.account_id=a.account_id JOIN dim_dept d ON e.dept_id=d.dept_id WHERE v.period='2024-03' AND d.dept_name='研发部' AND a.account_name LIKE '%差旅费%'",
+      "must_filter": "v.period='2024-03'、d.dept_name='研发部'、a.account_name LIKE '%差旅费%'",
+      "category": "月份+部门+科目",
+      "priority": "高",
+      "note": "月份+部门+科目 · 优先级高"
+    },
+    {
+      "id": "D008",
+      "q": "2024年1月甲公司的应收账款是多少",
+      "expect": "answer",
+      "truth_sql": "SELECT SUM(ar.amount) AS 金额 FROM fact_ar_ap ar JOIN dim_partner p ON ar.partner_id=p.partner_id WHERE ar.direction=1 AND DATE_FORMAT(ar.occurred_date,'%Y-%m')='2024-01' AND p.partner_name='甲公司'",
+      "must_filter": "ar.direction=1、DATE_FORMAT(occurred_date)='2024-01'、p.partner_name='甲公司'",
+      "category": "月份+往来单位",
+      "priority": "高",
+      "note": "月份+往来单位 · 优先级高"
+    },
+    {
+      "id": "D009",
+      "q": "2024年3月丙供应商的应付账款是多少",
+      "expect": "answer",
+      "truth_sql": "SELECT SUM(ar.amount) AS 金额 FROM fact_ar_ap ar JOIN dim_partner p ON ar.partner_id=p.partner_id WHERE ar.direction=2 AND DATE_FORMAT(ar.occurred_date,'%Y-%m')='2024-03' AND p.partner_name='丙供应商'",
+      "must_filter": "ar.direction=2、DATE_FORMAT(occurred_date)='2024-03'、p.partner_name='丙供应商'",
+      "category": "月份+往来单位",
+      "priority": "高",
+      "note": "月份+往来单位 · 优先级高"
+    },
+    {
+      "id": "D010",
+      "q": "2024年3月销项税额是多少",
+      "expect": "answer",
+      "truth_sql": "SELECT SUM(tax_amount) AS 税额 FROM fact_tax_detail WHERE period='2024-03' AND tax_type='销项'",
+      "must_filter": "period='2024-03'、tax_type='销项'",
+      "category": "月份+税务",
+      "priority": "中",
+      "note": "月份+税务 · 优先级中"
+    },
+    {
+      "id": "D011",
+      "q": "2024年3月进项税额是多少",
+      "expect": "answer",
+      "truth_sql": "SELECT SUM(tax_amount) AS 税额 FROM fact_tax_detail WHERE period='2024-03' AND tax_type='进项'",
+      "must_filter": "period='2024-03'、tax_type='进项'",
+      "category": "月份+税务",
+      "priority": "中",
+      "note": "月份+税务 · 优先级中"
+    },
+    {
+      "id": "D012",
+      "q": "2024年3月货币资金期末余额是多少",
+      "expect": "answer",
+      "truth_sql": "SELECT SUM(b.end_debit-b.end_credit) AS 期末余额 FROM fact_account_balance b JOIN dim_account a ON b.account_id=a.account_id WHERE b.period='2024-03' AND a.report_item='货币资金'",
+      "must_filter": "b.period='2024-03'、a.report_item='货币资金'",
+      "category": "月份+报表口径",
+      "priority": "高",
+      "note": "月份+报表口径 · 优先级高"
+    },
+    {
+      "id": "D013",
+      "q": "2023年12月库存现金余额是多少",
+      "expect": "answer",
+      "truth_sql": "SELECT b.end_debit-b.end_credit AS 余额 FROM fact_account_balance b JOIN dim_account a ON b.account_id=a.account_id WHERE b.period='2023-12' AND a.account_name='库存现金'",
+      "must_filter": "b.period='2023-12'、a.account_name='库存现金'",
+      "category": "月份+科目",
+      "priority": "高",
+      "note": "月份+科目 · 优先级高"
+    },
+    {
+      "id": "D014",
+      "q": "2024年1月销售费用-业务招待费是多少",
+      "expect": "answer",
+      "truth_sql": "SELECT SUM(e.debit_amount) AS 金额 FROM fact_voucher_entry e JOIN fact_voucher v ON e.voucher_id=v.voucher_id JOIN dim_account a ON e.account_id=a.account_id WHERE v.period='2024-01' AND a.account_name='销售费用-业务招待费'",
+      "must_filter": "v.period='2024-01'、a.account_name='销售费用-业务招待费'",
+      "category": "易遗漏-连字符",
+      "priority": "高",
+      "note": "易遗漏-连字符 · 优先级高"
+    },
+    {
+      "id": "D015",
+      "q": "2024年2月管理费用-办公费是多少",
+      "expect": "answer",
+      "truth_sql": "SELECT SUM(e.debit_amount) AS 金额 FROM fact_voucher_entry e JOIN fact_voucher v ON e.voucher_id=v.voucher_id JOIN dim_account a ON e.account_id=a.account_id WHERE v.period='2024-02' AND a.account_name='管理费用-办公费'",
+      "must_filter": "v.period='2024-02'、a.account_name='管理费用-办公费'",
+      "category": "易遗漏-连字符",
+      "priority": "高",
+      "note": "易遗漏-连字符 · 优先级高"
+    },
+    {
+      "id": "D016",
+      "q": "2023年12月销售费用-差旅费是多少",
+      "expect": "answer",
+      "truth_sql": "SELECT SUM(e.debit_amount) AS 金额 FROM fact_voucher_entry e JOIN fact_voucher v ON e.voucher_id=v.voucher_id JOIN dim_account a ON e.account_id=a.account_id WHERE v.period='2023-12' AND a.account_name='销售费用-差旅费'",
+      "must_filter": "v.period='2023-12'、a.account_name='销售费用-差旅费'",
+      "category": "跨年月份",
+      "priority": "高",
+      "note": "跨年月份 · 优先级高"
+    },
+    {
+      "id": "D017",
+      "q": "2024年1月结转凭证有几张",
+      "expect": "answer",
+      "truth_sql": "SELECT COUNT(*) AS 凭证数 FROM fact_voucher WHERE period='2024-01' AND voucher_type='结转凭证'",
+      "must_filter": "period='2024-01'、voucher_type='结转凭证'",
+      "category": "月份+凭证类型",
+      "priority": "中",
+      "note": "月份+凭证类型 · 优先级中"
+    },
+    {
+      "id": "D018",
+      "q": "2024年1月到3月差旅费总额是多少",
+      "expect": "answer",
+      "truth_sql": "SELECT SUM(e.debit_amount) AS 金额 FROM fact_voucher_entry e JOIN fact_voucher v ON e.voucher_id=v.voucher_id JOIN dim_account a ON e.account_id=a.account_id WHERE v.period BETWEEN '2024-01' AND '2024-03' AND a.account_name LIKE '%差旅费%'",
+      "must_filter": "v.period BETWEEN '2024-01' AND '2024-03'、a.account_name LIKE '%差旅费%'",
+      "category": "月份范围+科目",
+      "priority": "高",
+      "note": "月份范围+科目 · 优先级高"
+    },
+    {
+      "id": "D019",
+      "q": "2024年第一季度业务招待费是多少",
+      "expect": "answer",
+      "truth_sql": "SELECT SUM(e.debit_amount) AS 金额 FROM fact_voucher_entry e JOIN fact_voucher v ON e.voucher_id=v.voucher_id JOIN dim_account a ON e.account_id=a.account_id WHERE v.period BETWEEN '2024-01' AND '2024-03' AND a.account_name LIKE '%业务招待费%'",
+      "must_filter": "v.period BETWEEN '2024-01' AND '2024-03'、a.account_name LIKE '%业务招待费%'",
+      "category": "季度+科目",
+      "priority": "高",
+      "note": "季度+科目 · 优先级高"
+    },
+    {
+      "id": "D020",
+      "q": "2024年销售费用-差旅费总额是多少",
+      "expect": "answer",
+      "truth_sql": "SELECT SUM(e.debit_amount) AS 金额 FROM fact_voucher_entry e JOIN fact_voucher v ON e.voucher_id=v.voucher_id JOIN dim_account a ON e.account_id=a.account_id WHERE v.period LIKE '2024-%' AND a.account_name='销售费用-差旅费'",
+      "must_filter": "v.period LIKE '2024-%'、a.account_name='销售费用-差旅费'",
+      "category": "年份+科目",
+      "priority": "中",
+      "note": "年份+科目 · 优先级中"
+    }
+  ]
+}

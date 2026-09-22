@@ -1,0 +1,143 @@
+{
+  "name": "alert",
+  "project_id": "prj_u5326f1f5472a538ec272_88df1ec0b29511f19d6f5f606c99c32a",
+  "revision_id": "rev_560c17e9773c4cbbbf97781e6c5bc231",
+  "etag": 101,
+  "schema_hash": "sha256:913f089577ded2b9ee364051a8164ad04599efc435682f593e583c94e864f1f4",
+  "actor_id": "41eb620cb19711f1ba3b5afa407b3b17",
+  "note": "预警项目：只做指纹秤（没有真值）。近似重复的问法是故意保留的——它们考的是同一问题换个说法会不会翻面。 走已发布 Release（该项目的候选 Revision 过不了结构校验，而 release 路径正是线上真实在服役的那条）。",
+  "cases": [
+    {
+      "id": "alert-01",
+      "q": "统计账户每天触发原因以及总分，每个账户每天触发原因合并，列表账号、日期、触发原因，总分",
+      "expect": "answer"
+    },
+    {
+      "id": "alert-02",
+      "q": "统计账户每天触发原因以及总分，触发原因合并，列表账号、日期、触发原因，总分",
+      "expect": "answer"
+    },
+    {
+      "id": "alert-03",
+      "q": "按日统计2023年账户预警数量",
+      "expect": "answer"
+    },
+    {
+      "id": "alert-04",
+      "q": "按日统计账号预警数量",
+      "expect": "answer"
+    },
+    {
+      "id": "alert-05",
+      "q": "按日统计账户预警数量",
+      "expect": "answer"
+    },
+    {
+      "id": "alert-06",
+      "q": "按日统计账户预警数量按日",
+      "expect": "answer"
+    },
+    {
+      "id": "alert-07",
+      "q": "按账户日期统计预警触发原因",
+      "expect": "answer"
+    },
+    {
+      "id": "alert-08",
+      "q": "按账户日期统计预警触发原因，每个账户每天的触发原因使用逗号拼接，列表日期、账号、触发原因，总分",
+      "expect": "answer"
+    },
+    {
+      "id": "alert-09",
+      "q": "按账户日期统计预警触发原因，每个账户每天的预警原因使用逗号拼接，列表日期、账号、预警原因，总分",
+      "expect": "answer"
+    },
+    {
+      "id": "alert-10",
+      "q": "按 预警原因",
+      "expect": "answer"
+    },
+    {
+      "id": "alert-11",
+      "q": "查询2023年，每月预警账户余额",
+      "expect": "answer"
+    },
+    {
+      "id": "alert-12",
+      "q": "查询账户每天触发原因",
+      "expect": "answer"
+    },
+    {
+      "id": "alert-13",
+      "q": "根据模型编号统计",
+      "expect": "answer"
+    },
+    {
+      "id": "alert-14",
+      "q": "统计2023每天推送预警账户数量",
+      "expect": "answer"
+    },
+    {
+      "id": "alert-15",
+      "q": "统计2023每日推送预警账户数量",
+      "expect": "answer"
+    },
+    {
+      "id": "alert-16",
+      "q": "统计2023每日预警账户数量",
+      "expect": "answer"
+    },
+    {
+      "id": "alert-17",
+      "q": "统计每个账号，每个数据日期触发了多少个模型",
+      "expect": "answer"
+    },
+    {
+      "id": "alert-18",
+      "q": "统计账号每天的触发原因",
+      "expect": "answer"
+    },
+    {
+      "id": "alert-19",
+      "q": "统计账户每天触发原因",
+      "expect": "answer"
+    },
+    {
+      "id": "alert-20",
+      "q": "统计账户每天触发原因以及总分，每个账户每天触发原因逗号拼接在一起，列表账号、日期、触发原因，总分",
+      "expect": "answer"
+    },
+    {
+      "id": "alert-21",
+      "q": "统计账户每天触发原因以及总分，账号、日期、触发原因，总分",
+      "expect": "answer"
+    },
+    {
+      "id": "alert-22",
+      "q": "统计账户每天触发模型数量",
+      "expect": "answer"
+    },
+    {
+      "id": "alert-23",
+      "q": "触发原因错了，触发原因是模型描述",
+      "expect": "answer"
+    },
+    {
+      "id": "alert-24",
+      "q": "账户余额大于 1000 占比情况如何",
+      "expect": "answer"
+    },
+    {
+      "id": "alert-25",
+      "q": "账户余额大于 1000 的有多少人",
+      "expect": "answer"
+    },
+    {
+      "id": "alert-26",
+      "q": "账户每天触发原因",
+      "expect": "answer"
+    }
+  ],
+  "entry": "release",
+  "release_id": "rel_4d80f02d58de45589b5c80129a8096a8"
+}

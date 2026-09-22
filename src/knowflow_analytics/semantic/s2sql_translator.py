@@ -67,6 +67,7 @@ class S2SqlTranslation:
     parser_trace: tuple[str, ...]
     audit_query: SemanticQuery
     audit_complete: bool = True
+    hierarchy_rollups: tuple[tuple[str, str, int], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -97,6 +98,9 @@ class _QueryStatement:
     ratio_calls: list[_RatioCall] = field(default_factory=list)
     mixed_metric_filter_scopes: bool = False
     metric_time_axes: tuple[str, ...] = ()
+    # 层级展开的账：(维度, 用户写的取值, 多带了几个下级)。回答卡要按它把 chip
+    # 标成「含下级 N 个」——SQL 查了三个科目而 chip 只说一个，正是口径不一致。
+    hierarchy_rollups: list[tuple[str, str, int]] = field(default_factory=list)
     physical_query: PhysicalQuery | None = None
     # 列级白名单与行级过滤随语句走：这条链路在五个地方各建一次 _ReleaseIndexes，
     # 漏掉任何一个都是一条绕过权限的路径（RATIO 的自连接 CTE 就在其中之一）。
@@ -612,6 +616,171 @@ class _DefaultDimValueParser:
             )
             for select in target_selects:
                 _append_where(select, condition.copy())
+
+
+class _DimValueAliasParser:
+    """别名是这个取值的名字，不是另一个取值。写了别名就该筛到它身上。
+
+    客户实机：业务词典里有一条 Term「业务招待费」（别名 招待费、请客费），声明
+    关联维度「科目名称」；取值 `销售费用-业务招待费` 也带着别名「业务招待费」。
+    问「2024年2月招待费是多少」，模型据此写出 ``"科目名称" = '业务招待费'``——
+    完全按我们给它的词典办事，而**库里只有原始取值**，于是零行。
+
+    建模者声明别名的意思就是"这个说法指的是这个取值"。把它兑现成原始取值是查表，
+    不是猜：只在别名/显示名唯一指向一个已发布取值时改写，指向多个就不动
+    （那是既有歧义机制的场合），字面量本身就是合法取值时更不动。
+
+    与 `_HierarchyRollupParser` 同一族：目录里已经写清楚怎么对上，
+    不该让用户为编译器没读它而拿到一句"没有查到数据"。
+    """
+
+    name = "DimValueAliasParser"
+
+    def parse(self, statement: _QueryStatement) -> None:
+        assert statement.tree is not None
+        published: dict[str, set[str]] = {}
+        spoken: dict[str, dict[str, set[str]]] = {}
+        for item in statement.release.dimension_values:
+            if not item.enabled:
+                continue
+            published.setdefault(item.dimension_id, set()).add(str(item.value))
+            by_name = spoken.setdefault(item.dimension_id, {})
+            for name in (item.display_name, *item.aliases):
+                by_name.setdefault(name.strip().casefold(), set()).add(str(item.value))
+        if not spoken:
+            return
+
+        def resolved(dimension_id: str, literal: exp.Literal) -> str | None:
+            written = str(literal.this)
+            if written in published.get(dimension_id, ()):
+                return None
+            targets = spoken.get(dimension_id, {}).get(written.strip().casefold(), set())
+            return next(iter(targets)) if len(targets) == 1 else None
+
+        for predicate in list(statement.tree.find_all(exp.EQ, exp.NEQ)):
+            for column, literal in (
+                (predicate.this, predicate.expression),
+                (predicate.expression, predicate.this),
+            ):
+                if not isinstance(column, exp.Column) or not isinstance(literal, exp.Literal):
+                    continue
+                dimension_id = _dimension_id_of(statement, column)
+                if dimension_id is None:
+                    continue
+                value = resolved(dimension_id, literal)
+                if value is not None:
+                    literal.replace(exp.Literal.string(value))
+                break
+
+        for in_clause in list(statement.tree.find_all(exp.In)):
+            if not isinstance(in_clause.this, exp.Column) or in_clause.args.get("query"):
+                continue
+            dimension_id = _dimension_id_of(statement, in_clause.this)
+            if dimension_id is None:
+                continue
+            for expression in in_clause.expressions:
+                if not isinstance(expression, exp.Literal):
+                    continue
+                value = resolved(dimension_id, expression)
+                if value is not None:
+                    expression.replace(exp.Literal.string(value))
+
+
+def _dimension_id_of(statement: _QueryStatement, column: exp.Column) -> str | None:
+    resolved = statement.semantic_tokens.get(column.name)
+    return resolved.id if resolved is not None and resolved.kind == "dimension" else None
+
+
+class _HierarchyRollupParser:
+    """按父科目筛就要含下级——这是层级的业务语义，不是一条方便规则。
+
+    客户实机反馈「科目名称，不支持 like」。探针复现出来的其实不是 LIKE 被拒：
+    问「2024年销售费用总共多少」，模型写的是完全合规的
+    ``"科目名称" = '销售费用' AND "年份" = 2024``，六道治理关全绿，执行成功，
+    返回一行 ``[None]``。因为**分录只记在末级科目上**（销售费用-差旅费、
+    销售费用-业务招待费），父科目自己一条分录都没有。会计上父科目的余额本来
+    就是子科目之和，问父科目却只拿它自己那一条，答案一定是错的。
+
+    展开的依据是**建模者声明的层级**（`HierarchySpec` 在发布期落进
+    `DimensionValueSpec.parent_value`），不是名字前缀这种巧合——
+    `销售费用-差旅费` 恰好以 `销售费用` 开头是这家客户的命名习惯，靠不住。
+
+    只改等值谓词，且只在该取值**确实有下级**时改：没有下级的取值一个字不动，
+    所以对绝大多数查询这条规则根本不存在。
+
+    可见性不用另铺管道：`audit_query` 在整条解析器链之后构造，`exp.In` 会映射成
+    `FilterOperator.IN`，回答卡的过滤条件 chip 自然列出展开后的全部科目。
+    它也**不该**走 `applied_defaults`——那颗 chip 的含义是「系统替你补的，可以
+    一键撤掉」，而撤掉这次展开只会换回一个明知故错的数字。
+    """
+
+    name = "HierarchyRollupParser"
+
+    def parse(self, statement: _QueryStatement) -> None:
+        assert statement.tree is not None
+        children: dict[str, dict[str, list[str]]] = {}
+        for item in statement.release.dimension_values:
+            if item.parent_value is None or not item.enabled:
+                continue
+            children.setdefault(item.dimension_id, {}).setdefault(
+                str(item.parent_value), []
+            ).append(str(item.value))
+        if not children:
+            return
+
+        for predicate in list(statement.tree.find_all(exp.EQ)):
+            for column, literal in (
+                (predicate.this, predicate.expression),
+                (predicate.expression, predicate.this),
+            ):
+                if not isinstance(column, exp.Column) or not isinstance(literal, exp.Literal):
+                    continue
+                dimension_id = _dimension_id_of(statement, column)
+                if dimension_id is None:
+                    continue
+                by_parent = children.get(dimension_id)
+                if not by_parent:
+                    continue
+                value = str(literal.this)
+                descendants = _descendant_values(value, by_parent)
+                if not descendants:
+                    continue
+                predicate.replace(
+                    exp.In(
+                        this=column.copy(),
+                        expressions=[
+                            # 字面量的种类跟着原谓词走：维度是数值列时套一层
+                            # 字符串字面量，客户库那边就是另一种比较了。
+                            exp.Literal.string(item)
+                            if literal.is_string
+                            else exp.Literal.number(item)
+                            for item in (value, *descendants)
+                        ],
+                    )
+                )
+                statement.hierarchy_rollups.append((dimension_id, value, len(descendants)))
+                break
+
+
+def _descendant_values(value: str, by_parent: dict[str, list[str]]) -> tuple[str, ...]:
+    """整棵子树，不只是直接下级。
+
+    `应交税费` → `应交税费-应交增值税` → `…-进项税额`：只展开一层会漏掉孙子科目，
+    而那一层往往正是真正记账的地方。
+    """
+
+    out: list[str] = []
+    frontier = [value]
+    seen = {value}
+    while frontier:
+        current = frontier.pop()
+        for child in by_parent.get(current, ()):
+            if child in seen:
+                continue
+            seen.add(child)
+            out.append(child)
+            frontier.append(child)
+    return tuple(sorted(out))
 
 
 class _MetricExpressionParser:
@@ -1653,6 +1822,8 @@ class S2SqlSemanticTranslator:
             _TimeGovernanceParser(),
             _NumericThresholdParser(),
             _DefaultDimValueParser(),
+            _DimValueAliasParser(),
+            _HierarchyRollupParser(),
             _DimExpressionParser(),
             _MetricExpressionParser(),
             _MetricRatioParser(),
@@ -1735,6 +1906,7 @@ class S2SqlSemanticTranslator:
             parser_trace=tuple(trace),
             audit_query=semantic_query,
             audit_complete=audit_complete,
+            hierarchy_rollups=tuple(statement.hierarchy_rollups),
         )
 
 

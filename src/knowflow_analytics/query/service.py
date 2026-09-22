@@ -1526,6 +1526,7 @@ class AnalyticsQueryService:
                     release,
                     translated.audit_query,
                     defaults,
+                    translated.hierarchy_rollups,
                 ),
                 data=result,
                 visualization=self._visualization(
@@ -2875,7 +2876,9 @@ class AnalyticsQueryService:
                 spec_hash=release.spec_hash,
                 index_snapshot_id=published.index_snapshot.id,
                 trace=tuple(trace),
-                interpretation=self._interpretation(release, translated.audit_query, defaults),
+                interpretation=self._interpretation(
+                    release, translated.audit_query, defaults, translated.hierarchy_rollups
+                ),
                 data=result,
                 visualization=self._visualization(
                     release, translated.audit_query, s2sql, physical.columns
@@ -3929,6 +3932,7 @@ class AnalyticsQueryService:
         release: SemanticRelease,
         query: SemanticQuery,
         defaults: tuple[str, ...],
+        hierarchy_rollups: tuple[tuple[str, str, int], ...] = (),
     ) -> QueryInterpretation:
         metrics = {item.id: item.name for item in release.metrics}
         dimensions = {item.id: item.name for item in release.dimensions}
@@ -3962,6 +3966,15 @@ class AnalyticsQueryService:
                 item.operator is FilterOperator.LT and value == window_marker.end
             )
 
+        # 按父科目筛会连下级一起算。chip 上只说用户写的那个值、SQL 里却是一串，
+        # 就是口径不一致；把下级的条数缀在同一颗 chip 上，既诚实又不会在科目表
+        # 有几十个子科目时把整张卡撑爆。
+        rolled_up = {
+            (dimension_id, value): f"（含下级 {count} 个）"
+            for dimension_id, value, count in hierarchy_rollups
+            if count
+        }
+
         return QueryInterpretation(
             dataset_id=query.dataset_id,
             query_type=query.query_type,
@@ -3971,6 +3984,7 @@ class AnalyticsQueryService:
             filters=tuple(
                 f"{dimensions[item.dimension_id]} "
                 f"{_filter_operator_label(item.operator.value)} {item.value}"
+                f"{rolled_up.get((item.dimension_id, str(item.value)), '')}"
                 for item in query.filters
                 if not is_window_bound(item)
             )

@@ -1,6 +1,6 @@
 {
   "name": "acct",
-  "note": "会计项目基准题集（用户设计，2026-09-21）。20 道覆盖：科目精确/模糊、连字符易遗漏、跨年、部门、往来单位方向、税务税种、报表口径、月份范围、季度、全年。must_filter 记录参考 SQL 必须命中的过滤条件，比行比对更强（能查「漏掉某个条件」），目前只作元数据保存、跑批不校验。 走已发布 Release（`entry: release`）——那是线上真实在服役的那条路，也不受建模者编辑候选 Revision 的影响。发布前试问那条路（`entry` 省略时的默认）要求 Revision 过结构校验，建模者改一半就整套报 SemanticValidationError。",
+  "note": "会计项目基准题集（用户设计，2026-09-21）。20 道覆盖：科目精确/模糊、连字符易遗漏、跨年、部门、往来单位方向、税务税种、报表口径、月份范围、季度、全年。must_filter 记录参考 SQL 必须命中的过滤条件，比行比对更强（能查「漏掉某个条件」），目前只作元数据保存、跑批不校验。 走已发布 Release（`entry: release`）——那是线上真实在服役的那条路，也不受建模者编辑候选 Revision 的影响。发布前试问那条路（`entry` 省略时的默认）要求 Revision 过结构校验，建模者改一半就整套报 SemanticValidationError。 D021/D022 是客户实机反馈「科目名称不支持 like」那一类。探针复现出两个不同的缺口：D021/D022 按父科目问要含下级；D005 是声明过的别名/词条名被模型当成取值写进 SQL，而库里只有原始取值。两者都不是 LIKE 被拒，都是目录里已经写明了怎么对上、编译器却没读它。",
   "project_id": "prj_u5326f1f5472a538ec272_44a2cd0ab4a311f19b81f9323e364817",
   "revision_id": "rev_899c4f2e180144a2993b6a1ae063e8ce",
   "actor_id": "41eb620cb19711f1ba3b5afa407b3b17",
@@ -53,7 +53,7 @@
       "must_filter": "v.period='2024-02'、a.account_name LIKE '%业务招待费%'",
       "category": "月份+科目模糊",
       "priority": "中",
-      "note": "月份+科目模糊 · 优先级中"
+      "note": "月份+科目模糊 · 优先级中 客户实机复现的根因：业务词典里 Term「业务招待费」（别名 招待费、请客费）声明关联「科目名称」，取值『销售费用-业务招待费』也带别名「业务招待费」，模型照词典写出 科目名称 = '业务招待费'，而库里只有原始取值，于是零行。"
     },
     {
       "id": "D006",
@@ -204,6 +204,26 @@
       "category": "年份+科目",
       "priority": "中",
       "note": "年份+科目 · 优先级中"
+    },
+    {
+      "id": "D021",
+      "q": "2024年销售费用总共多少",
+      "expect": "answer",
+      "truth_sql": "SELECT SUM(e.debit_amount) AS 金额 FROM fact_voucher_entry e JOIN fact_voucher v ON e.voucher_id=v.voucher_id JOIN dim_account a ON e.account_id=a.account_id WHERE v.period LIKE '2024%' AND a.account_name LIKE '销售费用%'",
+      "must_filter": "v.period LIKE '2024%'、a.account_name 含「销售费用」及其下级",
+      "category": "父科目含下级",
+      "priority": "高",
+      "note": "客户反馈：按父科目问返回空。分录只记在末级科目上（销售费用-差旅费/销售费用-业务招待费），而「销售费用」本身是一个合法的已发布取值，模型写精确相等就拿不到数。会计上父科目余额本来就是子科目之和。真值 16200。"
+    },
+    {
+      "id": "D022",
+      "q": "2024年管理费用是多少",
+      "expect": "answer",
+      "truth_sql": "SELECT SUM(e.debit_amount) AS 金额 FROM fact_voucher_entry e JOIN fact_voucher v ON e.voucher_id=v.voucher_id JOIN dim_account a ON e.account_id=a.account_id WHERE v.period LIKE '2024%' AND a.account_name LIKE '管理费用%'",
+      "must_filter": "v.period LIKE '2024%'、a.account_name 含「管理费用」及其下级",
+      "category": "父科目含下级",
+      "priority": "高",
+      "note": "同 D021，只有一个下级（管理费用-办公费）。真值 1500。"
     }
   ],
   "entry": "release"

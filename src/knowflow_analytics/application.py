@@ -3388,6 +3388,22 @@ class AnalyticsApplication:
                     ),
                 )
             )
+        # 重采字典 = 重算这几个维度的层级。上面新建的 DimensionValueSpec 没带
+        # `parent_value`，不补这一步，每重采一次反而会把已有的父指针抹掉。
+        #
+        # 这也是**存量项目拿到层级的唯一入口**：`_preset_new_dimension_values` 那条
+        # 只在新建维度时跑，客户的「科目名称」早就存在，再发布多少次 `parent_value`
+        # 都还是空，问数期按父科目筛照样零行（线上实测 137 个取值一个都没有）。
+        profiler = self._source(revision.project_id).semantic_profiler
+        if profiler is not None:
+            values = list(
+                _with_hierarchy_parents(
+                    tuple(values),
+                    profiler=profiler,
+                    semantic_spec=revision.semantic_spec,
+                    dimension_ids=tuple(selected),
+                )
+            )
         updated_catalog = SemanticCatalog.model_validate(
             catalog.model_copy(update={"dimension_values": tuple(values)}).model_dump(mode="python")
         )

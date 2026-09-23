@@ -141,7 +141,7 @@ export function AskFeedbackPanel({
           {/* 归档不是一个页签，是一个抽屉：平时收着，需要找回误处理的记录时才打开。 */}
           <button
             type="button"
-            className="shrink-0 rounded-md px-2.5 py-1 text-xs text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700"
+            className="shrink-0 rounded-md px-2.5 py-1 text-xs text-[var(--kf-text-secondary)] transition-colors hover:bg-[rgb(var(--kf-fill-tertiary-rgb))] hover:text-[var(--kf-text)]"
             onClick={() => {
               setView(view === "open" ? "archived" : "open");
               setOffset(0);
@@ -157,20 +157,20 @@ export function AskFeedbackPanel({
           </button>
         </div>
 
-        <ul className="mt-4 overflow-hidden rounded-lg border border-slate-200">
+        <ul className="mt-4 overflow-hidden rounded-lg border border-[var(--kf-border-secondary)]">
           {rows.map(({ row, fix }) => (
             <li
               key={row.key}
-              className="flex items-start gap-4 border-b border-slate-100 px-4 py-3.5 last:border-b-0"
+              className="flex items-start gap-4 border-b border-[var(--kf-border-secondary)] px-4 py-3.5 last:border-b-0"
             >
               <div className="w-10 shrink-0 pt-0.5 text-center">
-                <div className="text-lg font-semibold tabular-nums text-slate-700">
+                <div className="text-lg font-semibold tabular-nums text-[var(--kf-text)]">
                   {row.count}
                 </div>
-                <div className="text-[10px] text-slate-400">次</div>
+                <div className="text-xs text-[var(--kf-text-tertiary)]">次</div>
               </div>
               <div className="min-w-0 flex-1">
-                <div className="text-sm leading-relaxed text-slate-900">
+                <div className="text-sm leading-relaxed text-[var(--kf-text)]">
                   「{row.question}」
                 </div>
                 {/*
@@ -184,7 +184,7 @@ export function AskFeedbackPanel({
                   一遍——挤得说法和落点没地方站，稍长的条目就折成三行。现在只有
                   徽章说不了的信息才会出现在这里（不认识的取值、拒答原因）。
                 */}
-                <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
+                <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[var(--kf-text-secondary)]">
                   <Badge tone={KIND_TONE[row.kind]}>{KIND_LABEL[row.kind]}</Badge>
                   {row.resolution ? (
                     <span>
@@ -193,30 +193,30 @@ export function AskFeedbackPanel({
                           「毛利如何」被理解成了销售金额，读起来才顺。 */}
                       {row.phrase && (
                         <>
-                          <span className="font-medium text-slate-600">
+                          <span className="font-medium text-[var(--kf-text-secondary)]">
                             「{row.phrase}」
                           </span>
-                          <span className="text-slate-400">= </span>
+                          <span className="text-[var(--kf-text-tertiary)]">= </span>
                         </>
                       )}
-                      <span className="font-medium text-slate-700">{row.resolution}</span>
+                      <span className="font-medium text-[var(--kf-text)]">{row.resolution}</span>
                       {/* 落点算不出来时要说清是为什么，否则读者看到一个成员名却
                           没有「补进词典」按钮，不知道该怪谁。 */}
                       {fix ? (
-                        <span className="text-slate-400">（{TARGET_LABEL[fix.kind]}）</span>
+                        <span className="text-[var(--kf-text-tertiary)]">（{TARGET_LABEL[fix.kind]}）</span>
                       ) : (
-                        <span className="text-slate-400">（当前版本里没有这个成员）</span>
+                        <span className="text-[var(--kf-text-tertiary)]">（当前版本里没有这个成员）</span>
                       )}
                     </span>
                   ) : (
                     <>
-                      <span className="text-slate-400">没有落点，要先诊断</span>
+                      <span className="text-[var(--kf-text-tertiary)]">没有落点，要先诊断</span>
                       {/* 没有落点时说法无处可等号，但它仍是这一行的聚合依据，
                           不显示就会有几行看起来一模一样。 */}
                       {row.phrase && (
-                        <span className="text-slate-400">
+                        <span className="text-[var(--kf-text-tertiary)]">
                           · 说法
-                          <span className="font-medium text-slate-600">「{row.phrase}」</span>
+                          <span className="font-medium text-[var(--kf-text-secondary)]">「{row.phrase}」</span>
                         </span>
                       )}
                     </>
@@ -274,7 +274,7 @@ export function AskFeedbackPanel({
                     type="button"
                     title="不打算处理，收进归档"
                     aria-label="收进归档"
-                    className="grid h-7 w-7 place-items-center rounded-md text-slate-300 transition-colors hover:bg-slate-100 hover:text-slate-600"
+                    className="grid h-7 w-7 place-items-center rounded-md text-[var(--kf-text-quaternary)] transition-colors hover:bg-[rgb(var(--kf-fill-tertiary-rgb))] hover:text-[var(--kf-text-secondary)]"
                     onClick={() => mark.mutate({ row, next: "ignored" })}
                   >
                     <X className="h-4 w-4" />
@@ -282,7 +282,7 @@ export function AskFeedbackPanel({
                 ) : (
                   <button
                     type="button"
-                    className="rounded-md px-2 py-1 text-[11px] text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700"
+                    className="rounded-md px-2 py-1 text-xs text-[var(--kf-text-secondary)] transition-colors hover:bg-[rgb(var(--kf-fill-tertiary-rgb))] hover:text-[var(--kf-text)]"
                     onClick={() => mark.mutate({ row, next: "open" })}
                   >
                     恢复
@@ -302,7 +302,7 @@ export function AskFeedbackPanel({
         </ul>
 
         {total > 0 && (
-          <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
+          <div className="mt-2 flex items-center justify-between text-xs text-[var(--kf-text-secondary)]">
             {/* 说清"还剩多少条待处理"——那正是这个页面存在的意义。 */}
             <span>
               共 {total} 条，当前第 {offset + 1}–{Math.min(offset + PAGE_SIZE, total)} 条
@@ -310,7 +310,7 @@ export function AskFeedbackPanel({
             <span className="flex gap-2">
               <button
                 type="button"
-                className="disabled:text-slate-300"
+                className="disabled:text-[var(--kf-text-quaternary)]"
                 disabled={offset === 0}
                 onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
               >
@@ -318,7 +318,7 @@ export function AskFeedbackPanel({
               </button>
               <button
                 type="button"
-                className="disabled:text-slate-300"
+                className="disabled:text-[var(--kf-text-quaternary)]"
                 disabled={offset + PAGE_SIZE >= total}
                 onClick={() => setOffset(offset + PAGE_SIZE)}
               >
@@ -329,46 +329,46 @@ export function AskFeedbackPanel({
         )}
       </section>
 
-      <aside className="border-l border-slate-100 px-4 py-5">
-        <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+      <aside className="border-l border-[var(--kf-border-secondary)] px-4 py-5">
+        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--kf-text-tertiary)]">
           怎么处理
         </div>
-        <ol className="rounded-lg border border-slate-200 p-3">
+        <ol className="rounded-lg border border-[var(--kf-border-secondary)] p-3">
           {[
             "先看「用户替系统补了答案」——正解已经在那儿了，照着补别名即可。",
             "再看「模型自己猜的」里次数高的。猜对了也要补：下次可能猜错。",
             "「要先诊断」多半是关系路径缺失或事实根不对，回实体与关系改。",
           ].map((text, index) => (
             <li key={index} className="flex gap-2.5 py-1.5">
-              <span className="grid h-[18px] w-[18px] shrink-0 place-items-center rounded-full bg-blue-50 text-[10px] font-semibold text-blue-700">
+              <span className="grid h-[18px] w-[18px] shrink-0 place-items-center rounded-full bg-[var(--kf-primary-bg)] text-xs font-semibold text-[var(--kf-primary-active)]">
                 {index + 1}
               </span>
-              <span className="text-[11px] leading-relaxed text-slate-500">
+              <span className="text-xs leading-relaxed text-[var(--kf-text-secondary)]">
                 {text}
               </span>
             </li>
           ))}
         </ol>
 
-        <div className="mb-2 mt-5 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+        <div className="mb-2 mt-5 text-xs font-semibold uppercase tracking-wide text-[var(--kf-text-tertiary)]">
           这一版的词典
         </div>
-        <div className="rounded-lg border border-slate-200 px-3 py-2.5 text-xs text-slate-600">
+        <div className="rounded-lg border border-[var(--kf-border-secondary)] px-3 py-2.5 text-xs text-[var(--kf-text-secondary)]">
           <div className="flex items-center justify-between">
             <span>业务术语</span>
-            <span className="tabular-nums font-medium text-slate-800">
+            <span className="tabular-nums font-medium text-[var(--kf-text)]">
               {revision.semantic_catalog.terms.length}
             </span>
           </div>
           <div className="mt-1.5 flex items-center justify-between">
             <span>维度值</span>
-            <span className="tabular-nums font-medium text-slate-800">
+            <span className="tabular-nums font-medium text-[var(--kf-text)]">
               {revision.semantic_catalog.dimensionValues.length}
             </span>
           </div>
         </div>
 
-        <div className="mt-4 rounded-lg border border-dashed border-slate-300 px-3 py-2.5 text-[11px] leading-relaxed text-slate-500">
+        <div className="mt-4 rounded-lg border border-dashed border-[var(--kf-border)] px-3 py-2.5 text-xs leading-relaxed text-[var(--kf-text-secondary)]">
           补进词典写的是草稿版本，发布后才对线上生效。一次线上提问不是长期业务口径。
         </div>
       </aside>
@@ -387,11 +387,11 @@ export function AskFeedbackPanel({
 function Header({ view, total }: { view: "open" | "archived"; total: number }) {
   return (
     <header>
-      <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-        <MessageSquareText className="h-4 w-4 text-slate-400" />
+      <h2 className="flex items-center gap-2 text-sm font-semibold text-[var(--kf-text)]">
+        <MessageSquareText className="h-4 w-4 text-[var(--kf-text-tertiary)]" />
         {view === "open" ? "用户这么说，系统没直接听懂" : "已归档"}
       </h2>
-      <p className="mt-1 max-w-2xl text-xs leading-relaxed text-slate-500">
+      <p className="mt-1 max-w-2xl text-xs leading-relaxed text-[var(--kf-text-secondary)]">
         {view === "open" ? (
           <>
             线上真实提问回流到建模。这一页只回答一个问题：下一版该补哪些说法。

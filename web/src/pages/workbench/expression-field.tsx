@@ -46,22 +46,22 @@ export function ExpressionArea({
       <Textarea
         ref={ref}
         rows={rows}
-        className="font-mono text-[12px]"
+        className="font-mono text-xs"
         value={value}
         onChange={(e) => onChange(e.target.value)}
       />
-      {error && <div className="text-[11px] text-red-600">{error}</div>}
-      <div className="text-[11px] text-slate-500">
+      {error && <div className="text-xs text-[var(--kf-error-text)]">{error}</div>}
+      <div className="text-xs text-[var(--kf-text-secondary)]">
         点名字插到光标处：
         {tokens.length === 0 ? (
-          <span className="text-slate-400">{emptyHint}</span>
+          <span className="text-[var(--kf-text-tertiary)]">{emptyHint}</span>
         ) : (
           tokens.map((item) => (
             <button
               key={item.key}
               type="button"
               onClick={() => insert(item.token)}
-              className="ml-1 rounded border border-slate-200 bg-white px-1.5 py-0.5 font-mono text-[11px] text-slate-600 hover:border-slate-300"
+              className="ml-1 rounded border border-[var(--kf-border-secondary)] bg-[var(--kf-bg-container)] px-1.5 py-0.5 font-mono text-xs text-[var(--kf-text-secondary)] hover:border-[var(--kf-border)]"
             >
               {item.label}
             </button>

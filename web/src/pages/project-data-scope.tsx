@@ -95,16 +95,16 @@ export function ProjectDataScopePanel({
     <div className="space-y-4">
       {error && <ErrorBanner message={error} />}
 
-      <p className="rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs text-slate-600">
+      <p className="rounded-lg border border-[var(--kf-warning-bg)] bg-[var(--kf-warning-bg)] px-3 py-2 text-xs text-[var(--kf-text-secondary)]">
         正在为<b>{subjectName}</b>配置数据范围。两项都不填 = 不收窄，能看到该项目的全部内容。
       </p>
 
       <section className="space-y-2">
-        <h3 className="text-xs font-medium text-slate-500">
+        <h3 className="text-xs font-medium text-[var(--kf-text-secondary)]">
           可见实体（不勾 = 全部可见）
         </h3>
-        <div className="max-h-40 overflow-auto rounded-lg border border-slate-200">
-          <ul className="divide-y divide-slate-100">
+        <div className="max-h-40 overflow-auto rounded-lg border border-[var(--kf-border-secondary)]">
+          <ul className="divide-y divide-[var(--kf-border-secondary)]">
             {options.data.models.map((item) => (
               <li key={item.id} className="px-3 py-1.5 text-xs">
                 <label className="flex cursor-pointer items-center gap-2">
@@ -113,20 +113,20 @@ export function ProjectDataScopePanel({
                     checked={models.includes(item.id)}
                     onChange={() => toggleModel(item.id)}
                   />
-                  <span className="text-slate-700">{item.name}</span>
+                  <span className="text-[var(--kf-text)]">{item.name}</span>
                 </label>
               </li>
             ))}
           </ul>
         </div>
-        <p className="text-[11px] text-slate-400">
+        <p className="text-xs text-[var(--kf-text-tertiary)]">
           勾选后，该主体只能问到这些实体下的指标与维度；其它实体的名字也不会出现在联想与澄清里。
         </p>
       </section>
 
       <section className="space-y-2">
         <div className="flex items-center justify-between">
-          <h3 className="text-xs font-medium text-slate-500">行过滤（不填 = 全部行）</h3>
+          <h3 className="text-xs font-medium text-[var(--kf-text-secondary)]">行过滤（不填 = 全部行）</h3>
           <Button
             size="sm"
             variant="ghost"
@@ -165,7 +165,7 @@ export function ProjectDataScopePanel({
                     </option>
                   ))}
                 </Select>
-                <span className="text-xs text-slate-400">=</span>
+                <span className="text-xs text-[var(--kf-text-tertiary)]">=</span>
                 <Input
                   value={item.value}
                   onChange={(event) =>
@@ -193,7 +193,7 @@ export function ProjectDataScopePanel({
             ))}
           </ul>
         ) : (
-          <p className="text-[11px] text-slate-400">
+          <p className="text-xs text-[var(--kf-text-tertiary)]">
             未设置行过滤，该主体能看到所有行。多条规则之间是「或」。
           </p>
         )}

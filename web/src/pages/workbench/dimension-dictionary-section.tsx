@@ -103,11 +103,11 @@ export function DimensionDictionarySection({
   const blocked = preview?.eligibilities.find((item) => item.status !== 'eligible');
 
   return (
-    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-3">
+    <div className="rounded-md border border-[var(--kf-border-secondary)] bg-[rgb(var(--kf-fill-alter-rgb))] px-3 py-3">
       <div className="flex items-center justify-between gap-2">
         <div>
-          <span className="text-[13px] font-medium text-slate-700">维度值字典</span>
-          <span className="ml-2 text-[11px] text-slate-400">
+          <span className="text-sm font-medium text-[var(--kf-text)]">维度值字典</span>
+          <span className="ml-2 text-xs text-[var(--kf-text-tertiary)]">
             {existing?.length
               ? `已有 ${existing.length} 个值`
               : '把真实取值和它们的别名(如「北上广」)固化进目录'}
@@ -121,13 +121,13 @@ export function DimensionDictionarySection({
       </div>
 
       {generate.isPending && (
-        <div className="mt-2 flex items-center gap-2 text-[11px] text-slate-500">
+        <div className="mt-2 flex items-center gap-2 text-xs text-[var(--kf-text-secondary)]">
           <Spinner /> 正在读取真实取值…
         </div>
       )}
 
       {blocked && (
-        <div className="mt-2 rounded border border-amber-200/70 bg-amber-50/60 px-2.5 py-1.5 text-[11px] text-amber-800">
+        <div className="mt-2 rounded border border-[rgb(var(--kf-warning-border-rgb)/0.7)] bg-[rgb(var(--kf-warning-bg-rgb)/0.6)] px-2.5 py-1.5 text-xs text-[var(--kf-warning-text)]">
           {blocked.message}
         </div>
       )}
@@ -143,7 +143,7 @@ export function DimensionDictionarySection({
             />
           ))}
           {preview.candidates.length === 0 && (
-            <div className="text-[11px] text-slate-400">没有采集到取值。</div>
+            <div className="text-xs text-[var(--kf-text-tertiary)]">没有采集到取值。</div>
           )}
           {preview.candidates.length > 0 && (
             <div className="mt-1 flex justify-end gap-2">
@@ -172,8 +172,8 @@ function CandidateRow({
 }) {
   return (
     <div
-      className={`flex flex-wrap items-center gap-2 rounded-md border bg-white px-2.5 py-1.5 text-[12px] ${
-        draft.accept ? 'border-slate-200' : 'border-slate-100 opacity-50'
+      className={`flex flex-wrap items-center gap-2 rounded-md border bg-[var(--kf-bg-container)] px-2.5 py-1.5 text-xs ${
+        draft.accept ? 'border-[var(--kf-border-secondary)]' : 'border-[var(--kf-border-secondary)] opacity-50'
       }`}
     >
       <input
@@ -181,18 +181,18 @@ function CandidateRow({
         checked={draft.accept}
         onChange={(e) => onChange({ accept: e.target.checked })}
       />
-      <span className="font-mono text-slate-700">{candidate.value}</span>
-      <span className="text-[10px] text-slate-400">×{candidate.frequency}</span>
-      {candidate.current && <span className="text-[10px] text-blue-500">已在目录</span>}
+      <span className="font-mono text-[var(--kf-text)]">{candidate.value}</span>
+      <span className="text-xs text-[var(--kf-text-tertiary)]">×{candidate.frequency}</span>
+      {candidate.current && <span className="text-xs text-[var(--kf-primary)]">已在目录</span>}
       <Input
-        className="h-7 w-28 text-[12px]"
+        className="h-7 w-28 text-xs"
         placeholder="显示名"
         value={draft.displayName}
         disabled={!draft.accept}
         onChange={(e) => onChange({ displayName: e.target.value })}
       />
       <Input
-        className="h-7 flex-1 text-[12px]"
+        className="h-7 flex-1 text-xs"
         placeholder="别名,用「，」分隔(如 北上广 的成员)"
         value={draft.aliases}
         disabled={!draft.accept}

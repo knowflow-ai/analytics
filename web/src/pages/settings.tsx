@@ -8,7 +8,16 @@ import {
   type ModelEndpointSettings,
   type OssSettings,
 } from '@analytics/api/oss';
-import { Button, Card, Field, Input, Select, Spinner, useToast } from '@analytics/components/ui';
+import {
+  Button,
+  Card,
+  Field,
+  Input,
+  PageHeading,
+  Select,
+  Spinner,
+  useToast,
+} from '@analytics/components/ui';
 import { describeError } from '@analytics/lib/labels';
 
 type Draft = Pick<OssSettings, 'chat_model' | 'embedding_model'>;
@@ -37,15 +46,15 @@ function Section({
   return (
     <Card className="p-6">
       <div className="mb-5 flex items-start gap-3">
-        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-slate-100 text-slate-600">
+        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-[rgb(var(--kf-fill-tertiary-rgb))] text-[var(--kf-text-secondary)]">
           {icon}
         </span>
         <div className="flex-1">
-          <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+          <div className="flex items-center gap-2 text-sm font-semibold text-[var(--kf-text)]">
             {title}
-            {configured && <CheckCircle2 className="h-4 w-4 text-emerald-500" />}
+            {configured && <CheckCircle2 className="h-4 w-4 text-[var(--kf-success)]" />}
           </div>
-          <div className="mt-0.5 text-xs text-slate-400">{description}</div>
+          <div className="mt-0.5 text-xs text-[var(--kf-text-tertiary)]">{description}</div>
         </div>
       </div>
       {children}
@@ -166,18 +175,17 @@ export function SettingsPage() {
 
   if (settings.isPending) return <Spinner />;
   if (settings.isError) {
-    return <div className="text-sm text-red-600">{describeError(settings.error)}</div>;
+    return <div className="text-sm text-[var(--kf-error-text)]">{describeError(settings.error)}</div>;
   }
   const configured = settings.data.configured;
 
   return (
     <div className="mx-auto max-w-4xl">
-      <div className="mb-6">
-        <h1 className="text-lg font-semibold text-slate-900">设置</h1>
-        <p className="mt-1 text-xs text-slate-400">
-          指定聊天模型与嵌入模型，保存后立即生效，无需重启。要分析的库在「数据源」页的「数据库连接」里添加。
-        </p>
-      </div>
+      <PageHeading
+        className="mb-6"
+        title="设置"
+        description="指定聊天模型与嵌入模型，保存后立即生效，无需重启。要分析的库在「数据源」页的「数据库连接」里添加。"
+      />
       <div className="flex flex-col gap-5">
         <Section
           icon={<MessageSquareText className="h-4 w-4" />}

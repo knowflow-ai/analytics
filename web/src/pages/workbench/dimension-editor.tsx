@@ -72,8 +72,8 @@ export function DimensionEditor({
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-3">
-        <div className="mb-2 text-[13px] font-medium text-slate-700">取值来源</div>
+      <div className="rounded-md border border-[var(--kf-border-secondary)] bg-[rgb(var(--kf-fill-alter-rgb))] px-3 py-3">
+        <div className="mb-2 text-sm font-medium text-[var(--kf-text)]">取值来源</div>
         {advanced ? (
           <Field label="表达式" hint="引用本模型的物理列；聚合属于指标，这里不能写 SUM/COUNT">
             <ExpressionArea
@@ -111,7 +111,7 @@ export function DimensionEditor({
           >
             {advanced ? '改回选一列' : '改用表达式'}
           </Button>
-          <span className="text-[11px] text-slate-400">
+          <span className="text-xs text-[var(--kf-text-tertiary)]">
             {advanced
               ? '分箱、截取、拼接这类才需要表达式；回到「选一列」会清掉现在的写法'
               : '要按区间分箱或截取一段时改用表达式'}
@@ -183,7 +183,7 @@ export function DimensionEditor({
       </Field>
       {dictionary}
       {valueMapCount > 0 && (
-        <div className="text-[11px] text-slate-500">
+        <div className="text-xs text-[var(--kf-text-secondary)]">
           该维度已配置 {valueMapCount} 条维度值别名,保存时原样保留。
         </div>
       )}

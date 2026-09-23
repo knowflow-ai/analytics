@@ -112,13 +112,13 @@ export function StructuredTrial({ projectId, revision }: Pick<WorkbenchContext, 
     run.mutate({ turnId, query });
   };
 
-  if (!dataset) return <div className="text-xs text-slate-400">当前目录尚无已编译查询作用域。</div>;
+  if (!dataset) return <div className="text-xs text-[var(--kf-text-tertiary)]">当前目录尚无已编译查询作用域。</div>;
   const metrics = spec.metrics.filter((m) => dataset.metric_ids.includes(m.id));
   const dimensions = spec.dimensions.filter((d) => dataset.dimension_ids.includes(d.id));
   const chip = (active: boolean) =>
     cx(
       'rounded-full border px-2.5 py-0.5 text-xs transition-colors',
-      active ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-200 text-slate-600 hover:border-slate-300',
+      active ? 'border-[var(--kf-primary)] bg-[var(--kf-primary-bg)] text-[var(--kf-primary-active)]' : 'border-[var(--kf-border-secondary)] text-[var(--kf-text-secondary)] hover:border-[var(--kf-border)]',
     );
   const canRun = metricIds.length > 0 || dimensionIds.length > 0;
 
@@ -143,25 +143,25 @@ export function StructuredTrial({ projectId, revision }: Pick<WorkbenchContext, 
         </Field>
       </div>
       <div>
-        <div className="mb-1.5 text-xs font-medium text-slate-600">指标 {metricIds.length ? `(${metricIds.length})` : ''}</div>
+        <div className="mb-1.5 text-xs font-medium text-[var(--kf-text-secondary)]">指标 {metricIds.length ? `(${metricIds.length})` : ''}</div>
         <div className="flex flex-wrap gap-1.5">
           {metrics.map((m) => (
             <button key={m.id} type="button" className={chip(metricIds.includes(m.id))} onClick={() => setMetricIds(toggle(metricIds, m.id))}>
               {m.name}
             </button>
           ))}
-          {metrics.length === 0 && <span className="text-xs text-slate-400">该作用域没有指标</span>}
+          {metrics.length === 0 && <span className="text-xs text-[var(--kf-text-tertiary)]">该作用域没有指标</span>}
         </div>
       </div>
       <div>
-        <div className="mb-1.5 text-xs font-medium text-slate-600">维度 {dimensionIds.length ? `(${dimensionIds.length})` : ''}</div>
+        <div className="mb-1.5 text-xs font-medium text-[var(--kf-text-secondary)]">维度 {dimensionIds.length ? `(${dimensionIds.length})` : ''}</div>
         <div className="flex flex-wrap gap-1.5">
           {dimensions.map((d) => (
             <button key={d.id} type="button" className={chip(dimensionIds.includes(d.id))} onClick={() => setDimensionIds(toggle(dimensionIds, d.id))}>
               {d.name}
               {d.metric_time_axis ? (
                 <span
-                  className="ml-1 rounded bg-violet-100 px-1 text-[10px] text-violet-700 dark:bg-violet-500/20 dark:text-violet-300"
+                  className="ml-1 rounded bg-violet-100 px-1 text-xs text-violet-700 dark:bg-violet-500/20 dark:text-violet-300"
                   title="系统自动生成:所选指标声明了不同的时间轴,按此维度分组时各指标按各自的轴统计"
                 >
                   自动生成
@@ -172,11 +172,11 @@ export function StructuredTrial({ projectId, revision }: Pick<WorkbenchContext, 
         </div>
       </div>
       <div>
-        <div className="mb-1.5 flex items-center justify-between text-xs font-medium text-slate-600">
+        <div className="mb-1.5 flex items-center justify-between text-xs font-medium text-[var(--kf-text-secondary)]">
           过滤条件
           <button
             type="button"
-            className="text-blue-600 hover:text-blue-500"
+            className="text-[var(--kf-primary)] hover:text-[var(--kf-primary)]"
             onClick={() => setFilters([...filters, { dimension_id: dimensions[0]?.id ?? '', operator: 'eq', value: '' }])}
           >
             + 添加
@@ -198,7 +198,7 @@ export function StructuredTrial({ projectId, revision }: Pick<WorkbenchContext, 
                 ))}
               </Select>
               <Input disabled={!op?.needsValue} value={f.value} onChange={(e) => update({ value: e.target.value })} placeholder="值" />
-              <button type="button" className="text-xs text-slate-400 hover:text-red-600" onClick={() => setFilters(filters.filter((_, i) => i !== index))}>
+              <button type="button" className="text-xs text-[var(--kf-text-tertiary)] hover:text-[var(--kf-error-text)]" onClick={() => setFilters(filters.filter((_, i) => i !== index))}>
                 移除
               </button>
             </div>
@@ -226,8 +226,8 @@ export function StructuredTrial({ projectId, revision }: Pick<WorkbenchContext, 
       </div>
       <div className="flex flex-col gap-4">
         {turns.map((turn) => (
-          <div key={turn.id} className="rounded-lg border border-slate-200 p-3">
-            <div className="mb-2 text-xs font-medium text-slate-700">{turn.question}</div>
+          <div key={turn.id} className="rounded-lg border border-[var(--kf-border-secondary)] p-3">
+            <div className="mb-2 text-xs font-medium text-[var(--kf-text)]">{turn.question}</div>
             <QueryAnswer projectId={projectId} turn={turn} columnName={nameOf} onChoose={() => undefined} />
           </div>
         ))}

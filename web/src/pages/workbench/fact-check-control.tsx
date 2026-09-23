@@ -97,13 +97,13 @@ export function FactCheckControl({
         {summary && (
           <>
             <Badge tone={summary.tone}>{summary.headline}</Badge>
-            <span className="text-[11px] text-slate-400">{summary.measuredAt}</span>
+            <span className="text-xs text-[var(--kf-text-tertiary)]">{summary.measuredAt}</span>
           </>
         )}
-        {!summary && hint && <span className="text-[11px] text-slate-400">{hint}</span>}
+        {!summary && hint && <span className="text-xs text-[var(--kf-text-tertiary)]">{hint}</span>}
       </div>
       {summary?.advice && (
-        <div className="text-[11px] text-slate-600">{summary.advice}</div>
+        <div className="text-xs text-[var(--kf-text-secondary)]">{summary.advice}</div>
       )}
       {entry && children?.(entry)}
     </div>
@@ -182,7 +182,7 @@ export function ModelRowsPreview({
         {open && payload && (
           <button
             type="button"
-            className="text-[11px] text-slate-400 hover:text-slate-600"
+            className="text-xs text-[var(--kf-text-tertiary)] hover:text-[var(--kf-text-secondary)]"
             onClick={() => setOpen(false)}
           >
             收起
@@ -190,9 +190,9 @@ export function ModelRowsPreview({
         )}
       </div>
       {open && payload?.columns && (
-        <div className="overflow-x-auto rounded-md border border-slate-200">
-          <table className="min-w-full text-[11px]">
-            <thead className="bg-slate-50 text-slate-500">
+        <div className="overflow-x-auto rounded-md border border-[var(--kf-border-secondary)]">
+          <table className="min-w-full text-xs">
+            <thead className="bg-[rgb(var(--kf-fill-alter-rgb))] text-[var(--kf-text-secondary)]">
               <tr>
                 {payload.columns.map((column) => (
                   <th key={column} className="whitespace-nowrap px-2 py-1 text-left font-medium">
@@ -203,11 +203,11 @@ export function ModelRowsPreview({
             </thead>
             <tbody>
               {(payload.rows ?? []).map((row, index) => (
-                <tr key={index} className="border-t border-slate-100">
+                <tr key={index} className="border-t border-[var(--kf-border-secondary)]">
                   {row.map((cell, cellIndex) => (
-                    <td key={cellIndex} className="whitespace-nowrap px-2 py-1 text-slate-700">
+                    <td key={cellIndex} className="whitespace-nowrap px-2 py-1 text-[var(--kf-text)]">
                       {cell === null || cell === undefined ? (
-                        <span className="text-slate-300">NULL</span>
+                        <span className="text-[var(--kf-text-quaternary)]">NULL</span>
                       ) : (
                         String(cell)
                       )}
@@ -220,7 +220,7 @@ export function ModelRowsPreview({
         </div>
       )}
       {open && payload?.truncated && (
-        <div className="text-[11px] text-slate-400">只取了前几行，不是全部数据。</div>
+        <div className="text-xs text-[var(--kf-text-tertiary)]">只取了前几行，不是全部数据。</div>
       )}
     </div>
   );

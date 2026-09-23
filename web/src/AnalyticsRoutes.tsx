@@ -60,7 +60,7 @@ export function AnalyticsRoutes() {
   if (status.isPending) return <Spinner />;
   if (status.isError) {
     return (
-      <div className="p-10 text-center text-sm text-red-600">
+      <div className="p-10 text-center text-sm text-[var(--kf-error-text)]">
         无法连接服务：{String(status.error)}
       </div>
     );

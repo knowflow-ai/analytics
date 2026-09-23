@@ -109,17 +109,17 @@ export function TablesPanel({ projectId, revision, acceptRevision, readOnly }: P
     // 用户实测：语义建模、问数反馈都对，只有数据源太高。h-full 让它就是容器那么高，
     // 顺便让左侧那条分割线画得到底。
     <div className="grid h-full grid-cols-[280px_1fr]">
-      <aside className="border-r border-slate-100 p-4">
-        <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+      <aside className="border-r border-[var(--kf-border-secondary)] p-4">
+        <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-[var(--kf-text-tertiary)]">
           <Database className="h-3.5 w-3.5" /> 数据源
         </div>
         {schemas.isPending && <Spinner />}
         {schemas.isError && (
-          <div className="text-xs text-red-600">{describeError(schemas.error)}</div>
+          <div className="text-xs text-[var(--kf-error-text)]">{describeError(schemas.error)}</div>
         )}
         {schemas.data && (
           <>
-            <label className="mb-1 block text-xs text-slate-500">Schema</label>
+            <label className="mb-1 block text-xs text-[var(--kf-text-secondary)]">Schema</label>
             <Select value={schema} onChange={(event) => setSchema(event.target.value)}>
               {schemas.data.items.map((item) => (
                 <option key={item} value={item}>
@@ -127,7 +127,7 @@ export function TablesPanel({ projectId, revision, acceptRevision, readOnly }: P
                 </option>
               ))}
             </Select>
-            <label className="mt-3 flex items-center gap-2 text-xs text-slate-600">
+            <label className="mt-3 flex items-center gap-2 text-xs text-[var(--kf-text-secondary)]">
               <input
                 type="checkbox"
                 checked={includeViews}
@@ -139,13 +139,13 @@ export function TablesPanel({ projectId, revision, acceptRevision, readOnly }: P
         )}
         {revision && (
           <div className="mt-6">
-            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--kf-text-tertiary)]">
               已导入 {imported.size}
             </div>
-            <ul className="flex flex-col gap-1 text-xs text-slate-600">
+            <ul className="flex flex-col gap-1 text-xs text-[var(--kf-text-secondary)]">
               {revision.semantic_spec.models.map((model) => (
                 <li key={model.id} className="flex items-center gap-1.5 truncate">
-                  <Table2 className="h-3 w-3 shrink-0 text-slate-400" />
+                  <Table2 className="h-3 w-3 shrink-0 text-[var(--kf-text-tertiary)]" />
                   <span className="truncate">{model.name}</span>
                 </li>
               ))}
@@ -155,7 +155,7 @@ export function TablesPanel({ projectId, revision, acceptRevision, readOnly }: P
       </aside>
 
       <section className="flex flex-col">
-        <div className="flex items-center gap-3 border-b border-slate-100 px-4 py-3">
+        <div className="flex items-center gap-3 border-b border-[var(--kf-border-secondary)] px-4 py-3">
           <div className="w-72">
             <Input
               placeholder="搜索表名或注释"
@@ -163,7 +163,7 @@ export function TablesPanel({ projectId, revision, acceptRevision, readOnly }: P
               onChange={(event) => setFilter(event.target.value)}
             />
           </div>
-          <div className="ml-auto text-xs text-slate-400">已选 {selected.size} 张</div>
+          <div className="ml-auto text-xs text-[var(--kf-text-tertiary)]">已选 {selected.size} 张</div>
           <Button
             variant="primary"
             size="sm"
@@ -176,20 +176,20 @@ export function TablesPanel({ projectId, revision, acceptRevision, readOnly }: P
         </div>
         {tables.isPending && schema && <Spinner />}
         {tables.isError && (
-          <div className="p-4 text-xs text-red-600">{describeError(tables.error)}</div>
+          <div className="p-4 text-xs text-[var(--kf-error-text)]">{describeError(tables.error)}</div>
         )}
         {tables.data && visible.length === 0 && (
           <Empty title="没有匹配的表" hint="换一个 schema，或勾选「包含视图」。" />
         )}
         {tables.data && visible.length > 0 && (
-          <ul className="divide-y divide-slate-100">
+          <ul className="divide-y divide-[var(--kf-border-secondary)]">
             {visible.map((item) => {
               const key = `${item.schema_name}.${item.name}`;
               const already = imported.has(key);
               return (
                 <li key={key}>
                   <label
-                    className={`flex cursor-pointer items-center gap-3 px-4 py-2.5 hover:bg-slate-50 ${
+                    className={`flex cursor-pointer items-center gap-3 px-4 py-2.5 hover:bg-[rgb(var(--kf-fill-alter-rgb))] ${
                       already ? 'opacity-50' : ''
                     }`}
                   >
@@ -199,19 +199,19 @@ export function TablesPanel({ projectId, revision, acceptRevision, readOnly }: P
                       checked={already || selected.has(key)}
                       onChange={() => toggle(key)}
                     />
-                    <Table2 className="h-4 w-4 text-slate-400" />
+                    <Table2 className="h-4 w-4 text-[var(--kf-text-tertiary)]" />
                     <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 text-[13px] text-slate-800">
+                      <div className="flex items-center gap-2 text-sm text-[var(--kf-text)]">
                         {item.name}
                         {item.source_type === 'view' && (
-                          <span className="rounded bg-slate-100 px-1 text-[10px] text-slate-500">
+                          <span className="rounded bg-[rgb(var(--kf-fill-tertiary-rgb))] px-1 text-xs text-[var(--kf-text-secondary)]">
                             视图
                           </span>
                         )}
-                        {already && <span className="text-[11px] text-slate-400">已导入</span>}
+                        {already && <span className="text-xs text-[var(--kf-text-tertiary)]">已导入</span>}
                       </div>
                       {item.comment && (
-                        <div className="truncate text-xs text-slate-400">{item.comment}</div>
+                        <div className="truncate text-xs text-[var(--kf-text-tertiary)]">{item.comment}</div>
                       )}
                     </div>
                   </label>

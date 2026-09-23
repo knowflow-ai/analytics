@@ -41,37 +41,37 @@ const STATUS: Record<
     label: '已完成',
     tone: 'green',
     icon: <CheckCircle2 className="h-4 w-4" aria-hidden="true" />,
-    dot: 'border-emerald-200 bg-emerald-50 text-emerald-600',
+    dot: 'border-[var(--kf-success-border)] bg-[var(--kf-success-bg)] text-[var(--kf-success-text)]',
   },
   failed: {
     label: '失败',
     tone: 'red',
     icon: <XCircle className="h-4 w-4" aria-hidden="true" />,
-    dot: 'border-red-200 bg-red-50 text-red-600',
+    dot: 'border-[var(--kf-error-border)] bg-[var(--kf-error-bg)] text-[var(--kf-error-text)]',
   },
   clarification: {
     label: '待确认',
     tone: 'amber',
     icon: <CircleHelp className="h-4 w-4" aria-hidden="true" />,
-    dot: 'border-amber-200 bg-amber-50 text-amber-600',
+    dot: 'border-[var(--kf-warning-border)] bg-[var(--kf-warning-bg)] text-[var(--kf-warning-text)]',
   },
   started: {
     label: '已开始',
     tone: 'blue',
     icon: <Loader2 className="h-4 w-4" aria-hidden="true" />,
-    dot: 'border-blue-200 bg-blue-50 text-blue-600',
+    dot: 'border-[var(--kf-primary-border)] bg-[var(--kf-primary-bg)] text-[var(--kf-primary)]',
   },
   not_run: {
     label: '未运行',
     tone: 'slate',
     icon: <MinusCircle className="h-4 w-4" aria-hidden="true" />,
-    dot: 'border-slate-200 bg-slate-50 text-slate-400',
+    dot: 'border-[var(--kf-border-secondary)] bg-[rgb(var(--kf-fill-alter-rgb))] text-[var(--kf-text-tertiary)]',
   },
   not_recorded: {
     label: '未记录',
     tone: 'slate',
     icon: <CircleDashed className="h-4 w-4" aria-hidden="true" />,
-    dot: 'border-slate-200 bg-white text-slate-400',
+    dot: 'border-[var(--kf-border-secondary)] bg-[var(--kf-bg-container)] text-[var(--kf-text-tertiary)]',
   },
 };
 
@@ -101,7 +101,7 @@ export function hideOpaqueDiagnosticTokens(value: unknown): unknown {
 
 function DiagnosticJson({ value }: { value: unknown }) {
   return (
-    <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-all rounded-md bg-slate-950 px-3 py-2 font-mono text-[10px] leading-4 text-slate-200">
+    <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-all rounded-md bg-[var(--kf-bg-spotlight)] px-3 py-2 font-mono text-xs leading-4 text-[var(--kf-text-quaternary)]">
       {JSON.stringify(hideOpaqueDiagnosticTokens(value), null, 2)}
     </pre>
   );
@@ -113,7 +113,7 @@ function TimelineStage({ item, last }: { item: AnalyticsQueryDiagnosticTimelineI
   const title = item.group === 'query' ? `${item.key} · ${item.label}` : item.label;
   return (
     <li className="relative grid grid-cols-[28px_minmax(0,1fr)] gap-3 pb-4 last:pb-0">
-      {!last && <span className="absolute left-[13px] top-7 h-[calc(100%-1rem)] w-px bg-slate-200" aria-hidden="true" />}
+      {!last && <span className="absolute left-[13px] top-7 h-[calc(100%-1rem)] w-px bg-[rgb(var(--kf-fill-secondary-rgb))]" aria-hidden="true" />}
       <span
         className={cx(
           'relative z-10 grid h-7 w-7 place-items-center rounded-full border',
@@ -124,27 +124,27 @@ function TimelineStage({ item, last }: { item: AnalyticsQueryDiagnosticTimelineI
       </span>
       <div className="min-w-0 pt-0.5">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs font-semibold text-slate-700">{title}</span>
+          <span className="text-xs font-semibold text-[var(--kf-text)]">{title}</span>
           <Badge tone={status.tone}>{status.label}</Badge>
         </div>
-        <p className="mt-1 whitespace-pre-wrap break-words text-[11px] leading-5 text-slate-500">
+        <p className="mt-1 whitespace-pre-wrap break-words text-xs leading-5 text-[var(--kf-text-secondary)]">
           {item.summary || '没有阶段摘要。'}
         </p>
         {hasEvidence && (
-          <details className="mt-1.5 rounded-md border border-slate-200 bg-white text-[11px]">
-            <summary className="cursor-pointer select-none px-2.5 py-1.5 text-slate-500 hover:bg-slate-50">
+          <details className="mt-1.5 rounded-md border border-[var(--kf-border-secondary)] bg-[var(--kf-bg-container)] text-xs">
+            <summary className="cursor-pointer select-none px-2.5 py-1.5 text-[var(--kf-text-secondary)] hover:bg-[rgb(var(--kf-fill-alter-rgb))]">
               查看事件与产物
             </summary>
-            <div className="border-t border-slate-100 px-2.5 py-2">
+            <div className="border-t border-[var(--kf-border-secondary)] px-2.5 py-2">
               {item.events.length > 0 && (
                 <div>
-                  <div className="font-medium text-slate-500">事件（按实际发生顺序）</div>
+                  <div className="font-medium text-[var(--kf-text-secondary)]">事件（按实际发生顺序）</div>
                   <DiagnosticJson value={item.events} />
                 </div>
               )}
               {Object.keys(item.artifacts).length > 0 && (
                 <div className={item.events.length > 0 ? 'mt-2' : undefined}>
-                  <div className="font-medium text-slate-500">阶段产物</div>
+                  <div className="font-medium text-[var(--kf-text-secondary)]">阶段产物</div>
                   <DiagnosticJson value={item.artifacts} />
                 </div>
               )}
@@ -159,7 +159,7 @@ function TimelineStage({ item, last }: { item: AnalyticsQueryDiagnosticTimelineI
 function TimelineGroup({ title, items }: { title: string; items: AnalyticsQueryDiagnosticTimelineItem[] }) {
   return (
     <section>
-      <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+      <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-[var(--kf-text-tertiary)]">
         {title}
       </h3>
       {items.length > 0 ? (
@@ -169,7 +169,7 @@ function TimelineGroup({ title, items }: { title: string; items: AnalyticsQueryD
           ))}
         </ol>
       ) : (
-        <p className="text-[11px] text-slate-400">服务端没有返回这一组诊断阶段。</p>
+        <p className="text-xs text-[var(--kf-text-tertiary)]">服务端没有返回这一组诊断阶段。</p>
       )}
     </section>
   );
@@ -273,7 +273,7 @@ export function QueryDiagnosticDialog({
       {!loading && error && (
         <div className="flex flex-col gap-3">
           <ErrorBanner message={error} />
-          <p className="text-xs text-slate-500">
+          <p className="text-xs text-[var(--kf-text-secondary)]">
             诊断导出失败，原问数结果不受影响。可以稍后重试，不会重新执行原查询。
           </p>
           <div>
@@ -288,29 +288,29 @@ export function QueryDiagnosticDialog({
       )}
       {!loading && report && (
         <div className="flex flex-col gap-5">
-          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-5 text-amber-800">
+          <div className="rounded-lg border border-[var(--kf-warning-border)] bg-[var(--kf-warning-bg)] px-3 py-2 text-xs leading-5 text-[var(--kf-warning-text)]">
             报告可能包含业务问题、语义目录、SQL 和结果样本，分享前请检查敏感信息。
           </div>
-          <section className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+          <section className="rounded-lg border border-[var(--kf-border-secondary)] bg-[rgb(var(--kf-fill-alter-rgb))] px-4 py-3">
             <div className="flex flex-wrap items-center gap-2">
               <Badge tone={report.summary.state === 'FAILED' ? 'red' : report.summary.state === 'CLARIFICATION_REQUIRED' ? 'amber' : 'green'}>
                 {report.summary.state}
               </Badge>
-              <span className="font-mono text-[10px] text-slate-400">{report.summary.query_id}</span>
+              <span className="font-mono text-xs text-[var(--kf-text-tertiary)]">{report.summary.query_id}</span>
               {report.summary.version_status && (
                 <Badge tone={report.summary.version_status === 'CURRENT' ? 'blue' : 'amber'}>
                   {report.summary.version_status}
                 </Badge>
               )}
             </div>
-            <div className="mt-2 text-xs font-medium text-slate-700">{report.summary.question}</div>
+            <div className="mt-2 text-xs font-medium text-[var(--kf-text)]">{report.summary.question}</div>
             {(report.summary.diagnostic_stage || diagnosticCategory) && (
-              <div className="mt-1 text-[11px] text-slate-500">
+              <div className="mt-1 text-xs text-[var(--kf-text-secondary)]">
                 快速定位：{[report.summary.diagnostic_stage, diagnosticCategory].filter(Boolean).join(' · ')}
               </div>
             )}
             {report.summary.message && (
-              <div className="mt-1 text-[11px] text-slate-600">{report.summary.message}</div>
+              <div className="mt-1 text-xs text-[var(--kf-text-secondary)]">{report.summary.message}</div>
             )}
           </section>
           <TimelineGroup title="建模上下文（非本次查询）" items={context} />

@@ -55,7 +55,7 @@ function Steps({
   onChange: (key: StepKey) => void;
 }) {
   return (
-    <div className="flex items-center border-b border-slate-100 bg-slate-50 px-4">
+    <div className="flex items-center border-b border-[var(--kf-border-secondary)] bg-[rgb(var(--kf-fill-alter-rgb))] px-4">
       {WORKBENCH_STEPS.map((step, index) => {
         const isActive = step.key === active;
         const isDone = done.has(step.key) && !isActive;
@@ -65,20 +65,20 @@ function Steps({
               type="button"
               aria-current={isActive ? 'step' : undefined}
               onClick={() => onChange(step.key)}
-              className={`flex items-center gap-2 py-2.5 pr-4 text-[13px] transition-colors ${
+              className={`flex items-center gap-2 py-2.5 pr-4 text-sm transition-colors ${
                 isActive
-                  ? 'font-semibold text-blue-600'
+                  ? 'font-semibold text-[var(--kf-primary)]'
                   : isDone
-                    ? 'text-slate-600 hover:text-slate-800'
-                    : 'text-slate-400 hover:text-slate-600'
+                    ? 'text-[var(--kf-text-secondary)] hover:text-[var(--kf-text)]'
+                    : 'text-[var(--kf-text-tertiary)] hover:text-[var(--kf-text-secondary)]'
               }`}
             >
               <span
-                className={`grid h-[19px] w-[19px] place-items-center rounded-full border-[1.5px] text-[10px] font-semibold ${
+                className={`grid h-[19px] w-[19px] place-items-center rounded-full border-[1.5px] text-xs font-semibold ${
                   isActive
-                    ? 'border-blue-600 bg-blue-600 text-white'
+                    ? 'border-[var(--kf-primary)] bg-[var(--kf-primary)] text-[var(--kf-text-light-solid)]'
                     : isDone
-                      ? 'border-green-600 bg-green-600 text-white'
+                      ? 'border-[var(--kf-success-text)] bg-[var(--kf-success-text)] text-[var(--kf-text-light-solid)]'
                       : 'border-current'
                 }`}
               >
@@ -86,7 +86,7 @@ function Steps({
               </span>
               {step.label}
             </button>
-            {index < WORKBENCH_STEPS.length - 1 && <span className="mr-3.5 text-slate-300">›</span>}
+            {index < WORKBENCH_STEPS.length - 1 && <span className="mr-3.5 text-[var(--kf-text-quaternary)]">›</span>}
           </div>
         );
       })}
@@ -184,7 +184,7 @@ export function WorkbenchPage() {
   );
   if (summary.isPending) return <Spinner />;
   if (summary.isError) {
-    return <div className="text-sm text-red-600">{describeError(summary.error)}</div>;
+    return <div className="text-sm text-[var(--kf-error-text)]">{describeError(summary.error)}</div>;
   }
 
   const readOnly = Boolean(revision && revision.state !== 'draft' && revision.state !== 'validated');
@@ -201,13 +201,13 @@ export function WorkbenchPage() {
         <div className="flex items-center gap-3">
           <Link
             to={appPath('/')}
-            className="grid h-8 w-8 place-items-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+            className="grid h-8 w-8 place-items-center rounded-md text-[var(--kf-text-tertiary)] hover:bg-[rgb(var(--kf-fill-tertiary-rgb))] hover:text-[var(--kf-text)]"
           >
             <ArrowLeft className="h-4 w-4" />
           </Link>
           <div>
             <div className="flex items-center gap-2">
-              <h1 className="text-base font-semibold text-slate-900">
+              <h1 className="text-base font-semibold text-[var(--kf-text)]">
                 {summary.data.project_name}
               </h1>
               {revision && (
@@ -216,7 +216,7 @@ export function WorkbenchPage() {
                 </Badge>
               )}
             </div>
-            <div className="text-[11px] text-slate-400">
+            <div className="text-xs text-[var(--kf-text-tertiary)]">
               {/* `rel_a312bd311a94455a9518a06837b9657e` 认不出也记不住，更看不出
                   先后。序号还没到手时先不写，别把一串哈希摆在这儿凑数。 */}
               {summary.data.active_release_id
@@ -244,13 +244,13 @@ export function WorkbenchPage() {
         getBoundingClientRect().top 算可用高度，卡被内部滚动后这个值变成负数。
         overflow-clip 只裁剪，不建立滚动端口，从根上没有这个状态。
       */}
-      <div className="overflow-clip rounded-xl border border-slate-200 bg-white">
+      <div className="overflow-clip rounded-xl border border-[var(--kf-border-secondary)] bg-[var(--kf-bg-container)]">
         <Steps active={step} done={done} onChange={goTo} />
         {revision && showsCompleteness(step) && (
           <CompletenessStrip revision={revision} goTo={goTo} />
         )}
         {readOnly && (
-          <div className="border-b border-amber-100 bg-amber-50 px-4 py-2 text-xs text-amber-700">
+          <div className="border-b border-[var(--kf-warning-bg)] bg-[var(--kf-warning-bg)] px-4 py-2 text-xs text-[var(--kf-warning-text)]">
             当前版本已{REVISION_STATE_LABELS[revision!.state]}，内容只读。
             点击右上角「基于此版本继续编辑」派生一个新草稿后再修改。
           </div>

@@ -67,7 +67,7 @@ export function QualityReportCard({
 
   if (!report) {
     return (
-      <div className="rounded-lg border border-dashed border-slate-200 px-3 py-4 text-xs text-slate-400">
+      <div className="rounded-lg border border-dashed border-[var(--kf-border-secondary)] px-3 py-4 text-xs text-[var(--kf-text-tertiary)]">
         这一版还没有数据质量报告。结构校验通过后会自动跑一次。
       </div>
     );
@@ -80,23 +80,23 @@ export function QualityReportCard({
   const checkedGrains = allGrains.filter((item) => item.identifier_field_ids.length > 0);
 
   return (
-    <div className="rounded-lg border border-slate-200 p-3.5">
-      <h3 className="flex items-center gap-2 text-xs font-semibold text-slate-800">
-        <Database className="h-3.5 w-3.5 text-slate-400" /> 数据质量
+    <div className="rounded-lg border border-[var(--kf-border-secondary)] p-3.5">
+      <h3 className="flex items-center gap-2 text-xs font-semibold text-[var(--kf-text)]">
+        <Database className="h-3.5 w-3.5 text-[var(--kf-text-tertiary)]" /> 数据质量
       </h3>
 
       <div className="mt-3 flex flex-col gap-4 text-xs">
         <div className="flex items-center gap-2">
           {report.blocking_count > 0 ? (
-            <AlertTriangle className="h-4 w-4 text-red-600" />
+            <AlertTriangle className="h-4 w-4 text-[var(--kf-error-text)]" />
           ) : (
-            <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+            <CheckCircle2 className="h-4 w-4 text-[var(--kf-success-text)]" />
           )}
-          <span className="font-medium text-slate-800">
+          <span className="font-medium text-[var(--kf-text)]">
             {report.blocking_count > 0 ? `${report.blocking_count} 个阻断问题` : '没有阻断问题'}
           </span>
           {report.warning_count > 0 && (
-            <span className="text-slate-500">· {report.warning_count} 条提醒</span>
+            <span className="text-[var(--kf-text-secondary)]">· {report.warning_count} 条提醒</span>
           )}
         </div>
 
@@ -111,8 +111,8 @@ export function QualityReportCard({
         >
           {(row) => (
             <>
-              <span className="font-medium text-slate-700">{label(row.model_id)}</span>
-              <span className="text-slate-500">
+              <span className="font-medium text-[var(--kf-text)]">{label(row.model_id)}</span>
+              <span className="text-[var(--kf-text-secondary)]">
                 {row.total_rows} 行 · 唯一率 {pct(row.uniqueness_rate)}
                 {row.duplicate_rows > 0 && ` · 重复 ${row.duplicate_rows}`}
                 {row.null_rows > 0 && ` · 空值 ${row.null_rows}`}
@@ -124,8 +124,8 @@ export function QualityReportCard({
         <QualitySection title="关系实测" rows={report.relations}>
           {(row) => (
             <>
-              <span className="font-medium text-slate-700">{label(row.relation_id)}</span>
-              <span className="text-slate-500">
+              <span className="font-medium text-[var(--kf-text)]">{label(row.relation_id)}</span>
+              <span className="text-[var(--kf-text-secondary)]">
                 声明 {row.declared_cardinality}
                 {row.observed_cardinality && row.observed_cardinality !== row.declared_cardinality
                   ? ` · 实测 ${row.observed_cardinality}`
@@ -140,8 +140,8 @@ export function QualityReportCard({
         <QualitySection title="指标样本" rows={report.metric_previews}>
           {(row) => (
             <>
-              <span className="font-medium text-slate-700">{label(row.metric_id)}</span>
-              <span className="font-mono text-slate-600">
+              <span className="font-medium text-[var(--kf-text)]">{label(row.metric_id)}</span>
+              <span className="font-mono text-[var(--kf-text-secondary)]">
                 {row.rows?.[0]?.map((value) => String(value)).join(' , ') ?? '—'}
               </span>
             </>
@@ -151,10 +151,10 @@ export function QualityReportCard({
         <QualitySection title="指标 → 维度可达性" rows={report.reachability}>
           {(row) => (
             <>
-              <span className="font-medium text-slate-700">
+              <span className="font-medium text-[var(--kf-text)]">
                 {label(row.metric_id)} × {label(row.dimension_id)}
               </span>
-              <span className="text-slate-500">{row.message}</span>
+              <span className="text-[var(--kf-text-secondary)]">{row.message}</span>
             </>
           )}
         </QualitySection>
@@ -180,13 +180,13 @@ function QualitySection<T extends { status: AnalyticsQualityStatus; message: str
   return (
     <div>
       <div className="mb-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+        <span className="text-xs font-semibold uppercase tracking-wide text-[var(--kf-text-tertiary)]">
           {title}
         </span>
         {attention.length === 0 && queued.length === 0 ? (
-          <span className="text-[11px] text-emerald-600">全部通过（{rows.length}）</span>
+          <span className="text-xs text-[var(--kf-success-text)]">全部通过（{rows.length}）</span>
         ) : (
-          <span className="text-[11px] text-slate-400">
+          <span className="text-xs text-[var(--kf-text-tertiary)]">
             {attention.length > 0 && `${attention.length} 项提醒`}
             {attention.length > 0 && queued.length > 0 && ' · '}
             {queued.length > 0 && `${queued.length} 项已在上面等你确认`}
@@ -194,21 +194,21 @@ function QualitySection<T extends { status: AnalyticsQualityStatus; message: str
           </span>
         )}
       </div>
-      {note ? <div className="mb-1.5 text-[11px] text-slate-400">{note}</div> : null}
+      {note ? <div className="mb-1.5 text-xs text-[var(--kf-text-tertiary)]">{note}</div> : null}
       <div className="flex flex-col gap-1.5">
         {attention.map((row, index) => (
           <div
             key={index}
             className={`flex flex-wrap items-center gap-2 rounded-md border px-2.5 py-1.5 ${
               row.status === 'blocking' || row.status === 'rejected'
-                ? 'border-red-200 bg-red-50/50'
-                : 'border-amber-200/70 bg-amber-50/40'
+                ? 'border-[var(--kf-error-border)] bg-[rgb(var(--kf-error-bg-rgb)/0.5)]'
+                : 'border-[rgb(var(--kf-warning-border-rgb)/0.7)] bg-[rgb(var(--kf-warning-bg-rgb)/0.4)]'
             }`}
           >
             <StatusBadge status={row.status} />
             {children(row)}
             {row.message && (
-              <span className="flex items-center gap-1 text-slate-500">
+              <span className="flex items-center gap-1 text-[var(--kf-text-secondary)]">
                 <Info className="h-3 w-3" /> {row.message}
               </span>
             )}

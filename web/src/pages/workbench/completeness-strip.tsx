@@ -28,9 +28,9 @@ export function CompletenessStrip({
   if (incomplete.length === 0) return null;
 
   return (
-    <div className="rounded-lg border border-amber-200/70 bg-amber-50/40 px-4 py-2.5 text-xs">
+    <div className="rounded-lg border border-[rgb(var(--kf-warning-border-rgb)/0.7)] bg-[rgb(var(--kf-warning-bg-rgb)/0.4)] px-4 py-2.5 text-xs">
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5">
-        <span className="font-medium text-amber-800">建模完成度</span>
+        <span className="font-medium text-[var(--kf-warning-text)]">建模完成度</span>
         {applicable.map((gauge) => {
           const done = gauge.covered >= gauge.total;
           return (
@@ -39,7 +39,7 @@ export function CompletenessStrip({
               type="button"
               onClick={() => setOpen(open === gauge.key ? null : gauge.key)}
               className={`flex items-center gap-1.5 rounded px-1.5 py-0.5 transition-colors ${
-                done ? 'text-emerald-700' : 'text-amber-800 hover:bg-amber-100/70'
+                done ? 'text-[var(--kf-success-text)]' : 'text-[var(--kf-warning-text)] hover:bg-[rgb(var(--kf-warning-bg-rgb)/0.7)]'
               }`}
             >
               <span>{gauge.label}</span>
@@ -63,16 +63,16 @@ export function CompletenessStrip({
 function Detail({ gauge, onGo }: { gauge: CompletenessGauge; onGo: () => void }) {
   const shown = gauge.missing.slice(0, 12);
   return (
-    <div className="mt-2 border-t border-amber-200/60 pt-2 text-amber-900/80">
+    <div className="mt-2 border-t border-[rgb(var(--kf-warning-border-rgb)/0.6)] pt-2 text-[rgb(var(--kf-warning-text-rgb)/0.8)]">
       <div>{gauge.consequence}。缺失：</div>
       <div className="mt-1 flex flex-wrap gap-1.5">
         {shown.map((name, index) => (
-          <span key={index} className="rounded bg-white/70 px-1.5 py-0.5 text-amber-900">
+          <span key={index} className="rounded bg-[rgb(var(--kf-bg-container-rgb)/0.7)] px-1.5 py-0.5 text-[var(--kf-warning-text)]">
             {name}
           </span>
         ))}
         {gauge.missing.length > shown.length && (
-          <span className="text-amber-700">…共 {gauge.missing.length} 项</span>
+          <span className="text-[var(--kf-warning-text)]">…共 {gauge.missing.length} 项</span>
         )}
         <button type="button" onClick={onGo} className="ml-1 font-medium underline">
           去补全

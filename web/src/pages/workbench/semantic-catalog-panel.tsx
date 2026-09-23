@@ -204,7 +204,7 @@ export function SemanticCatalogPanel(
 
   return (
     <div>
-      <div className="flex items-center gap-1 border-b border-slate-100 px-4 py-2">
+      <div className="flex items-center gap-1 border-b border-[var(--kf-border-secondary)] px-4 py-2">
         {CATALOG_NAV_ITEMS.map((item) => (
           <Button
             key={item.key}
@@ -216,7 +216,7 @@ export function SemanticCatalogPanel(
             {item.label}
           </Button>
         ))}
-        <span className="ml-auto hidden text-[11px] text-slate-400 lg:inline">
+        <span className="ml-auto hidden text-xs text-[var(--kf-text-tertiary)] lg:inline">
           对外目录覆盖全部 {spec.metrics.length} 个指标与 {spec.dimensions.length} 个维度
         </span>
         <Button
@@ -241,7 +241,7 @@ export function SemanticCatalogPanel(
       {view !== 'ai' && modelingRunning && (
         <button
           type="button"
-          className="flex w-full items-center gap-3 border-b border-blue-100 bg-blue-50/70 px-4 py-2 text-left text-xs text-blue-800"
+          className="flex w-full items-center gap-3 border-b border-[var(--kf-primary-bg)] bg-[rgb(var(--kf-primary-bg-rgb)/0.7)] px-4 py-2 text-left text-xs text-[var(--kf-primary-active)]"
           onClick={() => setView('ai')}
         >
           <Sparkles className="h-4 w-4 shrink-0" />
@@ -254,7 +254,7 @@ export function SemanticCatalogPanel(
       {view !== 'ai' && modelingReady && (
         <button
           type="button"
-          className="flex w-full items-center gap-3 border-b border-emerald-100 bg-emerald-50/70 px-4 py-2 text-left text-xs text-emerald-800"
+          className="flex w-full items-center gap-3 border-b border-[var(--kf-success-bg)] bg-[rgb(var(--kf-success-bg-rgb)/0.7)] px-4 py-2 text-left text-xs text-[var(--kf-success-text)]"
           onClick={() => setView('ai')}
         >
           <Sparkles className="h-4 w-4 shrink-0" />
@@ -318,8 +318,8 @@ function CatalogOverview({
       <section>
         <div className="mb-3 flex items-end justify-between gap-4">
           <div>
-            <h2 className="text-sm font-semibold text-slate-900">完整语义目录</h2>
-            <p className="mt-0.5 text-xs text-slate-400">
+            <h2 className="text-sm font-semibold text-[var(--kf-text)]">完整语义目录</h2>
+            <p className="mt-0.5 text-xs text-[var(--kf-text-tertiary)]">
               所有已治理实体、指标、维度、术语和上下文都会对问数可发现；系统不会要求用户先维护一个“分析主题”。
             </p>
           </div>
@@ -372,49 +372,49 @@ function CatalogInventoryBrowser({
             onClick={() => selectKind(resourceKind)}
             className={`rounded-lg border px-3 py-2 text-left transition-colors ${
               kind === resourceKind
-                ? 'border-blue-300 bg-blue-50 text-blue-800'
-                : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                ? 'border-[var(--kf-primary-border)] bg-[var(--kf-primary-bg)] text-[var(--kf-primary-active)]'
+                : 'border-[var(--kf-border-secondary)] bg-[var(--kf-bg-container)] text-[var(--kf-text-secondary)] hover:border-[var(--kf-border)]'
             }`}
           >
-            <div className="text-[11px] font-medium">{RESOURCE_LABELS[resourceKind]}</div>
+            <div className="text-xs font-medium">{RESOURCE_LABELS[resourceKind]}</div>
             <div className="mt-0.5 text-lg font-semibold">{inventory[resourceKind].length}</div>
           </button>
         ))}
       </div>
       {rows.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-slate-200 px-4 py-8 text-center text-xs text-slate-400">
+        <div className="rounded-lg border border-dashed border-[var(--kf-border-secondary)] px-4 py-8 text-center text-xs text-[var(--kf-text-tertiary)]">
           当前目录没有 {RESOURCE_LABELS[kind]} 资源。
         </div>
       ) : (
-        <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
+        <ul className="divide-y divide-[var(--kf-border-secondary)] rounded-lg border border-[var(--kf-border-secondary)]">
           {page.visible.map((row) => (
             <li key={row.id} className="px-3 py-2.5 text-xs">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="font-medium text-slate-800">{row.title}</div>
-                  <div className="truncate text-[11px] text-slate-400">{row.subtitle}</div>
+                  <div className="font-medium text-[var(--kf-text)]">{row.title}</div>
+                  <div className="truncate text-xs text-[var(--kf-text-tertiary)]">{row.subtitle}</div>
                 </div>
-                <span className="max-w-[40%] truncate font-mono text-[10px] text-slate-300" title={row.id}>
+                <span className="max-w-[40%] truncate font-mono text-xs text-[var(--kf-text-quaternary)]" title={row.id}>
                   {row.id}
                 </span>
               </div>
-              {row.description && <div className="mt-1 whitespace-pre-wrap leading-relaxed text-slate-500">{row.description}</div>}
-              <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-500">
+              {row.description && <div className="mt-1 whitespace-pre-wrap leading-relaxed text-[var(--kf-text-secondary)]">{row.description}</div>}
+              <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-xs text-[var(--kf-text-secondary)]">
                 {row.details.map((item) => (
-                  <span key={`${item.label}:${item.value}`}><b className="font-medium text-slate-400">{item.label}</b> {item.value}</span>
+                  <span key={`${item.label}:${item.value}`}><b className="font-medium text-[var(--kf-text-tertiary)]">{item.label}</b> {item.value}</span>
                 ))}
               </div>
               {row.aliases.length > 0 && (
                 <div className="mt-1.5 flex flex-wrap items-center gap-1">
-                  <span className="text-[10px] text-slate-400">别名</span>
+                  <span className="text-xs text-[var(--kf-text-tertiary)]">别名</span>
                   {row.aliases.map((alias, index) => <Badge key={`${alias}:${index}`}>{alias}</Badge>)}
                 </div>
               )}
-              <details className="mt-2 rounded border border-slate-100 bg-slate-50/60 text-[11px]">
-                <summary className="cursor-pointer px-2 py-1 text-slate-500 hover:text-slate-700">
+              <details className="mt-2 rounded border border-[var(--kf-border-secondary)] bg-[rgb(var(--kf-fill-alter-rgb)/0.6)] text-xs">
+                <summary className="cursor-pointer px-2 py-1 text-[var(--kf-text-secondary)] hover:text-[var(--kf-text)]">
                   查看完整 DTO（无字段省略）
                 </summary>
-                <pre className="max-h-80 overflow-auto border-t border-slate-100 p-2 font-mono leading-relaxed text-slate-600">
+                <pre className="max-h-80 overflow-auto border-t border-[var(--kf-border-secondary)] p-2 font-mono leading-relaxed text-[var(--kf-text-secondary)]">
                   {serializeCatalogResource(row)}
                 </pre>
               </details>
@@ -423,7 +423,7 @@ function CatalogInventoryBrowser({
         </ul>
       )}
       {page.remaining > 0 && (
-        <div className="mt-3 flex items-center justify-center gap-3 text-xs text-slate-400">
+        <div className="mt-3 flex items-center justify-center gap-3 text-xs text-[var(--kf-text-tertiary)]">
           已显示 {page.visible.length}/{rows.length}
           <Button size="sm" onClick={() => setLimit(page.nextLimit)}>
             再显示 {Math.min(100, page.remaining)} 个
@@ -443,27 +443,27 @@ function SemanticContextList({
 }) {
   return (
     <section>
-      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--kf-text-tertiary)]">
         语义上下文 {entries.length} · 只读
       </h3>
       {entries.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-slate-200 px-3 py-4 text-xs text-slate-400">
+        <div className="rounded-lg border border-dashed border-[var(--kf-border-secondary)] px-3 py-4 text-xs text-[var(--kf-text-tertiary)]">
           当前目录没有已审核的语义上下文。
         </div>
       ) : (
-        <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
+        <ul className="divide-y divide-[var(--kf-border-secondary)] rounded-lg border border-[var(--kf-border-secondary)]">
           {entries.map((entry) => (
             <li key={entry.id} className="px-3 py-2.5 text-xs">
               <div className="flex flex-wrap items-center gap-1.5">
                 <Badge tone="blue">{CONTEXT_TARGET_LABELS[entry.target_type]}</Badge>
                 <Badge tone="violet">{CONTEXT_KIND_LABELS[entry.kind]}</Badge>
                 <Badge tone="slate">{semanticContextSourceLabel(entry.source_type)}</Badge>
-                <span className="font-medium text-slate-700">
+                <span className="font-medium text-[var(--kf-text)]">
                   {targetNames.get(entry.target_id) ?? entry.target_id}
                 </span>
               </div>
-              <div className="mt-1.5 whitespace-pre-wrap leading-relaxed text-slate-600">{entry.text}</div>
-              {entry.source_ref && <div className="mt-1 break-all font-mono text-[10px] text-slate-400">{entry.source_ref}</div>}
+              <div className="mt-1.5 whitespace-pre-wrap leading-relaxed text-[var(--kf-text-secondary)]">{entry.text}</div>
+              {entry.source_ref && <div className="mt-1 break-all font-mono text-xs text-[var(--kf-text-tertiary)]">{entry.source_ref}</div>}
             </li>
           ))}
         </ul>
@@ -484,18 +484,18 @@ function QueryScopeDiagnostics({ revision }: WorkbenchContext) {
   }
   return (
     <div className="px-6 py-5">
-      <div className="mb-4 rounded-lg border border-blue-100 bg-blue-50/60 px-3 py-2 text-xs leading-relaxed text-blue-800">
+      <div className="mb-4 rounded-lg border border-[var(--kf-primary-bg)] bg-[rgb(var(--kf-primary-bg-rgb)/0.6)] px-3 py-2 text-xs leading-relaxed text-[var(--kf-primary-active)]">
         查询作用域由完整语义目录确定性编译，仅用于固定事实根、精确 Join 路径与 COUNT 绑定。请在实体、关系、指标、维度或术语中修改业务语义；这里没有创建、编辑或删除入口。
       </div>
       <ul className="flex flex-col gap-3">
         {diagnostics.map((scope) => (
-          <li key={scope.id} className="rounded-lg border border-slate-200 bg-white p-4">
+          <li key={scope.id} className="rounded-lg border border-[var(--kf-border-secondary)] bg-[var(--kf-bg-container)] p-4">
             <div className="flex flex-wrap items-center gap-2">
-              <div className="text-[13px] font-semibold text-slate-900">{scope.name}</div>
+              <div className="text-sm font-semibold text-[var(--kf-text)]">{scope.name}</div>
               <Badge tone={scope.hasRoute ? 'green' : 'amber'}>
                 {scope.hasRoute ? '已编译' : '兼容路由缺失'}
               </Badge>
-              <span className="ml-auto font-mono text-[10px] text-slate-400">{scope.id}</span>
+              <span className="ml-auto font-mono text-xs text-[var(--kf-text-tertiary)]">{scope.id}</span>
             </div>
             <dl className="mt-3 grid gap-3 text-xs sm:grid-cols-2">
               <ScopeValue label="事实根" values={[scope.rootName]} />
@@ -518,11 +518,11 @@ function QueryScopeDiagnostics({ revision }: WorkbenchContext) {
 function ScopeValue({ label, values, empty = '无' }: { label: string; values: string[]; empty?: string }) {
   return (
     <div>
-      <dt className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">{label}</dt>
-      <dd className="mt-1 flex flex-wrap gap-1 text-slate-600">
+      <dt className="text-xs font-semibold uppercase tracking-wide text-[var(--kf-text-tertiary)]">{label}</dt>
+      <dd className="mt-1 flex flex-wrap gap-1 text-[var(--kf-text-secondary)]">
         {values.length ? values.map((value, index) => (
-          <span key={`${value}:${index}`} className="rounded bg-slate-50 px-1.5 py-0.5">{value}</span>
-        )) : <span className="text-slate-400">{empty}</span>}
+          <span key={`${value}:${index}`} className="rounded bg-[rgb(var(--kf-fill-alter-rgb))] px-1.5 py-0.5">{value}</span>
+        )) : <span className="text-[var(--kf-text-tertiary)]">{empty}</span>}
       </dd>
     </div>
   );

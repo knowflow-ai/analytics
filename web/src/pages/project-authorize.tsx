@@ -172,7 +172,7 @@ export function ProjectAuthorizeDialog({
       <div className="space-y-4">
         {error && <ErrorBanner message={error} />}
 
-        <p className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-slate-600">
+        <p className="rounded-lg border border-[var(--kf-primary-bg)] bg-[var(--kf-primary-bg)] px-3 py-2 text-xs text-[var(--kf-text-secondary)]">
           授权的是<b>整个项目</b>（一套语义模型）。项目下的实体、指标与维度随项目继承，
           不单独授权。被授权的人能看到什么，与谁把助手分享给他无关。
         </p>
@@ -192,8 +192,8 @@ export function ProjectAuthorizeDialog({
                   }}
                   className={`rounded-md px-2.5 py-1 text-xs transition-colors ${
                     kind === tab.key
-                      ? 'bg-blue-600 font-medium text-white'
-                      : 'text-slate-600 hover:bg-slate-100'
+                      ? 'bg-[var(--kf-primary)] font-medium text-[var(--kf-text-light-solid)]'
+                      : 'text-[var(--kf-text-secondary)] hover:bg-[rgb(var(--kf-fill-tertiary-rgb))]'
                   }`}
                 >
                   {tab.label}
@@ -217,26 +217,26 @@ export function ProjectAuthorizeDialog({
                 </option>
               ))}
             </Select>
-            <span className="text-[11px] text-slate-400">
+            <span className="text-xs text-[var(--kf-text-tertiary)]">
               {ROLES.find((item) => item.key === role)?.hint}
             </span>
           </div>
 
-          <div className="max-h-44 overflow-auto rounded-lg border border-slate-200">
+          <div className="max-h-44 overflow-auto rounded-lg border border-[var(--kf-border-secondary)]">
             {subjects.isPending ? (
               <div className="p-3">
                 <Spinner label="加载中" />
               </div>
             ) : subjects.data?.length ? (
-              <ul className="divide-y divide-slate-100">
+              <ul className="divide-y divide-[var(--kf-border-secondary)]">
                 {subjects.data.map((item) => (
                   <li
                     key={item.id}
                     className="flex items-center justify-between px-3 py-1.5 text-xs"
                   >
-                    <span className="text-slate-700">{item.name}</span>
+                    <span className="text-[var(--kf-text)]">{item.name}</span>
                     {grantedIds.has(item.id) ? (
-                      <span className="text-slate-400">已授权</span>
+                      <span className="text-[var(--kf-text-tertiary)]">已授权</span>
                     ) : (
                       <Button
                         size="sm"
@@ -259,11 +259,11 @@ export function ProjectAuthorizeDialog({
         </section>
 
         <section className="space-y-2">
-          <h3 className="text-xs font-medium text-slate-500">已授权</h3>
+          <h3 className="text-xs font-medium text-[var(--kf-text-secondary)]">已授权</h3>
           {grants.isPending ? (
             <Spinner label="加载中" />
           ) : grantedRows.length ? (
-            <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
+            <ul className="divide-y divide-[var(--kf-border-secondary)] rounded-lg border border-[var(--kf-border-secondary)]">
               {grantedRows.map((row) => (
                 <li
                   key={`${row.subject_type}:${row.subject_id}`}
@@ -273,8 +273,8 @@ export function ProjectAuthorizeDialog({
                     <Badge tone="slate">
                       {SUBJECT_TABS.find((tab) => tab.key === row.subject_type)?.label}
                     </Badge>
-                    <span className="text-slate-700">{row.name}</span>
-                    <span className="text-slate-400">
+                    <span className="text-[var(--kf-text)]">{row.name}</span>
+                    <span className="text-[var(--kf-text-tertiary)]">
                       {ROLES.find((item) => item.key === row.role_code)?.label ??
                         row.role_code}
                     </span>

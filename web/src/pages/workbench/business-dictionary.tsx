@@ -288,11 +288,11 @@ function TermEditorForm({
         />
       </div>
       {validationError && (
-        <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+        <div className="rounded-md border border-[var(--kf-error-border)] bg-[var(--kf-error-bg)] px-3 py-2 text-xs text-[var(--kf-error-text)]">
           {validationError}
         </div>
       )}
-      <div className="flex justify-end gap-2 border-t border-slate-100 pt-3">
+      <div className="flex justify-end gap-2 border-t border-[var(--kf-border-secondary)] pt-3">
         <Button onClick={onClose}>取消</Button>
         <Button
           variant="primary"
@@ -379,14 +379,14 @@ function DimensionValueEditorForm({
   };
   return (
     <div className="flex flex-col gap-4">
-      <div className="grid grid-cols-2 gap-3 rounded-md bg-slate-50 px-3 py-2 text-xs">
+      <div className="grid grid-cols-2 gap-3 rounded-md bg-[rgb(var(--kf-fill-alter-rgb))] px-3 py-2 text-xs">
         <div>
-          <div className="text-[10px] text-slate-400">所属维度</div>
-          <div className="mt-0.5 text-slate-700">{dimensionName}</div>
+          <div className="text-xs text-[var(--kf-text-tertiary)]">所属维度</div>
+          <div className="mt-0.5 text-[var(--kf-text)]">{dimensionName}</div>
         </div>
         <div>
-          <div className="text-[10px] text-slate-400">原始值（不可修改）</div>
-          <div className="mt-0.5 font-mono text-slate-700">
+          <div className="text-xs text-[var(--kf-text-tertiary)]">原始值（不可修改）</div>
+          <div className="mt-0.5 font-mono text-[var(--kf-text)]">
             {String(value.value)}
           </div>
         </div>
@@ -411,7 +411,7 @@ function DimensionValueEditorForm({
           }
         />
       </Field>
-      <label className="flex items-center gap-2 text-xs text-slate-700">
+      <label className="flex items-center gap-2 text-xs text-[var(--kf-text)]">
         <input
           type="checkbox"
           disabled={context.readOnly}
@@ -423,11 +423,11 @@ function DimensionValueEditorForm({
         问数时可匹配这个维度值
       </label>
       {validationError && (
-        <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+        <div className="rounded-md border border-[var(--kf-error-border)] bg-[var(--kf-error-bg)] px-3 py-2 text-xs text-[var(--kf-error-text)]">
           {validationError}
         </div>
       )}
-      <div className="flex justify-end gap-2 border-t border-slate-100 pt-3">
+      <div className="flex justify-end gap-2 border-t border-[var(--kf-border-secondary)] pt-3">
         <Button onClick={onClose}>取消</Button>
         <Button
           variant="primary"
@@ -458,18 +458,18 @@ function BindingList({
   onToggle: (id: string) => void;
 }) {
   return (
-    <fieldset className="min-w-0 rounded-md border border-slate-200 px-3 py-2">
-      <legend className="px-1 text-xs font-medium text-slate-600">
+    <fieldset className="min-w-0 rounded-md border border-[var(--kf-border-secondary)] px-3 py-2">
+      <legend className="px-1 text-xs font-medium text-[var(--kf-text-secondary)]">
         {title}
       </legend>
       {items.length === 0 ? (
-        <div className="py-2 text-[11px] text-slate-400">{empty}</div>
+        <div className="py-2 text-xs text-[var(--kf-text-tertiary)]">{empty}</div>
       ) : (
         <div className="max-h-36 space-y-1 overflow-auto py-1">
           {items.map((item) => (
             <label
               key={item.id}
-              className="flex items-center gap-2 text-xs text-slate-700"
+              className="flex items-center gap-2 text-xs text-[var(--kf-text)]"
             >
               <input
                 type="checkbox"
@@ -571,8 +571,8 @@ export function BusinessDictionaryPanel({
     <div className="px-6 py-5">
       <div className="mb-5 flex items-start justify-between gap-4">
         <div>
-          <h2 className="text-sm font-semibold text-slate-900">业务词典</h2>
-          <p className="mt-0.5 text-xs text-slate-400">
+          <h2 className="text-sm font-semibold text-[var(--kf-text)]">业务词典</h2>
+          <p className="mt-0.5 text-xs text-[var(--kf-text-tertiary)]">
             维护业务人员会怎么说，并把这些说法绑定到受治理指标、维度和真实维度值。
           </p>
         </div>
@@ -588,7 +588,7 @@ export function BusinessDictionaryPanel({
         )}
       </div>
 
-      <div className="mb-4 flex items-center gap-1 border-b border-slate-100">
+      <div className="mb-4 flex items-center gap-1 border-b border-[var(--kf-border-secondary)]">
         {BUSINESS_DICTIONARY_SECTIONS.map((item) => {
           const count = item.key === "terms" ? terms.length : values.length;
           return (
@@ -598,8 +598,8 @@ export function BusinessDictionaryPanel({
               aria-current={section === item.key ? "page" : undefined}
               className={`border-b-2 px-3 py-2 text-xs font-medium transition-colors ${
                 section === item.key
-                  ? "border-blue-600 text-blue-700"
-                  : "border-transparent text-slate-500 hover:text-slate-700"
+                  ? "border-[var(--kf-primary)] text-[var(--kf-primary-active)]"
+                  : "border-transparent text-[var(--kf-text-secondary)] hover:text-[var(--kf-text)]"
               }`}
               onClick={() => onSectionChange(item.key)}
             >
@@ -623,16 +623,16 @@ export function BusinessDictionaryPanel({
             }
           />
         ) : (
-          <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
+          <ul className="divide-y divide-[var(--kf-border-secondary)] rounded-lg border border-[var(--kf-border-secondary)]">
             {terms.map((term) => (
               <li key={term.id} className="px-3 py-3 text-xs">
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0">
-                    <div className="font-medium text-slate-800">
+                    <div className="font-medium text-[var(--kf-text)]">
                       {term.name}
                     </div>
                     {term.description && (
-                      <div className="mt-1 whitespace-pre-wrap leading-relaxed text-slate-500">
+                      <div className="mt-1 whitespace-pre-wrap leading-relaxed text-[var(--kf-text-secondary)]">
                         {term.description}
                       </div>
                     )}
@@ -663,17 +663,17 @@ export function BusinessDictionaryPanel({
                   )}
                 </div>
                 <div className="mt-2 flex flex-wrap items-center gap-1">
-                  <span className="text-[10px] text-slate-400">同义说法</span>
+                  <span className="text-xs text-[var(--kf-text-tertiary)]">同义说法</span>
                   {term.aliases.length > 0 ? (
                     term.aliases.map((alias) => (
                       <Badge key={alias}>{alias}</Badge>
                     ))
                   ) : (
-                    <span className="text-[11px] text-slate-400">无</span>
+                    <span className="text-xs text-[var(--kf-text-tertiary)]">无</span>
                   )}
                 </div>
                 <div className="mt-2 flex flex-wrap items-center gap-1">
-                  <span className="text-[10px] text-slate-400">关联资源</span>
+                  <span className="text-xs text-[var(--kf-text-tertiary)]">关联资源</span>
                   {describeBindings(term).map((name) => (
                     <Badge key={name} tone="blue" variant="outline">
                       {name}
@@ -743,15 +743,15 @@ function DimensionValueList({
   }
   return (
     <div>
-      <div className="mb-3 flex items-center justify-between gap-3 text-xs text-slate-500">
+      <div className="mb-3 flex items-center justify-between gap-3 text-xs text-[var(--kf-text-secondary)]">
         <span>维度值来自真实数据采集；展示名称与同义值在所属维度中审核。</span>
         <Button size="sm" onClick={onOpenGraph}>
           管理维度值
         </Button>
       </div>
-      <div className="overflow-auto rounded-lg border border-slate-200">
+      <div className="overflow-auto rounded-lg border border-[var(--kf-border-secondary)]">
         <table className="w-full min-w-[680px] text-left text-xs">
-          <thead className="bg-slate-50 text-[11px] text-slate-400">
+          <thead className="bg-[rgb(var(--kf-fill-alter-rgb))] text-xs text-[var(--kf-text-tertiary)]">
             <tr>
               <th className="px-3 py-2 font-medium">维度</th>
               <th className="px-3 py-2 font-medium">原始值</th>
@@ -761,19 +761,19 @@ function DimensionValueList({
               {!readOnly && <th className="px-3 py-2 font-medium">操作</th>}
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-100">
+          <tbody className="divide-y divide-[var(--kf-border-secondary)]">
             {values.map((value) => (
               <tr key={value.id}>
-                <td className="px-3 py-2 text-slate-700">
+                <td className="px-3 py-2 text-[var(--kf-text)]">
                   {dimensionNames.get(value.dimension_id) ?? value.dimension_id}
                 </td>
-                <td className="px-3 py-2 font-mono text-slate-600">
+                <td className="px-3 py-2 font-mono text-[var(--kf-text-secondary)]">
                   {String(value.value)}
                 </td>
-                <td className="px-3 py-2 text-slate-700">
+                <td className="px-3 py-2 text-[var(--kf-text)]">
                   {value.display_name}
                 </td>
-                <td className="px-3 py-2 text-slate-500">
+                <td className="px-3 py-2 text-[var(--kf-text-secondary)]">
                   {value.aliases.join("、") || "—"}
                 </td>
                 <td className="px-3 py-2">

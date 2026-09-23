@@ -85,7 +85,7 @@ export function UploadsDialog({ open, onClose }: { open: boolean; onClose: () =>
         footer={<Button onClick={onClose}>关闭</Button>}
       >
         <div className="mb-3 flex items-start justify-between gap-3">
-          <p className="min-w-0 text-xs leading-relaxed text-slate-400">
+          <p className="min-w-0 text-xs leading-relaxed text-[var(--kf-text-tertiary)]">
             上传的表会存成一张真实的表，并归入「上传的表格」这个数据源。项目绑定它之后，
             建模与问数和数据库数据源完全一样。
           </p>
@@ -104,12 +104,12 @@ export function UploadsDialog({ open, onClose }: { open: boolean; onClose: () =>
           <Empty title="还没有上传过表格" hint={`支持 ${ACCEPTED_SUFFIX} 文件。`} />
         )}
         {tables.data && tables.data.length > 0 && (
-          <ul className="divide-y divide-slate-100">
+          <ul className="divide-y divide-[var(--kf-border-secondary)]">
             {tables.data.map((item) => (
               <li key={item.table} className="flex items-center justify-between gap-3 py-2.5">
                 <div className="min-w-0">
-                  <div className="truncate text-sm text-slate-900">{item.table}</div>
-                  <div className="mt-0.5 text-xs text-slate-400">
+                  <div className="truncate text-sm text-[var(--kf-text)]">{item.table}</div>
+                  <div className="mt-0.5 text-xs text-[var(--kf-text-tertiary)]">
                     {item.row_count} 行 · {item.columns.length} 列
                   </div>
                 </div>
@@ -294,7 +294,7 @@ function UploadDialog({
           <input
             type="file"
             accept={ACCEPTED_SUFFIX}
-            className="block w-full text-sm text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-sm file:text-slate-700"
+            className="block w-full text-sm text-[var(--kf-text-secondary)] file:mr-3 file:rounded-md file:border-0 file:bg-[rgb(var(--kf-fill-tertiary-rgb))] file:px-3 file:py-1.5 file:text-sm file:text-[var(--kf-text)]"
             onChange={(event) => {
               const picked = event.target.files?.[0] ?? null;
               if (!picked) return;
@@ -328,7 +328,7 @@ function UploadDialog({
 
         {previews.length > 0 && mode === 'create' && (
           <div className="space-y-2">
-            <div className="text-xs text-slate-500">
+            <div className="text-xs text-[var(--kf-text-secondary)]">
               勾选要导入的工作表，一次可以导多张。表名是建模页和问数里找到它的依据。
             </div>
             {previews.map((preview) => {
@@ -337,7 +337,7 @@ function UploadDialog({
               return (
                 <div
                   key={preview.sheet}
-                  className="rounded-md border border-slate-200 p-3"
+                  className="rounded-md border border-[var(--kf-border-secondary)] p-3"
                 >
                   <div className="flex items-center gap-2">
                     <input
@@ -346,8 +346,8 @@ function UploadDialog({
                       disabled={row.blocked !== undefined}
                       onChange={() => toggle(preview.sheet)}
                     />
-                    <span className="truncate text-sm text-slate-900">{preview.sheet}</span>
-                    <span className="ml-auto shrink-0 text-xs text-slate-400">
+                    <span className="truncate text-sm text-[var(--kf-text)]">{preview.sheet}</span>
+                    <span className="ml-auto shrink-0 text-xs text-[var(--kf-text-tertiary)]">
                       {row.blocked
                         ? row.blocked
                         : `${preview.row_count} 行 · ${preview.columns?.length} 列`}
@@ -361,18 +361,18 @@ function UploadDialog({
                         onChange={(event) => rename(preview.sheet, event.target.value)}
                       />
                       {problems[preview.sheet] && (
-                        <p className="text-xs text-rose-600">{problems[preview.sheet]}</p>
+                        <p className="text-xs text-[var(--kf-error-text)]">{problems[preview.sheet]}</p>
                       )}
                       <ul className="max-h-24 space-y-0.5 overflow-y-auto text-xs">
                         {(preview.columns ?? []).map((column) => (
                           <li key={column.name} className="flex justify-between gap-3">
-                            <span className="truncate text-slate-600">{column.name}</span>
-                            <span className="shrink-0 text-slate-400">{column.type}</span>
+                            <span className="truncate text-[var(--kf-text-secondary)]">{column.name}</span>
+                            <span className="shrink-0 text-[var(--kf-text-tertiary)]">{column.type}</span>
                           </li>
                         ))}
                       </ul>
                       {(preview.changes ?? []).length > 0 && (
-                        <div className="rounded-md bg-amber-50 px-2 py-1.5 text-xs text-amber-700">
+                        <div className="rounded-md bg-[var(--kf-warning-bg)] px-2 py-1.5 text-xs text-[var(--kf-warning-text)]">
                           <div className="mb-0.5 font-medium">自动改过，导入前请确认：</div>
                           <ul>
                             {(preview.changes ?? []).map((change) => (
@@ -416,7 +416,7 @@ function UploadDialog({
               </Select>
             </Field>
             {mode === 'replace' && (
-              <p className="rounded-md bg-rose-50 px-3 py-2 text-xs text-rose-700">
+              <p className="rounded-md bg-[var(--kf-error-bg)] px-3 py-2 text-xs text-[var(--kf-error-text)]">
                 「{target}」现有的数据会被全部清空，再写入这张工作表的内容。
               </p>
             )}

@@ -48,11 +48,11 @@ export function fieldRoleVisual(field: RoleInput): FieldRoleVisual {
  * 保证画布和实体编辑器读到的是同一套编码。
  */
 export const FIELD_ROLE_TEXT_CLASS: Record<BadgeTone, string> = {
-  slate: 'text-slate-400',
-  blue: 'text-blue-600',
-  green: 'text-emerald-600',
-  amber: 'text-amber-600',
-  red: 'text-red-600',
+  slate: 'text-[var(--kf-text-tertiary)]',
+  blue: 'text-[var(--kf-primary)]',
+  green: 'text-[var(--kf-success-text)]',
+  amber: 'text-[var(--kf-warning-text)]',
+  red: 'text-[var(--kf-error-text)]',
   violet: 'text-violet-600',
-  sky: 'text-sky-600',
+  sky: 'text-[var(--kf-primary)]',
 };

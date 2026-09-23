@@ -51,8 +51,8 @@ function ModelNodeView({ data, selected }: NodeProps<ModelNode>) {
     <div
       role="button"
       tabIndex={0}
-      className={`relative w-[252px] cursor-grab rounded-lg border bg-white shadow-[0_2px_10px_rgba(15,23,42,0.08)] active:cursor-grabbing ${
-        selected ? 'border-blue-500 ring-2 ring-blue-100' : 'border-slate-200'
+      className={`relative w-[252px] cursor-grab rounded-lg border bg-[var(--kf-bg-container)] shadow-[0_2px_10px_rgba(15,23,42,0.08)] active:cursor-grabbing ${
+        selected ? 'border-[var(--kf-primary)] ring-2 ring-[var(--kf-primary-bg)]' : 'border-[var(--kf-border-secondary)]'
       }`}
       onClick={data.onOpen}
       onKeyDown={(event) => {
@@ -63,23 +63,23 @@ function ModelNodeView({ data, selected }: NodeProps<ModelNode>) {
         id="target"
         type="target"
         position={Position.Left}
-        className="!top-[30px] !h-4 !w-4 !border-2 !border-white !bg-blue-500"
+        className="!top-[30px] !h-4 !w-4 !border-2 !border-white !bg-[var(--kf-primary)]"
       />
-      <div className="rounded-t-lg border-b border-slate-100 bg-slate-50/70 px-3 py-2.5 text-left">
-        <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-          <Network className="h-4 w-4 text-blue-500" />
+      <div className="rounded-t-lg border-b border-[var(--kf-border-secondary)] bg-[rgb(var(--kf-fill-alter-rgb)/0.7)] px-3 py-2.5 text-left">
+        <div className="flex items-center gap-2 text-sm font-semibold text-[var(--kf-text)]">
+          <Network className="h-4 w-4 text-[var(--kf-primary)]" />
           <span className="min-w-0 flex-1 truncate">{data.name}</span>
         </div>
-        <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-slate-500">
+        <div className="mt-1 flex items-center justify-between gap-2 text-xs text-[var(--kf-text-secondary)]">
           <span className="min-w-0 truncate">{data.source}</span>
           <span className="shrink-0">{data.fieldCount} 字段</span>
         </div>
       </div>
-      <div className="divide-y divide-slate-100">
+      <div className="divide-y divide-[var(--kf-border-secondary)]">
         {data.fields.map((field) => (
           <div
             key={field.id}
-            className="relative flex items-center justify-between bg-white px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50"
+            className="relative flex items-center justify-between bg-[var(--kf-bg-container)] px-3 py-1.5 text-xs text-[var(--kf-text)] hover:bg-[rgb(var(--kf-fill-alter-rgb))]"
           >
             {field.handleMode && (
               <Handle
@@ -88,7 +88,7 @@ function ModelNodeView({ data, selected }: NodeProps<ModelNode>) {
                 position={Position.Left}
                 isConnectable={field.handleMode === 'connectable'}
                 className={`!h-3 !w-3 !border-2 !border-white ${
-                  field.handleMode === 'connectable' ? '!bg-emerald-500' : '!bg-slate-400'
+                  field.handleMode === 'connectable' ? '!bg-[var(--kf-success)]' : '!bg-[rgb(var(--kf-fill-rgb))]'
                 }`}
               />
             )}
@@ -101,31 +101,31 @@ function ModelNodeView({ data, selected }: NodeProps<ModelNode>) {
                 position={Position.Right}
                 isConnectable={field.handleMode === 'connectable'}
                 className={`!h-3 !w-3 !border-2 !border-white ${
-                  field.handleMode === 'connectable' ? '!bg-emerald-500' : '!bg-slate-400'
+                  field.handleMode === 'connectable' ? '!bg-[var(--kf-success)]' : '!bg-[rgb(var(--kf-fill-rgb))]'
                 }`}
               />
             )}
           </div>
         ))}
       </div>
-      <div className="flex items-center gap-3 rounded-b-lg border-t border-slate-100 bg-slate-50 px-3 py-1.5 text-[11px] text-slate-500">
+      <div className="flex items-center gap-3 rounded-b-lg border-t border-[var(--kf-border-secondary)] bg-[rgb(var(--kf-fill-alter-rgb))] px-3 py-1.5 text-xs text-[var(--kf-text-secondary)]">
         <span className="flex items-center gap-1">
-          <Braces className="h-3 w-3 text-blue-500" />
+          <Braces className="h-3 w-3 text-[var(--kf-primary)]" />
           {data.dimensionCount} 维度
         </span>
         <span className="flex items-center gap-1">
-          <Sigma className="h-3 w-3 text-emerald-600" />
+          <Sigma className="h-3 w-3 text-[var(--kf-success-text)]" />
           {data.metricCount} 指标
         </span>
         {data.plainCount > 0 && (
-          <span className="ml-auto text-slate-400">{data.plainCount} 普通字段</span>
+          <span className="ml-auto text-[var(--kf-text-tertiary)]">{data.plainCount} 普通字段</span>
         )}
       </div>
       <Handle
         id="source"
         type="source"
         position={Position.Right}
-        className="!top-[30px] !h-4 !w-4 !border-2 !border-white !bg-blue-500"
+        className="!top-[30px] !h-4 !w-4 !border-2 !border-white !bg-[var(--kf-primary)]"
       />
     </div>
   );
@@ -323,7 +323,7 @@ export function ModelGraph({
   };
 
   return (
-    <div className={`h-full bg-slate-50 ${ANALYTICS_FLUID_PANEL_CLASS}`}>
+    <div className={`h-full bg-[rgb(var(--kf-fill-alter-rgb))] ${ANALYTICS_FLUID_PANEL_CLASS}`}>
       <ReactFlow
         onInit={(instance) => {
           flowRef.current = instance;
@@ -351,21 +351,21 @@ export function ModelGraph({
         <MiniMap pannable zoomable style={{ width: 120, height: 80 }} maskColor="rgba(248,250,252,0.72)" />
         <Controls />
         <Panel position="bottom-right">
-          <div className="flex items-center gap-3 rounded-md border border-slate-200 bg-white/95 px-2.5 py-1.5 text-[11px] text-slate-500 shadow-sm">
+          <div className="flex items-center gap-3 rounded-md border border-[var(--kf-border-secondary)] bg-[rgb(var(--kf-bg-container-rgb)/0.95)] px-2.5 py-1.5 text-xs text-[var(--kf-text-secondary)] shadow-sm">
             <span className="flex items-center gap-1.5">
-              <span className="inline-block w-4 border-t-2 border-blue-500" />已确认基数
+              <span className="inline-block w-4 border-t-2 border-[var(--kf-primary)]" />已确认基数
             </span>
             <span className="flex items-center gap-1.5">
-              <span className="inline-block w-4 border-t-2 border-dashed border-amber-500" />待确认基数
+              <span className="inline-block w-4 border-t-2 border-dashed border-[var(--kf-warning)]" />待确认基数
             </span>
             <span className="flex items-center gap-1.5">
-              <span className="inline-block w-4 border-t-2 border-red-600" />多对多
+              <span className="inline-block w-4 border-t-2 border-[var(--kf-error-text)]" />多对多
             </span>
           </div>
         </Panel>
         <Panel position="top-right">
           <div className="flex items-center gap-2">
-            <span className="rounded-md border border-slate-200 bg-white/95 px-2 py-1 text-[11px] text-slate-500 shadow-sm">
+            <span className="rounded-md border border-[var(--kf-border-secondary)] bg-[rgb(var(--kf-bg-container-rgb)/0.95)] px-2 py-1 text-xs text-[var(--kf-text-secondary)] shadow-sm">
               拖动绿色标识连接点创建关系 · 点击连线编辑
             </span>
             <Button size="sm" icon={<Wand2 className="h-3.5 w-3.5" />} loading={tidying} onClick={() => void tidy()}>

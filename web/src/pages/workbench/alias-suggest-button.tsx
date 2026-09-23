@@ -56,7 +56,7 @@ export function AliasSuggestButton({
       type="button"
       disabled={run.isPending}
       onClick={() => run.mutate()}
-      className="flex shrink-0 items-center gap-1 rounded-md border border-slate-200 px-2 text-[11px] text-slate-500 hover:border-slate-300 hover:text-blue-600 disabled:opacity-50"
+      className="flex shrink-0 items-center gap-1 rounded-md border border-[var(--kf-border-secondary)] px-2 text-xs text-[var(--kf-text-secondary)] hover:border-[var(--kf-border)] hover:text-[var(--kf-primary)] disabled:opacity-50"
       title="按名称与说明生成候选别名,可删改"
     >
       <Sparkles className="h-3 w-3" /> {run.isPending ? '生成中…' : '建议'}

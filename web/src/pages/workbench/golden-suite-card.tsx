@@ -96,14 +96,14 @@ export function GoldenSuiteCard({
   });
 
   return (
-    <div className="mt-6 rounded-lg border border-slate-200 p-4">
+    <div className="mt-6 rounded-lg border border-[var(--kf-border-secondary)] p-4">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-            <ClipboardCheck className="h-4 w-4 text-slate-400" /> 评测集
-            {record && <span className="text-xs font-normal text-slate-400">{record.suite.cases.length} 条用例</span>}
+          <h3 className="flex items-center gap-2 text-sm font-semibold text-[var(--kf-text)]">
+            <ClipboardCheck className="h-4 w-4 text-[var(--kf-text-tertiary)]" /> 评测集
+            {record && <span className="text-xs font-normal text-[var(--kf-text-tertiary)]">{record.suite.cases.length} 条用例</span>}
           </h3>
-          <p className="mt-0.5 text-xs text-slate-500">
+          <p className="mt-0.5 text-xs text-[var(--kf-text-secondary)]">
             改完模型跑一遍,确认以前答对的问题现在还答对。
           </p>
         </div>
@@ -116,7 +116,7 @@ export function GoldenSuiteCard({
 
       {suites.isPending && <Spinner />}
       {!suites.isPending && !record && (
-        <div className="mt-3 rounded-md border border-dashed border-slate-200 px-3 py-2 text-[11px] text-slate-400">
+        <div className="mt-3 rounded-md border border-dashed border-[var(--kf-border-secondary)] px-3 py-2 text-xs text-[var(--kf-text-tertiary)]">
           还没有用例。在下方「发布前试问」里问一个问题,答对后点「存为评测用例」。
         </div>
       )}
@@ -126,7 +126,7 @@ export function GoldenSuiteCard({
           <Badge tone={report.gate_passed ? 'green' : 'red'}>
             {report.passed}/{report.total} 通过
           </Badge>
-          <span className="text-slate-500">准确率 {(report.accuracy * 100).toFixed(0)}%</span>
+          <span className="text-[var(--kf-text-secondary)]">准确率 {(report.accuracy * 100).toFixed(0)}%</span>
         </div>
       )}
 
@@ -138,13 +138,13 @@ export function GoldenSuiteCard({
               <li
                 key={item.id}
                 className={`flex items-start gap-2 rounded-md border px-2.5 py-1.5 ${
-                  result && !result.passed ? 'border-red-200 bg-red-50/50' : 'border-slate-200'
+                  result && !result.passed ? 'border-[var(--kf-error-border)] bg-[rgb(var(--kf-error-bg-rgb)/0.5)]' : 'border-[var(--kf-border-secondary)]'
                 }`}
               >
                 <div className="min-w-0 flex-1">
-                  <div className="text-slate-800">「{item.question}」</div>
+                  <div className="text-[var(--kf-text)]">「{item.question}」</div>
                   {result && !result.passed && (
-                    <div className="mt-0.5 whitespace-pre-wrap break-words text-red-700">{result.message}</div>
+                    <div className="mt-0.5 whitespace-pre-wrap break-words text-[var(--kf-error-text)]">{result.message}</div>
                   )}
                 </div>
                 {result && <Badge tone={result.passed ? 'green' : 'red'}>{result.passed ? '通过' : '未过'}</Badge>}
@@ -167,7 +167,7 @@ export function GoldenSuiteCard({
                 {!readOnly && (
                   <button
                     type="button"
-                    className="text-slate-300 hover:text-red-600"
+                    className="text-[var(--kf-text-quaternary)] hover:text-[var(--kf-error-text)]"
                     onClick={() => removeCase.mutate(item.id)}
                   >
                     <X className="h-3.5 w-3.5" />

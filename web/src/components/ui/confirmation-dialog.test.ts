@@ -32,7 +32,7 @@ describe('ConfirmationDialog', () => {
     expect(html).toContain('删除 1 条语义上下文');
     expect(html).toContain('确认删除');
     expect(html).toContain('取消');
-    expect(html).toContain('bg-red-600');
+    expect(html).toContain('bg-[var(--kf-error)]');
   });
 
   it('wraps keyboard focus only at the dialog boundaries', () => {

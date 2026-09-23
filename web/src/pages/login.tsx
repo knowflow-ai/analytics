@@ -29,18 +29,18 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
   };
 
   return (
-    <div className="flex min-h-full items-center justify-center bg-slate-50 p-6">
+    <div className="flex min-h-full items-center justify-center bg-[rgb(var(--kf-fill-alter-rgb))] p-6">
       <form
         onSubmit={submit}
-        className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-8 shadow-sm"
+        className="w-full max-w-sm rounded-2xl border border-[var(--kf-border-secondary)] bg-[var(--kf-bg-container)] p-8 shadow-sm"
       >
         <div className="mb-6 flex items-center gap-3">
-          <span className="grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-blue-600 to-blue-400 text-white">
+          <span className="grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-[var(--kf-primary)] to-[var(--kf-primary-hover)] text-[var(--kf-text-light-solid)]">
             <BarChart3 className="h-5 w-5" />
           </span>
           <div>
-            <div className="text-base font-semibold text-slate-900">KnowFlow 智能问数</div>
-            <div className="text-xs text-slate-400">请输入访问密码</div>
+            <div className="text-base font-semibold text-[var(--kf-text)]">KnowFlow 智能问数</div>
+            <div className="text-xs text-[var(--kf-text-tertiary)]">请输入访问密码</div>
           </div>
         </div>
         <Field label="访问密码">
@@ -51,7 +51,7 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
             onChange={(event) => setPassword(event.target.value)}
           />
         </Field>
-        {error && <div className="mt-2 text-xs text-red-600">{error}</div>}
+        {error && <div className="mt-2 text-xs text-[var(--kf-error-text)]">{error}</div>}
         <Button
           type="submit"
           variant="primary"

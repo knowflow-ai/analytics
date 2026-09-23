@@ -123,13 +123,13 @@ export function ProjectDataSourceDialog({
           </Field>
 
           {warnsAboutSemanticDrift({ boundId, selected }) && (
-            <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-700">
+            <p className="rounded-md bg-[var(--kf-warning-bg)] px-3 py-2 text-xs text-[var(--kf-warning-text)]">
               换库之后，这个项目已经建好的语义模型要按新库的表结构重新核对：表可能
               不存在、列类型可能不同。建议换完先跑一次发布前质量报告。
             </p>
           )}
           {(sources.data ?? []).length === 0 && (
-            <p className="text-xs text-slate-400">
+            <p className="text-xs text-[var(--kf-text-tertiary)]">
               还没有可选的数据源。需要管理员先在「数据源」里新建一个。
             </p>
           )}

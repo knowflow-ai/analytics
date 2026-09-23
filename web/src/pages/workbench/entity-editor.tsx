@@ -315,8 +315,8 @@ export function EntityEditor({ projectId, revision, modelId, readOnly, acceptRev
         onClick={onPick}
         className={cx(
           'flex w-full items-center justify-between gap-2 px-2.5 py-1.5 text-left transition-colors',
-          !readOnly && 'hover:bg-white',
-          selected && 'bg-white ring-1 ring-inset ring-sky-300',
+          !readOnly && 'hover:bg-[var(--kf-bg-container)]',
+          selected && 'bg-[var(--kf-bg-container)] ring-1 ring-inset ring-[var(--kf-primary-border)]',
         )}
       >
         {content}
@@ -385,20 +385,20 @@ export function EntityEditor({ projectId, revision, modelId, readOnly, acceptRev
       onClick={readOnly || deletionBusy ? undefined : () => setSelection({ kind, id: item.id })}
       className={cx(
         'transition-colors',
-        !readOnly && !deletionBusy && 'cursor-pointer hover:bg-slate-50',
-        isSelected(kind, item.id) && 'bg-sky-50',
+        !readOnly && !deletionBusy && 'cursor-pointer hover:bg-[rgb(var(--kf-fill-alter-rgb))]',
+        isSelected(kind, item.id) && 'bg-[var(--kf-primary-bg)]',
       )}
     >
       <td colSpan={3} className={cx('py-1 pr-3', indent ? 'pl-5' : 'pl-2')}>
         <span className="inline-flex min-w-0 max-w-full items-center gap-1.5">
-          {indent && <CornerDownRight className="h-3 w-3 shrink-0 text-slate-300" />}
+          {indent && <CornerDownRight className="h-3 w-3 shrink-0 text-[var(--kf-text-quaternary)]" />}
           <Badge tone={kind === 'dimension' ? 'sky' : 'green'} variant="outline">
             {kind === 'dimension' ? '维度' : '指标'}
           </Badge>
-          <span className="truncate text-slate-700">{item.name}</span>
-          {extra && <span className="shrink-0 text-[11px] text-slate-400">{extra}</span>}
+          <span className="truncate text-[var(--kf-text)]">{item.name}</span>
+          {extra && <span className="shrink-0 text-xs text-[var(--kf-text-tertiary)]">{extra}</span>}
           {item.aliases.length > 0 && (
-            <span className="truncate text-[11px] text-slate-400">{item.aliases.join('、')}</span>
+            <span className="truncate text-xs text-[var(--kf-text-tertiary)]">{item.aliases.join('、')}</span>
           )}
         </span>
       </td>
@@ -455,11 +455,11 @@ export function EntityEditor({ projectId, revision, modelId, readOnly, acceptRev
       <div className="flex h-full min-h-0 flex-col gap-4 text-xs">
         <section className="shrink-0">
           <div className="mb-2 flex items-center justify-between gap-2">
-            <div className="font-semibold text-slate-700">基本信息</div>
+            <div className="font-semibold text-[var(--kf-text)]">基本信息</div>
             <div className="flex items-center gap-2">
               {/* 判断一列是不是账号，看一眼原始行比读任何统计量都快。 */}
               <ModelRowsPreview projectId={projectId} revision={revision} modelId={modelId} />
-              <span className="font-mono text-slate-400">{[model.schema_name, model.table].filter(Boolean).join('.')}</span>
+              <span className="font-mono text-[var(--kf-text-tertiary)]">{[model.schema_name, model.table].filter(Boolean).join('.')}</span>
             </div>
           </div>
           <div className="grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-3">
@@ -489,18 +489,18 @@ export function EntityEditor({ projectId, revision, modelId, readOnly, acceptRev
         <div className="flex min-h-0 flex-1 flex-col gap-4 md:flex-row">
           <section className="min-h-0 min-w-0 flex-1 overflow-y-auto pr-1 md:flex-[3_1_460px]">
             <div className="mb-2 flex items-baseline justify-between">
-              <span className="font-semibold text-slate-700">字段与指标</span>
-              {!readOnly && <span className="text-[11px] text-slate-400">点一行编辑</span>}
+              <span className="font-semibold text-[var(--kf-text)]">字段与指标</span>
+              {!readOnly && <span className="text-xs text-[var(--kf-text-tertiary)]">点一行编辑</span>}
             </div>
             <table className="w-full text-left">
-              <thead className="sticky top-0 z-10 bg-white text-[11px] uppercase tracking-wide text-slate-400">
+              <thead className="sticky top-0 z-10 bg-[var(--kf-bg-container)] text-xs uppercase tracking-wide text-[var(--kf-text-tertiary)]">
                 <tr>
                   <th className="whitespace-nowrap py-1 pr-3">名称</th>
                   <th className="whitespace-nowrap py-1 pr-3">列</th>
                   <th className="py-1 pr-3">角色</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-[var(--kf-border-secondary)]">
                 {fields.map((field) => {
                   const role = fieldRoleVisual(field);
                   const selected = isSelected('field', field.id);
@@ -511,11 +511,11 @@ export function EntityEditor({ projectId, revision, modelId, readOnly, acceptRev
                       onClick={readOnly || deletionBusy ? undefined : () => setSelection({ kind: 'field', id: field.id })}
                       className={cx(
                         'group transition-colors',
-                        !readOnly && !deletionBusy && 'cursor-pointer hover:bg-slate-50',
-                        selected && 'bg-sky-50',
+                        !readOnly && !deletionBusy && 'cursor-pointer hover:bg-[rgb(var(--kf-fill-alter-rgb))]',
+                        selected && 'bg-[var(--kf-primary-bg)]',
                       )}
                     >
-                      <td className="whitespace-nowrap py-1.5 pr-3 font-medium text-slate-800">
+                      <td className="whitespace-nowrap py-1.5 pr-3 font-medium text-[var(--kf-text)]">
                         <span className="inline-flex items-center gap-2">
                           {field.name}
                           {!readOnly && !deletionBusy && (
@@ -530,7 +530,7 @@ export function EntityEditor({ projectId, revision, modelId, readOnly, acceptRev
                                   shape: 'column',
                                 });
                               }}
-                              className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] font-medium text-slate-600 opacity-0 transition-opacity hover:border-slate-300 group-hover:opacity-100"
+                              className="inline-flex items-center gap-1 rounded-full border border-[var(--kf-border-secondary)] bg-[var(--kf-bg-container)] px-1.5 py-0.5 text-xs font-medium text-[var(--kf-text-secondary)] opacity-0 transition-opacity hover:border-[var(--kf-border)] group-hover:opacity-100"
                             >
                               <Plus className="h-3 w-3" />
                               指标
@@ -538,8 +538,8 @@ export function EntityEditor({ projectId, revision, modelId, readOnly, acceptRev
                           )}
                         </span>
                       </td>
-                      <td className="whitespace-nowrap py-1.5 pr-3 font-mono text-slate-500">
-                        {field.column} <span className="text-slate-300">{field.data_type}</span>
+                      <td className="whitespace-nowrap py-1.5 pr-3 font-mono text-[var(--kf-text-secondary)]">
+                        {field.column} <span className="text-[var(--kf-text-quaternary)]">{field.data_type}</span>
                       </td>
                       <td className="whitespace-nowrap py-1.5 pr-3">
                         <Badge tone={role.tone} variant={role.variant}>
@@ -555,7 +555,7 @@ export function EntityEditor({ projectId, revision, modelId, readOnly, acceptRev
                               .map((m) => m.name)
                               .join('、')};改角色前先处理这些指标`}
                           >
-                            <Lock className="h-3 w-3 text-slate-400" />
+                            <Lock className="h-3 w-3 text-[var(--kf-text-tertiary)]" />
                           </span>
                         )}
                       </td>
@@ -577,7 +577,7 @@ export function EntityEditor({ projectId, revision, modelId, readOnly, acceptRev
                     <tr>
                       <td colSpan={3} className="pb-1 pt-3">
                         <span className="flex items-center justify-between gap-2">
-                          <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                          <span className="text-xs font-semibold uppercase tracking-wide text-[var(--kf-text-tertiary)]">
                             复合指标 / 表达式维度
                           </span>
                           {!readOnly && !deletionBusy && (
@@ -585,7 +585,7 @@ export function EntityEditor({ projectId, revision, modelId, readOnly, acceptRev
                               type="button"
                               title="由其它指标计算出一个新指标"
                               onClick={() => setSelection({ kind: 'new-metric', shape: 'metric' })}
-                              className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] font-medium text-slate-600 hover:border-slate-300"
+                              className="inline-flex items-center gap-1 rounded-full border border-[var(--kf-border-secondary)] bg-[var(--kf-bg-container)] px-1.5 py-0.5 text-xs font-medium text-[var(--kf-text-secondary)] hover:border-[var(--kf-border)]"
                             >
                               <Plus className="h-3 w-3" />
                               新建
@@ -610,14 +610,14 @@ export function EntityEditor({ projectId, revision, modelId, readOnly, acceptRev
 
       <div>
         <div className="mb-1.5 flex items-center justify-between">
-          <span className="font-semibold text-slate-700">
+          <span className="font-semibold text-[var(--kf-text)]">
             维度层级 {modelHierarchies.length > 0 ? modelHierarchies.length : ''}
           </span>
           {!readOnly && dimensions.length >= 2 && (
             <button
               type="button"
               disabled={deletionBusy}
-              className="text-[11px] text-blue-600 hover:underline"
+              className="text-xs text-[var(--kf-primary)] hover:underline"
               onClick={() => setSelection({ kind: 'new-hierarchy' })}
             >
               + 新建层级
@@ -625,19 +625,19 @@ export function EntityEditor({ projectId, revision, modelId, readOnly, acceptRev
           )}
         </div>
         {modelHierarchies.length === 0 ? (
-          <div className="rounded-md border border-dashed border-slate-200 px-3 py-2 text-[11px] text-slate-400">
+          <div className="rounded-md border border-dashed border-[var(--kf-border-secondary)] px-3 py-2 text-xs text-[var(--kf-text-tertiary)]">
             把同一把尺子的维度按由粗到细排成层级（如 国家 → 省 → 市），「按地区看」「再细一层」才有落点。
           </div>
         ) : (
-          <ul className="divide-y divide-slate-100 overflow-hidden rounded-md border border-slate-200 bg-white/60">
+          <ul className="divide-y divide-[var(--kf-border-secondary)] overflow-hidden rounded-md border border-[var(--kf-border-secondary)] bg-[rgb(var(--kf-bg-container-rgb)/0.6)]">
             {modelHierarchies.map((h) =>
               listRow(
                 h.id,
                 isSelected('hierarchy', h.id),
                 () => setSelection({ kind: 'hierarchy', id: h.id }),
                 <div className="min-w-0">
-                  <div className="truncate text-slate-800">{h.name}</div>
-                  <div className="truncate text-[11px] text-slate-400">
+                  <div className="truncate text-[var(--kf-text)]">{h.name}</div>
+                  <div className="truncate text-xs text-[var(--kf-text-tertiary)]">
                     {h.levels.map((id) => dimensionNameById.get(id) ?? id).join(' → ')}
                   </div>
                 </div>,
@@ -648,17 +648,17 @@ export function EntityEditor({ projectId, revision, modelId, readOnly, acceptRev
       </div>
           </section>
 
-          <aside className="min-h-0 min-w-0 flex-1 overflow-y-auto md:flex-[2_1_380px] rounded-lg border border-slate-200 bg-slate-50/70 p-3">
+          <aside className="min-h-0 min-w-0 flex-1 overflow-y-auto md:flex-[2_1_380px] rounded-lg border border-[var(--kf-border-secondary)] bg-[rgb(var(--kf-fill-alter-rgb)/0.7)] p-3">
             {detail.kind === 'overview' ? (
-              <div className="text-slate-400">
+              <div className="text-[var(--kf-text-tertiary)]">
                 {readOnly
                   ? '只读模式。左侧是该实体的字段、派生维度指标与层级一览。'
                   : '该实体还没有字段。'}
               </div>
             ) : (
               <div className="flex flex-col gap-3">
-                <div className="flex items-center justify-between gap-2 border-b border-slate-200 pb-2">
-                  <span className="truncate text-[13px] font-semibold text-slate-700">{detailTitle}</span>
+                <div className="flex items-center justify-between gap-2 border-b border-[var(--kf-border-secondary)] pb-2">
+                  <span className="truncate text-sm font-semibold text-[var(--kf-text)]">{detailTitle}</span>
                   {detail.kind === 'metric' && detail.metric && (
                     <ContextualTermButton
                       context={{ projectId, revision, acceptRevision, readOnly }}
@@ -673,7 +673,7 @@ export function EntityEditor({ projectId, revision, modelId, readOnly, acceptRev
                   )}
                 </div>
 
-                {detail.kind === 'missing' && <div className="text-red-600">{detail.message}</div>}
+                {detail.kind === 'missing' && <div className="text-[var(--kf-error-text)]">{detail.message}</div>}
 
                 {detail.kind === 'field' && (
                   <FieldEditor
@@ -846,7 +846,7 @@ export function EntityEditor({ projectId, revision, modelId, readOnly, acceptRev
                     />
                   ) : (
                     // 取样要走翻译器，而翻译器需要一个分析主题来确定连接路径。
-                    <div className="text-[11px] text-slate-400">
+                    <div className="text-xs text-[var(--kf-text-tertiary)]">
                       该指标还没有进入任何分析主题，暂时不能取样。
                     </div>
                   ))}
@@ -871,7 +871,7 @@ export function EntityEditor({ projectId, revision, modelId, readOnly, acceptRev
         {pendingDeletion && (
           <>
             {pendingDeletion.lines.length > 0 ? (
-              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900">
+              <div className="rounded-md border border-[var(--kf-warning-border)] bg-[var(--kf-warning-bg)] px-3 py-2 text-[var(--kf-warning-text)]">
                 <div className="font-medium">删除后还将同步处理：</div>
                 <ul className="mt-1 list-disc space-y-0.5 pl-4">
                   {pendingDeletion.lines.map((line) => (
@@ -880,11 +880,11 @@ export function EntityEditor({ projectId, revision, modelId, readOnly, acceptRev
                 </ul>
               </div>
             ) : (
-              <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-slate-500">
+              <div className="rounded-md border border-[var(--kf-border-secondary)] bg-[rgb(var(--kf-fill-alter-rgb))] px-3 py-2 text-[var(--kf-text-secondary)]">
                 未发现其他关联资源。
               </div>
             )}
-            <div className="mt-2 text-[11px] text-slate-400">
+            <div className="mt-2 text-xs text-[var(--kf-text-tertiary)]">
               影响清单已绑定当前草稿；目录发生变化后，本次确认会自动失效。
             </div>
           </>
@@ -944,7 +944,7 @@ export function FieldEditor({
           命名成「账户号」，而这些数字当时就在内存里。摆出来，人一眼就能否掉它。
         */}
         {columnProfile && (
-          <div className="-mt-1 font-mono text-[11px] text-slate-500">{columnProfile}</div>
+          <div className="-mt-1 font-mono text-xs text-[var(--kf-text-secondary)]">{columnProfile}</div>
         )}
         <Field label="角色">
           <Select disabled={locked} value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value as Kind })}>
@@ -954,7 +954,7 @@ export function FieldEditor({
           </Select>
         </Field>
         {locked && (
-          <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+          <div className="rounded-md border border-[var(--kf-warning-border)] bg-[var(--kf-warning-bg)] px-3 py-2 text-xs text-[var(--kf-warning-text)]">
             <div className="mb-1">改角色会使下列指标的口径失去来源，保存会被拒绝。先调整或删除它们：</div>
             <div className="flex flex-wrap gap-1.5">
               {blockers.map((metric) => (
@@ -966,7 +966,7 @@ export function FieldEditor({
           </div>
         )}
         {relations.length > 0 && (
-          <div className="text-[11px] text-slate-500">
+          <div className="text-xs text-[var(--kf-text-secondary)]">
             该字段是 {relations.length} 条关系的 join 条件（{relations.join('、')}）。改角色不影响已有关系，但新角色若不是标识，画布上将无法再用它建关系。
           </div>
         )}
@@ -979,7 +979,7 @@ export function FieldEditor({
                   <option value="foreign">外部标识</option>
                 </Select>
               </Field>
-              <label className="flex items-end gap-2 pb-2 text-xs text-slate-600">
+              <label className="flex items-end gap-2 pb-2 text-xs text-[var(--kf-text-secondary)]">
                 <input type="checkbox" checked={Boolean(form.createDimension)} onChange={(e) => setForm({ ...form, createDimension: e.target.checked })} />
                 生成维度
               </label>
@@ -1012,7 +1012,7 @@ export function FieldEditor({
                 )}
               </Select>
             </Field>
-            <label className="flex items-end gap-2 pb-2 text-xs text-slate-600">
+            <label className="flex items-end gap-2 pb-2 text-xs text-[var(--kf-text-secondary)]">
               <input type="checkbox" checked={Boolean(form.createDimension)} onChange={(e) => setForm({ ...form, createDimension: e.target.checked })} />
               生成维度
             </label>
@@ -1030,7 +1030,7 @@ export function FieldEditor({
             <Field label="单位">
               <Input value={form.unit ?? ''} onChange={(e) => setForm({ ...form, unit: e.target.value })} placeholder="元 / 件" />
             </Field>
-            <label className="flex items-end gap-2 pb-2 text-xs text-slate-600">
+            <label className="flex items-end gap-2 pb-2 text-xs text-[var(--kf-text-secondary)]">
               <input type="checkbox" checked={Boolean(form.createMetric)} onChange={(e) => setForm({ ...form, createMetric: e.target.checked })} />
               生成指标
             </label>

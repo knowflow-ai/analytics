@@ -68,31 +68,31 @@ import { StructuredTrial } from './structured-trial';
 import { ANALYTICS_TASK_PANEL_CLASS, scrollableAncestor } from '@analytics/lib/layout';
 
 const CHECK_BOX: Record<CheckState, string> = {
-  queued: 'border-slate-200 bg-white',
-  running: 'border-blue-200 bg-blue-50/60',
-  passed: 'border-slate-200 bg-white',
-  attention: 'border-amber-200 bg-amber-50/50',
-  blocked: 'border-red-200 bg-red-50/50',
+  queued: 'border-[var(--kf-border-secondary)] bg-[var(--kf-bg-container)]',
+  running: 'border-[var(--kf-primary-border)] bg-[rgb(var(--kf-primary-bg-rgb)/0.6)]',
+  passed: 'border-[var(--kf-border-secondary)] bg-[var(--kf-bg-container)]',
+  attention: 'border-[var(--kf-warning-border)] bg-[rgb(var(--kf-warning-bg-rgb)/0.5)]',
+  blocked: 'border-[var(--kf-error-border)] bg-[rgb(var(--kf-error-bg-rgb)/0.5)]',
 };
 const CHECK_TEXT: Record<CheckState, string> = {
-  queued: 'text-slate-400',
-  running: 'text-blue-700',
-  passed: 'text-emerald-700',
-  attention: 'text-amber-700',
-  blocked: 'text-red-700',
+  queued: 'text-[var(--kf-text-tertiary)]',
+  running: 'text-[var(--kf-primary-active)]',
+  passed: 'text-[var(--kf-success-text)]',
+  attention: 'text-[var(--kf-warning-text)]',
+  blocked: 'text-[var(--kf-error-text)]',
 };
 const CHECK_DOT: Record<CheckState, string> = {
-  queued: 'border-[1.5px] border-slate-300',
-  running: 'border-2 border-blue-200 border-t-blue-600 animate-spin',
-  passed: 'bg-emerald-500',
-  attention: 'bg-amber-500',
-  blocked: 'bg-red-600',
+  queued: 'border-[1.5px] border-[var(--kf-border)]',
+  running: 'border-2 border-[var(--kf-primary-border)] border-t-[var(--kf-primary)] animate-spin',
+  passed: 'bg-[var(--kf-success)]',
+  attention: 'bg-[var(--kf-warning)]',
+  blocked: 'bg-[var(--kf-error-text)]',
 };
 const HEAD_ICON = {
-  running: 'bg-blue-50 text-blue-600',
-  blocked: 'bg-red-50 text-red-600',
-  attention: 'bg-amber-50 text-amber-600',
-  ok: 'bg-emerald-50 text-emerald-600',
+  running: 'bg-[var(--kf-primary-bg)] text-[var(--kf-primary)]',
+  blocked: 'bg-[var(--kf-error-bg)] text-[var(--kf-error-text)]',
+  attention: 'bg-[var(--kf-warning-bg)] text-[var(--kf-warning-text)]',
+  ok: 'bg-[var(--kf-success-bg)] text-[var(--kf-success-text)]',
 };
 
 /**
@@ -317,7 +317,7 @@ export function PublishPanel({
     >
       <section className="min-w-0 px-6 py-5">
         {/* 一、检查总条：自动跑，不需要点 */}
-        <div className="rounded-lg border border-slate-200 p-4">
+        <div className="rounded-lg border border-[var(--kf-border-secondary)] p-4">
           <div className="flex items-start gap-3">
             <span
               className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg ${HEAD_ICON[headline.tone]}`}
@@ -331,11 +331,11 @@ export function PublishPanel({
               )}
             </span>
             <div className="min-w-0 flex-1">
-              <div className="text-[13px] font-semibold text-slate-900">{headline.title}</div>
-              <div className="mt-0.5 text-[11px] leading-relaxed text-slate-400">
+              <div className="text-sm font-semibold text-[var(--kf-text)]">{headline.title}</div>
+              <div className="mt-0.5 text-xs leading-relaxed text-[var(--kf-text-tertiary)]">
                 {headline.sub}
               </div>
-              <div className="mt-0.5 text-[11px] text-slate-400">
+              <div className="mt-0.5 text-xs text-[var(--kf-text-tertiary)]">
                 v{revision.etag} · 快照 {revision.schema_snapshot_hash.slice(0, 10)}
               </div>
             </div>
@@ -385,7 +385,7 @@ export function PublishPanel({
 
           {/* 自动校验失败时原因不能只剩一个「未通过」——那等于把错误咽掉了。 */}
           {structureError && (
-            <div className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+            <div className="mt-3 rounded-md border border-[var(--kf-error-border)] bg-[var(--kf-error-bg)] px-3 py-2 text-xs text-[var(--kf-error-text)]">
               结构校验没通过：{structureError}
             </div>
           )}
@@ -395,9 +395,9 @@ export function PublishPanel({
         {queue.length > 0 && !busy && (
           <div className="mt-5">
             <div className="mb-2 flex items-center gap-2">
-              <h3 className="text-[13px] font-semibold text-slate-900">需要你确认</h3>
+              <h3 className="text-sm font-semibold text-[var(--kf-text)]">需要你确认</h3>
               <Badge tone="amber">{queue.length}</Badge>
-              <span className="text-[11px] text-slate-400">
+              <span className="text-xs text-[var(--kf-text-tertiary)]">
                 机器判得了的都判完了，剩下的是只有人能拍板的
               </span>
               {pendingPreviews.length > 1 && !readOnly && (
@@ -415,7 +415,7 @@ export function PublishPanel({
                 </Button>
               )}
             </div>
-            <ul className="overflow-hidden rounded-lg border border-slate-200">
+            <ul className="overflow-hidden rounded-lg border border-[var(--kf-border-secondary)]">
               {queue.map((item) => (
                 <QueueRow
                   key={item.id}
@@ -432,7 +432,7 @@ export function PublishPanel({
         )}
 
         {/* 三、自动通过的检查：默认折叠 */}
-        <div className="mt-3 rounded-lg border border-slate-200">
+        <div className="mt-3 rounded-lg border border-[var(--kf-border-secondary)]">
           <button
             type="button"
             aria-expanded={showPassed}
@@ -440,29 +440,29 @@ export function PublishPanel({
             className="flex w-full items-center gap-2 px-3 py-2.5 text-left"
           >
             <ChevronRight
-              className={`h-3.5 w-3.5 text-slate-400 transition-transform ${showPassed ? 'rotate-90' : ''}`}
+              className={`h-3.5 w-3.5 text-[var(--kf-text-tertiary)] transition-transform ${showPassed ? 'rotate-90' : ''}`}
             />
-            <span className="text-xs text-slate-600">自动通过的检查</span>
-            <span className="text-xs text-slate-400">{autoPassed} 项</span>
-            <span className="ml-auto text-[11px] text-slate-400">
+            <span className="text-xs text-[var(--kf-text-secondary)]">自动通过的检查</span>
+            <span className="text-xs text-[var(--kf-text-tertiary)]">{autoPassed} 项</span>
+            <span className="ml-auto text-xs text-[var(--kf-text-tertiary)]">
               {showPassed ? '收起' : '一般不用看'}
             </span>
           </button>
           {showPassed && (
-            <div className="border-t border-slate-100 px-4 py-3">
+            <div className="border-t border-[var(--kf-border-secondary)] px-4 py-3">
               {warnings.length > 0 && (
                 <div className="mb-3 flex flex-col gap-2">
                   {warnings.map((item, index) => (
                     <div
                       key={`${item.diagnostic_code}-${index}`}
-                      className="rounded-md border border-slate-200 p-2.5 text-xs"
+                      className="rounded-md border border-[var(--kf-border-secondary)] p-2.5 text-xs"
                     >
                       <div className="flex items-center gap-2">
-                        <Info className="h-3.5 w-3.5 text-slate-400" />
-                        <span className="font-medium text-slate-700">{item.title}</span>
+                        <Info className="h-3.5 w-3.5 text-[var(--kf-text-tertiary)]" />
+                        <span className="font-medium text-[var(--kf-text)]">{item.title}</span>
                         <Badge tone="slate">提醒</Badge>
                       </div>
-                      <div className="mt-1 text-slate-500">{item.message}</div>
+                      <div className="mt-1 text-[var(--kf-text-secondary)]">{item.message}</div>
                     </div>
                   ))}
                 </div>
@@ -483,25 +483,25 @@ export function PublishPanel({
         </div>
       </section>
 
-      <aside className="border-l border-slate-100 px-4 py-5">
-        <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">发布历史</div>
+      <aside className="border-l border-[var(--kf-border-secondary)] px-4 py-5">
+        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--kf-text-tertiary)]">发布历史</div>
         {releases.isPending && <Spinner />}
         {releases.data && releases.data.items.length === 0 && (
-          <div className="text-xs text-slate-400">尚未发布过。</div>
+          <div className="text-xs text-[var(--kf-text-tertiary)]">尚未发布过。</div>
         )}
         <ul className="flex flex-col gap-2">
           {releases.data?.items.map((release) => (
-            <li key={release.id} className="rounded-md border border-slate-200 px-3 py-2 text-xs">
+            <li key={release.id} className="rounded-md border border-[var(--kf-border-secondary)] px-3 py-2 text-xs">
               <div className="flex items-center justify-between">
                 {/* 完整 id 排障时才需要，留在 title 里；平时读"第几版"就够了。 */}
-                <span className="font-medium text-slate-700" title={release.id}>
+                <span className="font-medium text-[var(--kf-text)]" title={release.id}>
                   第 {release.sequence} 版
                 </span>
                 <Badge tone={release.status === 'active' ? 'green' : 'slate'}>
                   {release.status === 'active' ? '线上' : '历史'}
                 </Badge>
               </div>
-              <div className="mt-0.5 text-slate-400">{formatDateTime(release.created_at)}</div>
+              <div className="mt-0.5 text-[var(--kf-text-tertiary)]">{formatDateTime(release.created_at)}</div>
               {/*
                 入口挂在每个非线上版本上，而不是挂在线上那一行说"回滚到上一版"：
                 后者只能往更早走，走过头就回不来了——线上停在第 1 版时，第 2 版仍
@@ -511,7 +511,7 @@ export function PublishPanel({
               {release.status !== 'active' && (
                 <button
                   type="button"
-                  className="mt-1 text-[11px] text-slate-400 underline hover:text-slate-700"
+                  className="mt-1 text-xs text-[var(--kf-text-tertiary)] underline hover:text-[var(--kf-text)]"
                   onClick={() => setSwitchingTo(release)}
                 >
                   切到这一版
@@ -546,12 +546,12 @@ function CheckCell({ check, onGo }: { check: PublishCheck; onGo?: () => void }) 
     <>
       <div className="flex items-center gap-2">
         <span className={`h-3 w-3 shrink-0 rounded-full ${CHECK_DOT[check.state]}`} />
-        <span className="text-xs font-medium text-slate-700">{check.label}</span>
-        <span className={`ml-auto text-[11px] font-medium ${CHECK_TEXT[check.state]}`}>
+        <span className="text-xs font-medium text-[var(--kf-text)]">{check.label}</span>
+        <span className={`ml-auto text-xs font-medium ${CHECK_TEXT[check.state]}`}>
           {check.status}
         </span>
       </div>
-      <div className="mt-1 truncate text-[11px] text-slate-400">
+      <div className="mt-1 truncate text-xs text-[var(--kf-text-tertiary)]">
         {onGo ? '点这里去运行' : check.hint}
       </div>
     </>
@@ -559,7 +559,7 @@ function CheckCell({ check, onGo }: { check: PublishCheck; onGo?: () => void }) 
   const className = `min-w-0 flex-1 rounded-md border p-2.5 text-left ${CHECK_BOX[check.state]}`;
   if (!onGo) return <div className={className}>{body}</div>;
   return (
-    <button type="button" onClick={onGo} className={`${className} hover:border-amber-300`}>
+    <button type="button" onClick={onGo} className={`${className} hover:border-[var(--kf-warning-border)]`}>
       {body}
     </button>
   );
@@ -578,26 +578,26 @@ function QueueRow({
 }) {
   return (
     <li
-      className={`flex items-start gap-2.5 border-b border-slate-100 px-3 py-2.5 last:border-b-0 ${
-        item.tone === 'blocking' ? 'bg-red-50/40' : ''
+      className={`flex items-start gap-2.5 border-b border-[var(--kf-border-secondary)] px-3 py-2.5 last:border-b-0 ${
+        item.tone === 'blocking' ? 'bg-[rgb(var(--kf-error-bg-rgb)/0.4)]' : ''
       }`}
     >
       <span className="mt-0.5 shrink-0">
         <Badge tone={item.tone === 'blocking' ? 'red' : 'amber'}>{item.badge}</Badge>
       </span>
       <div className="min-w-0 flex-1 text-xs">
-        <div className="text-slate-800">
+        <div className="text-[var(--kf-text)]">
           <b className="font-semibold">{item.title}</b>
-          {item.detail && <span className="ml-2 text-slate-600">{item.detail}</span>}
+          {item.detail && <span className="ml-2 text-[var(--kf-text-secondary)]">{item.detail}</span>}
         </div>
-        {item.hint && <div className="mt-1 leading-relaxed text-slate-400">{item.hint}</div>}
+        {item.hint && <div className="mt-1 leading-relaxed text-[var(--kf-text-tertiary)]">{item.hint}</div>}
       </div>
       {item.previewId && !readOnly && (
         <div className="flex shrink-0 items-center gap-3 pt-0.5">
           <button
             type="button"
             disabled={busy}
-            className="text-[11px] font-medium text-blue-600 hover:text-blue-500 disabled:opacity-50"
+            className="text-xs font-medium text-[var(--kf-primary)] hover:text-[var(--kf-primary)] disabled:opacity-50"
             onClick={() => onDecide(true)}
           >
             {item.rejected ? '其实是对的' : '数值正确'}
@@ -606,7 +606,7 @@ function QueueRow({
             <button
               type="button"
               disabled={busy}
-              className="text-[11px] font-medium text-red-600 hover:text-red-500 disabled:opacity-50"
+              className="text-xs font-medium text-[var(--kf-error-text)] hover:text-[var(--kf-error)] disabled:opacity-50"
               onClick={() => onDecide(false)}
             >
               不对
@@ -792,8 +792,8 @@ function TrialQuestions({
   return (
     <div className="mt-8">
       <div className="flex items-center gap-4">
-        <h3 className="text-sm font-semibold text-slate-900">发布前试问</h3>
-        <div className="flex rounded-md border border-slate-200 p-0.5 text-xs">
+        <h3 className="text-sm font-semibold text-[var(--kf-text)]">发布前试问</h3>
+        <div className="flex rounded-md border border-[var(--kf-border-secondary)] p-0.5 text-xs">
           {(
             [
               ['nl', '自然语言'],
@@ -803,7 +803,7 @@ function TrialQuestions({
             <button
               key={key}
               type="button"
-              className={`rounded px-2.5 py-1 ${tab === key ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'}`}
+              className={`rounded px-2.5 py-1 ${tab === key ? 'bg-[var(--kf-bg-spotlight)] text-[var(--kf-text-light-solid)]' : 'text-[var(--kf-text-secondary)] hover:bg-[rgb(var(--kf-fill-tertiary-rgb))]'}`}
               onClick={() => setTab(key)}
             >
               {label}
@@ -811,7 +811,7 @@ function TrialQuestions({
           ))}
         </div>
       </div>
-      <p className="mt-0.5 text-xs text-slate-400">
+      <p className="mt-0.5 text-xs text-[var(--kf-text-tertiary)]">
         {tab === 'nl'
           ? '对当前完整语义目录直接提问，走与线上完全相同的解析与翻译链路；系统只在业务含义无法唯一判断时请求确认。'
           : '直接选指标、维度和过滤提交语义查询，跳过自然语言解析；这里失败就是建模或 SQL 问题，与别名无关。'}
@@ -823,7 +823,7 @@ function TrialQuestions({
       )}
       <form onSubmit={onSubmit} className={`mt-3 flex items-center gap-2 ${tab === 'nl' ? '' : 'hidden'}`}>
         <input
-          className="h-9 flex-1 rounded-md border border-slate-200 bg-white px-3 text-[13px] placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+          className="h-9 flex-1 rounded-md border border-[var(--kf-border-secondary)] bg-[var(--kf-bg-container)] px-3 text-sm placeholder:text-[var(--kf-text-tertiary)] focus:border-[var(--kf-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--kf-primary-bg)]"
           placeholder="例如：各地区的订单金额是多少？"
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
@@ -834,15 +834,15 @@ function TrialQuestions({
       </form>
       <div className={`mt-4 flex flex-col gap-4 ${tab === 'nl' ? '' : 'hidden'}`}>
         {turns.map((turn) => (
-          <div key={turn.id} className="rounded-lg border border-slate-200 p-3">
-            <div className="mb-2 flex items-center justify-between gap-2 text-xs font-medium text-slate-700">
+          <div key={turn.id} className="rounded-lg border border-[var(--kf-border-secondary)] p-3">
+            <div className="mb-2 flex items-center justify-between gap-2 text-xs font-medium text-[var(--kf-text)]">
               <span>Q：{turn.question}</span>
               {turn.response?.state === 'COMPLETED' && (
                 <button
                   type="button"
                   disabled={saveCase.isPending || savedTurns.has(turn.id)}
                   onClick={() => saveCase.mutate(turn)}
-                  className="shrink-0 text-[11px] font-normal text-slate-400 hover:text-blue-600 disabled:opacity-60"
+                  className="shrink-0 text-xs font-normal text-[var(--kf-text-tertiary)] hover:text-[var(--kf-primary)] disabled:opacity-60"
                 >
                   {savedTurns.has(turn.id) ? '已存为评测用例' : '答对了？存为评测用例'}
                 </button>
@@ -885,7 +885,7 @@ function QueryFailuresCard({
   const rows = feedbackRows(failures.data?.items ?? []);
   if (failures.isPending || rows.length === 0) return null;
   return (
-    <div className="mt-5 rounded-lg border border-slate-200 p-3">
+    <div className="mt-5 rounded-lg border border-[var(--kf-border-secondary)] p-3">
       {/*
         这句话原先三处都不实：①"没接住"——四种收场里 clarified 和 inferred 其实
         答上来了，只是靠反问和猜；②数字用的是 rows.length，而 rows 当时是前端把
@@ -895,16 +895,16 @@ function QueryFailuresCard({
         聚合下沉到 SQL 之后 total 就是真实种数了，这里可以照实说"多少种"。但排序
         仍是"收场类型优先"，所以例子还是只说例子。
       */}
-      <div className="text-xs text-slate-700">
+      <div className="text-xs text-[var(--kf-text)]">
         有 <b className="font-semibold">{failures.data?.total ?? rows.length}</b> 条待处理的问数反馈
       </div>
-      <div className="mt-1.5 text-[11px] leading-relaxed text-slate-400">
+      <div className="mt-1.5 text-xs leading-relaxed text-[var(--kf-text-tertiary)]">
         比如「{rows[0].question}」。多数补个别名就能答上。
       </div>
       <button
         type="button"
         onClick={onGo}
-        className="mt-2 text-[11px] font-medium text-blue-600 hover:text-blue-500"
+        className="mt-2 text-xs font-medium text-[var(--kf-primary)] hover:text-[var(--kf-primary)]"
       >
         去问数反馈处理 →
       </button>

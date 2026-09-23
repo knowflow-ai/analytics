@@ -80,7 +80,7 @@ export function DataSourcesDialog({ open, onClose }: { open: boolean; onClose: (
       >
         <div className="mb-3 flex items-start justify-between gap-3">
           {/* min-w-0：让说明文字承担收缩，而不是把按钮挤变形。 */}
-          <p className="min-w-0 text-xs leading-relaxed text-slate-400">
+          <p className="min-w-0 text-xs leading-relaxed text-[var(--kf-text-tertiary)]">
             项目绑定数据源后，建模与问数都打到那个库。连接信息加密保存，保存后不再展示。
           </p>
           <Button
@@ -98,12 +98,12 @@ export function DataSourcesDialog({ open, onClose }: { open: boolean; onClose: (
           <Empty title="还没有数据源" hint="新建一个连接，项目才能绑上去。" />
         )}
         {sources.data && sources.data.length > 0 && (
-          <ul className="divide-y divide-slate-100">
+          <ul className="divide-y divide-[var(--kf-border-secondary)]">
             {sources.data.map((item) => (
               <li key={item.id} className="flex items-center justify-between gap-3 py-2.5">
                 <div className="min-w-0">
-                  <div className="truncate text-sm text-slate-900">{item.name}</div>
-                  <div className="mt-0.5 text-xs text-slate-400">{engineLabel(item.engine)}</div>
+                  <div className="truncate text-sm text-[var(--kf-text)]">{item.name}</div>
+                  <div className="mt-0.5 text-xs text-[var(--kf-text-tertiary)]">{engineLabel(item.engine)}</div>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   <RotateSecretButton dataSource={item} onDone={refresh} />

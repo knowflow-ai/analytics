@@ -83,21 +83,21 @@ export function HierarchyEditor({
           {form.levels.map((id, index) => (
             <div
               key={id}
-              className="flex items-center gap-2 rounded-md border border-slate-200 px-2.5 py-1.5 text-[13px]"
+              className="flex items-center gap-2 rounded-md border border-[var(--kf-border-secondary)] px-2.5 py-1.5 text-sm"
             >
-              <span className="w-5 text-center font-mono text-[11px] text-slate-400">
+              <span className="w-5 text-center font-mono text-xs text-[var(--kf-text-tertiary)]">
                 {index + 1}
               </span>
-              <span className="flex-1 text-slate-800">{byId.get(id)?.name ?? id}</span>
-              <button type="button" className="text-slate-400 hover:text-slate-600" onClick={() => move(index, -1)}>
+              <span className="flex-1 text-[var(--kf-text)]">{byId.get(id)?.name ?? id}</span>
+              <button type="button" className="text-[var(--kf-text-tertiary)] hover:text-[var(--kf-text-secondary)]" onClick={() => move(index, -1)}>
                 <ArrowUp className="h-3.5 w-3.5" />
               </button>
-              <button type="button" className="text-slate-400 hover:text-slate-600" onClick={() => move(index, 1)}>
+              <button type="button" className="text-[var(--kf-text-tertiary)] hover:text-[var(--kf-text-secondary)]" onClick={() => move(index, 1)}>
                 <ArrowDown className="h-3.5 w-3.5" />
               </button>
               <button
                 type="button"
-                className="text-slate-400 hover:text-red-600"
+                className="text-[var(--kf-text-tertiary)] hover:text-[var(--kf-error-text)]"
                 onClick={() => setForm({ ...form, levels: form.levels.filter((x) => x !== id) })}
               >
                 <X className="h-3.5 w-3.5" />
@@ -105,7 +105,7 @@ export function HierarchyEditor({
             </div>
           ))}
           {form.levels.length < 2 && (
-            <div className="text-[11px] text-slate-400">至少两级才构成层级。</div>
+            <div className="text-xs text-[var(--kf-text-tertiary)]">至少两级才构成层级。</div>
           )}
         </div>
         {available.length > 0 && (
@@ -115,7 +115,7 @@ export function HierarchyEditor({
                 key={d.id}
                 type="button"
                 onClick={() => setForm({ ...form, levels: [...form.levels, d.id] })}
-                className="rounded-md border border-slate-200 px-2 py-1 text-[11px] text-slate-500 hover:border-slate-300"
+                className="rounded-md border border-[var(--kf-border-secondary)] px-2 py-1 text-xs text-[var(--kf-text-secondary)] hover:border-[var(--kf-border)]"
               >
                 + {d.name}
               </button>

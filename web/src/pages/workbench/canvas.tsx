@@ -223,14 +223,14 @@ export function CanvasPanel({ projectId, revision, acceptRevision, readOnly }: W
       className="grid grid-cols-[240px_1fr]"
       style={{ height: canvasViewport.height ?? 640 }}
     >
-      <aside className="overflow-auto border-r border-slate-200 bg-white">
-        <div className="border-b border-slate-100 px-3 py-2">
-          <div className="text-[11px] font-semibold tracking-wide text-slate-400">
+      <aside className="overflow-auto border-r border-[var(--kf-border-secondary)] bg-[var(--kf-bg-container)]">
+        <div className="border-b border-[var(--kf-border-secondary)] px-3 py-2">
+          <div className="text-xs font-semibold tracking-wide text-[var(--kf-text-tertiary)]">
             业务实体 {spec.models.length}
           </div>
-          <div className="mt-0.5 flex flex-wrap gap-1.5 text-[11px] text-slate-400">
+          <div className="mt-0.5 flex flex-wrap gap-1.5 text-xs text-[var(--kf-text-tertiary)]">
             <span>{spec.relations.length} 条关系</span>
-            <span className="text-slate-300">·</span>
+            <span className="text-[var(--kf-text-quaternary)]">·</span>
             <span>{spec.dimensions.length} 维度 · {spec.metrics.length} 指标</span>
           </div>
           {unconfirmed.size > 0 && !readOnly && (
@@ -251,11 +251,11 @@ export function CanvasPanel({ projectId, revision, acceptRevision, readOnly }: W
             type="button"
             onClick={() => setSelectedModel(model.id)}
             className={`block w-full border-l-2 px-3 py-1.5 text-left ${
-              model.id === selectedModel ? 'border-l-blue-500 bg-blue-50' : 'border-l-transparent hover:bg-slate-50'
+              model.id === selectedModel ? 'border-l-[var(--kf-primary)] bg-[var(--kf-primary-bg)]' : 'border-l-transparent hover:bg-[rgb(var(--kf-fill-alter-rgb))]'
             }`}
           >
-            <div className="truncate text-[13px] font-medium text-slate-800">{model.name}</div>
-            <div className="mt-px flex gap-1.5 text-[11px] text-slate-400">
+            <div className="truncate text-sm font-medium text-[var(--kf-text)]">{model.name}</div>
+            <div className="mt-px flex gap-1.5 text-xs text-[var(--kf-text-tertiary)]">
               <span>{spec.dimensions.filter((d) => d.model_id === model.id).length} 维度</span>
               <span>{spec.metrics.filter((m) => m.model_id === model.id).length} 指标</span>
             </div>
@@ -328,11 +328,11 @@ export function CanvasPanel({ projectId, revision, acceptRevision, readOnly }: W
               </Field>
             </div>
             <div>
-              <div className="mb-1 flex items-center justify-between text-xs font-medium text-slate-600">
+              <div className="mb-1 flex items-center justify-between text-xs font-medium text-[var(--kf-text-secondary)]">
                 Join 条件（仅标识字段）
                 <button
                   type="button"
-                  className="text-blue-600 hover:text-blue-500"
+                  className="text-[var(--kf-primary)] hover:text-[var(--kf-primary)]"
                   onClick={() =>
                     setDraft({ ...draft, conditions: [...draft.conditions, { left_field_id: '', right_field_id: '' }] })
                   }
@@ -341,7 +341,7 @@ export function CanvasPanel({ projectId, revision, acceptRevision, readOnly }: W
                 </button>
               </div>
               {draft.conditions.length === 0 && (
-                <div className="rounded-md border border-dashed border-slate-200 px-3 py-2 text-xs text-slate-400">
+                <div className="rounded-md border border-dashed border-[var(--kf-border-secondary)] px-3 py-2 text-xs text-[var(--kf-text-tertiary)]">
                   至少需要一个等值条件。
                 </div>
               )}
@@ -359,7 +359,7 @@ export function CanvasPanel({ projectId, revision, acceptRevision, readOnly }: W
                       <option key={f.id} value={f.id}>{f.name}（{fieldRoleLabel(f)}）</option>
                     ))}
                   </Select>
-                  <span className="text-slate-400">=</span>
+                  <span className="text-[var(--kf-text-tertiary)]">=</span>
                   <Select
                     value={condition.right_field_id}
                     onChange={(e) => {
@@ -374,7 +374,7 @@ export function CanvasPanel({ projectId, revision, acceptRevision, readOnly }: W
                   </Select>
                   <button
                     type="button"
-                    className="text-xs text-slate-400 hover:text-red-600"
+                    className="text-xs text-[var(--kf-text-tertiary)] hover:text-[var(--kf-error-text)]"
                     onClick={() => setDraft({ ...draft, conditions: draft.conditions.filter((_, i) => i !== index) })}
                   >
                     移除
@@ -416,13 +416,13 @@ export function CanvasPanel({ projectId, revision, acceptRevision, readOnly }: W
                   const fix = observedCardinalityFix(entry);
                   if (!fix) return null;
                   return (
-                    <div className="flex flex-wrap items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-900">
+                    <div className="flex flex-wrap items-center gap-2 rounded-md border border-[var(--kf-warning-border)] bg-[var(--kf-warning-bg)] px-2.5 py-1.5 text-xs text-[var(--kf-warning-text)]">
                       <span>
                         声明 {cardinalityLabel(fix.declared)}，实测 {cardinalityLabel(fix.observed)}。
                       </span>
                       <button
                         type="button"
-                        className="font-medium text-amber-900 underline underline-offset-2 hover:text-amber-700"
+                        className="font-medium text-[var(--kf-warning-text)] underline underline-offset-2 hover:text-[var(--kf-warning-text)]"
                         onClick={() => setDraft({ ...draft, cardinality: fix.observed as Cardinality })}
                       >
                         采用实测基数

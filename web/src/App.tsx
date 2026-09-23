@@ -11,17 +11,17 @@ import { ANALYTICS_MAX_CONTENT_WIDTH_PX } from './lib/layout';
 
 function TopNav() {
   const link = ({ isActive }: { isActive: boolean }) =>
-    `flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[13px] transition-colors ${
-      isActive ? 'bg-slate-100 font-medium text-slate-900' : 'text-slate-500 hover:text-slate-800'
+    `flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors ${
+      isActive ? 'bg-[rgb(var(--kf-fill-tertiary-rgb))] font-medium text-[var(--kf-text)]' : 'text-[var(--kf-text-secondary)] hover:text-[var(--kf-text)]'
     }`;
   return (
-    <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/90 backdrop-blur">
+    <header className="sticky top-0 z-30 border-b border-[var(--kf-border-secondary)] bg-[rgb(var(--kf-bg-container-rgb)/0.9)] backdrop-blur">
       <div
         className="mx-auto flex h-12 w-full items-center gap-6 px-5"
         style={{ maxWidth: ANALYTICS_MAX_CONTENT_WIDTH_PX }}
       >
-        <NavLink to="/" className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-          <span className="grid h-7 w-7 place-items-center rounded-lg bg-gradient-to-br from-blue-600 to-blue-400 text-white">
+        <NavLink to="/" className="flex items-center gap-2 text-sm font-semibold text-[var(--kf-text)]">
+          <span className="grid h-7 w-7 place-items-center rounded-lg bg-gradient-to-br from-[var(--kf-primary)] to-[var(--kf-primary-hover)] text-[var(--kf-text-light-solid)]">
             <BarChart3 className="h-4 w-4" />
           </span>
           KnowFlow 智能问数
@@ -54,7 +54,7 @@ export function App() {
   if (status.isPending) return <Spinner />;
   if (status.isError) {
     return (
-      <div className="p-10 text-center text-sm text-red-600">
+      <div className="p-10 text-center text-sm text-[var(--kf-error-text)]">
         无法连接服务：{String(status.error)}
       </div>
     );

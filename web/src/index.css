@@ -1,3 +1,6 @@
+/* Ant Design 令牌，与主应用同源（由主仓生成的副本，见文件头） */
+@import './theme/antd-tokens.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -15,15 +18,15 @@ body,
 #root {
   height: 100%;
   margin: 0;
-  background: #f8fafc;
-  color: #0f172a;
+  background: var(--kf-bg-layout);
+  color: var(--kf-text);
 }
 
 /* Shadow DOM 里没有 body:嵌入根节点承接同一套基础排版。背景交给宿主内容区。 */
 .kf-embed-root {
   font-family: Inter, -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Segoe UI', 'Noto Sans SC',
     sans-serif;
-  color: #0f172a;
+  color: var(--kf-text);
 }
 
 .react-flow__attribution {

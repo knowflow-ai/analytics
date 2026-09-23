@@ -16,6 +16,7 @@ import {
   Empty,
   Field,
   Input,
+  PageHeading,
   Select,
   Spinner,
   useToast,
@@ -38,9 +39,9 @@ import {
 } from '@analytics/lib/layout';
 
 export function projectStatusOf(project: AnalyticsProject): { label: string; tone: string } {
-  if (project.active_release_id) return { label: '已发布', tone: 'text-emerald-600' };
-  if (project.latest_revision_id) return { label: '建模中', tone: 'text-blue-600' };
-  return { label: '待导入数据表', tone: 'text-slate-400' };
+  if (project.active_release_id) return { label: '已发布', tone: 'text-[var(--kf-success-text)]' };
+  if (project.latest_revision_id) return { label: '建模中', tone: 'text-[var(--kf-primary)]' };
+  return { label: '待导入数据表', tone: 'text-[var(--kf-text-tertiary)]' };
 }
 
 function ProjectCard({
@@ -69,7 +70,7 @@ function ProjectCard({
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') onOpen();
       }}
-      className="group relative w-full cursor-pointer overflow-hidden rounded-xl border border-slate-200 bg-white text-left shadow-[0_1px_3px_rgba(15,23,42,0.05)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md"
+      className="group relative w-full cursor-pointer overflow-hidden rounded-xl border border-[var(--kf-border-secondary)] bg-[var(--kf-bg-container)] text-left shadow-[0_1px_3px_rgba(15,23,42,0.05)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md"
     >
       {/* 卡片内的次要动作。按钮不能嵌套按钮，所以外层是 div + role=button，
           这里每个都要 stopPropagation，否则点它们会连带打开项目。 */}
@@ -82,7 +83,7 @@ function ProjectCard({
               event.stopPropagation();
               onPickDataSource();
             }}
-            className="rounded-md bg-white/85 p-1.5 text-slate-500 opacity-0 shadow-sm transition-opacity hover:text-slate-900 focus:opacity-100 group-hover:opacity-100"
+            className="rounded-md bg-[rgb(var(--kf-bg-container-rgb)/0.85)] p-1.5 text-[var(--kf-text-secondary)] opacity-0 shadow-sm transition-opacity hover:text-[var(--kf-text)] focus:opacity-100 group-hover:opacity-100"
           >
             <Database className="h-4 w-4" />
           </button>
@@ -95,7 +96,7 @@ function ProjectCard({
               event.stopPropagation();
               onDelete();
             }}
-            className="rounded-md bg-white/85 p-1.5 text-slate-500 opacity-0 shadow-sm transition-opacity hover:text-red-600 focus:opacity-100 group-hover:opacity-100"
+            className="rounded-md bg-[rgb(var(--kf-bg-container-rgb)/0.85)] p-1.5 text-[var(--kf-text-secondary)] opacity-0 shadow-sm transition-opacity hover:text-[var(--kf-error-text)] focus:opacity-100 group-hover:opacity-100"
           >
             <Trash2 className="h-4 w-4" />
           </button>
@@ -108,7 +109,7 @@ function ProjectCard({
               event.stopPropagation();
               onAuthorize();
             }}
-            className="rounded-md bg-white/85 p-1.5 text-slate-500 opacity-0 shadow-sm transition-opacity hover:text-slate-900 focus:opacity-100 group-hover:opacity-100"
+            className="rounded-md bg-[rgb(var(--kf-bg-container-rgb)/0.85)] p-1.5 text-[var(--kf-text-secondary)] opacity-0 shadow-sm transition-opacity hover:text-[var(--kf-text)] focus:opacity-100 group-hover:opacity-100"
           >
             <UserPlus className="h-4 w-4" />
           </button>
@@ -118,19 +119,19 @@ function ProjectCard({
       <div className="-mt-5 flex min-w-0 flex-col px-4 pb-4">
         <div className="flex min-w-0 items-start gap-3">
           <div
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[11px] border-2 border-white text-base font-semibold text-white shadow-md"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[11px] border-2 border-white text-base font-semibold text-[var(--kf-text-light-solid)] shadow-md"
             style={{ background: avatarGradientOf(name) }}
           >
             {name.charAt(0)?.toUpperCase()}
           </div>
           <div className="flex min-w-0 flex-col pt-1.5">
-            <div className="truncate text-[14.5px] font-semibold leading-snug text-slate-900">
+            <div className="truncate text-[14.5px] font-semibold leading-snug text-[var(--kf-text)]">
               {name}
             </div>
             <div className={`mt-0.5 text-xs ${status.tone}`}>{status.label}</div>
           </div>
         </div>
-        <div className="mt-3.5 border-t border-slate-100 pt-3 text-xs text-slate-400">
+        <div className="mt-3.5 border-t border-[var(--kf-border-secondary)] pt-3 text-xs text-[var(--kf-text-tertiary)]">
           创建于 {formatDateTime(project.created_at)}
         </div>
       </div>
@@ -225,37 +226,36 @@ export function ProjectsPage({ ready }: { ready: boolean }) {
 
   return (
     <div>
-      <div className="mb-5 flex items-center justify-between">
-        <div>
-          <h1 className="text-lg font-semibold text-slate-900">数据源</h1>
-          <p className="mt-0.5 text-xs text-slate-400">
-            一个项目对应一套语义模型：导入表、建关系、AI 建模、发布，然后用自然语言提问。
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {/* 多数据源与上传表格两版都有；只有授权（RBAC）是商业版独有。 */}
-          <Button
-            icon={<Upload className="h-4 w-4" />}
-            onClick={() => setManagingUploads(true)}
-          >
-            上传表格
-          </Button>
-          <Button
-            icon={<Database className="h-4 w-4" />}
-            onClick={() => setManagingSources(true)}
-          >
-            数据库连接
-          </Button>
-          <Button variant="primary" icon={<Plus className="h-4 w-4" />} onClick={() => setCreating(true)}>
-            新建项目
-          </Button>
-        </div>
-      </div>
+      <PageHeading
+        className="mb-4"
+        title="数据源"
+        description="一个项目对应一套语义模型：导入表、建关系、AI 建模、发布，然后用自然语言提问。"
+        extra={
+          <>
+            {/* 多数据源与上传表格两版都有；只有授权（RBAC）是商业版独有。 */}
+            <Button
+              icon={<Upload className="h-4 w-4" />}
+              onClick={() => setManagingUploads(true)}
+            >
+              上传表格
+            </Button>
+            <Button
+              icon={<Database className="h-4 w-4" />}
+              onClick={() => setManagingSources(true)}
+            >
+              数据库连接
+            </Button>
+            <Button variant="primary" icon={<Plus className="h-4 w-4" />} onClick={() => setCreating(true)}>
+              新建项目
+            </Button>
+          </>
+        }
+      />
       {/* 顶栏（标题+按钮）铺满可用宽度；卡片区仍限宽、左对齐，保住 2.5K 屏可读性。 */}
       <div className="w-full" style={{ maxWidth: ANALYTICS_MAX_CONTENT_WIDTH_PX }}>
         {projects.isPending && <Spinner />}
         {projects.isError && (
-          <div className="text-sm text-red-600">{describeError(projects.error)}</div>
+          <div className="text-sm text-[var(--kf-error-text)]">{describeError(projects.error)}</div>
         )}
         {projects.data && projects.data.items.length === 0 && (
           <Empty
@@ -345,9 +345,9 @@ export function ProjectsPage({ ready }: { ready: boolean }) {
           }
         >
           <div className="space-y-3">
-            <p className="text-xs leading-relaxed text-slate-600">
+            <p className="text-xs leading-relaxed text-[var(--kf-text-secondary)]">
               这个项目的语义模型、发布版本、问数助手、会话记录、报表卡片、数据范围
-              配置会一起消失，<strong className="text-red-600">不可恢复</strong>。
+              配置会一起消失，<strong className="text-[var(--kf-error-text)]">不可恢复</strong>。
               数据源本身不受影响。
             </p>
             <Field label={`确认请输入项目名：${deleting.name ?? ''}`}>
@@ -376,15 +376,15 @@ export function ProjectsPage({ ready }: { ready: boolean }) {
         onClose={() => setCreating(false)}
         footer={
           <>
-            <Button onClick={() => setCreating(false)}>取消</Button>
-            <Button
-              variant="primary"
-              loading={create.isPending}
-              disabled={!canCreateProject({ name, dataSourceChoice: newProjectSource })}
-              onClick={() => create.mutate()}
-            >
-              创建
-            </Button>
+              <Button onClick={() => setCreating(false)}>取消</Button>
+              <Button
+                variant="primary"
+                loading={create.isPending}
+                disabled={!canCreateProject({ name, dataSourceChoice: newProjectSource })}
+                onClick={() => create.mutate()}
+              >
+                创建
+              </Button>
           </>
         }
       >

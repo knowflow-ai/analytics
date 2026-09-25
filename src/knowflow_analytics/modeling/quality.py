@@ -530,6 +530,12 @@ class ModelingQualityProfiler:
             physical = self._translator.translate(
                 release=release,
                 query=SemanticQuery(dataset_id=dataset_id, metric_ids=(metric_id,)),
+                # 指标样本和问数走同一个翻译器，但不传 dialect 时默认渲染成
+                # PostgreSQL 方言。问数管线传的是数据源自己的方言（query/service.py
+                # 的 translate 调用点），这里漏了——PostgreSQL 数据源撞不上（默认值
+                # 恰好相同），MySQL 数据源上发布检查的每个指标样本都会以 1064 失败，
+                # 界面只剩一句"mysql query failed"。
+                dialect=self._dialect,
             )
             result = self._executor.execute(query=physical, release=release)
         except AnalyticsError as exc:

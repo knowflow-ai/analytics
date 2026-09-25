@@ -26,7 +26,7 @@ docker compose -f docker-compose.oss.yml up -d
 
 Open <http://localhost:9395> and follow the setup screen to configure the data source and model endpoints.
 
-The default image is [`knowflowai/analytics:v0.0.3`](https://hub.docker.com/r/knowflowai/analytics/tags?name=v0.0.3), published for `linux/amd64` and `linux/arm64`.
+The default image is [`knowflowai/analytics:v0.0.4`](https://hub.docker.com/r/knowflowai/analytics/tags?name=v0.0.4), published for `linux/amd64` and `linux/arm64`.
 
 ---
 
@@ -257,7 +257,7 @@ The workbench has four pages: data sources, semantic modelling, query validation
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `KNOWFLOW_ANALYTICS_IMAGE` | `knowflowai/analytics:v0.0.3` | Analytics image to run |
+| `KNOWFLOW_ANALYTICS_IMAGE` | `knowflowai/analytics:v0.0.4` | Analytics image to run |
 | `KNOWFLOW_OSS_BIND_ADDRESS` | `127.0.0.1` | Host bind address |
 | `KNOWFLOW_OSS_PORT` | `9395` | Published host port |
 | `CATALOG_DB_PASSWORD` | `analytics` | Bundled catalog PostgreSQL password; must be URL-safe |

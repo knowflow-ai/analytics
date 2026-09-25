@@ -444,7 +444,7 @@ wheels = [
 
 [[package]]
 name = "knowflow-analytics"
-version = "0.0.2"
+version = "0.0.4"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },

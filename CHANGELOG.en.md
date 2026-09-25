@@ -6,6 +6,54 @@ Versioning note: while on `0.x`, semantic resource contracts, query stages, and 
 
 ---
 
+## [0.0.4] - 2026-09-25
+
+Everything since `v0.0.3`. Image `knowflowai/analytics:v0.0.4` (`linux/amd64`, `linux/arm64`).
+
+This release changes several behaviours (contract changes allowed while on `0.x`). Read "Changed" before upgrading.
+
+### Added
+
+- **Check against the data while modelling**: fields, relations and metrics can be checked in place (primary-identifier uniqueness and null rate, relation coverage and cardinality, metric samples, sample rows) instead of waiting for the pre-release quality report. Results are cached by the object's content: change the object and the key changes, while a rename invalidates nothing. Reading the cache never touches the business database; an actual measurement is rate-limited with an 8-second statement cap, and a measurement that could not be taken is not cached. New endpoints `GET/POST .../fact-checks`.
+- **Column profiles are stored**: the profiles computed in the first step of AI modelling (uniqueness, null rate, value distribution) are kept, bound to the schema snapshot, and shown on the modelling page.
+- **The data can overrule a primary identifier the AI asserts**: when the model calls a column a primary identifier but its measured uniqueness is below 0.95 on at least 100 rows, it becomes a foreign identifier and the measured numbers are written into the dispute note. Without a profile the rule-based verdict stands; no primary identifier is invented.
+- **Metrics can be created by hand**: the form asks one question, how the metric is computed: aggregate one column (atomic) or combine other metrics (composite). No expression to write: pick a column, or pick two metrics and an operator.
+- **Governed primitives `ENTITY_SHARE` and `RANK_OF`**: "share of entities meeting a condition" and "where does this entity rank" are expanded by the compiler from the stated intent (aggregate per entity before comparing with the threshold; rank over the whole set before picking the target) instead of relying on prompt conventions. Written wrong, both produce valid SQL that runs and returns a wrong number, and nothing in the SQL tells them apart, so they can only be primitives.
+- **New compiler checks**: time grain may not be finer than the metric's declared `time_granularity` (`S2SQL_TIME_GRANULARITY_TOO_FINE`); metrics that declare `requires_explicit_time` must carry a time condition (`EXPLICIT_TIME_REQUIRED`); numeric thresholds must be numbers, e.g. not `'2万'` (`S2SQL_NON_NUMERIC_THRESHOLD`).
+- **Hierarchy trees are part of the release**: `DimensionValueSpec.parent_value` records a value's parent, and the parent/child pairs are read once at publish time. Filtering by a parent (such as a parent account) reaches the child rows, and questions no longer read the customer's database for it.
+- **Business glossary and value labels reach the prompt**: members declared in the glossary and business labels of governed values are given to the model; members the answer used without an exact match in the question (the model's own guesses) are reported with that answer.
+- Diagnostics: when the model fails to produce SQL, each attempt's raw output (truncated) is recorded; stage detail is capped at 32 KB.
+- Evaluation: test cases store the authoritative SQL and result columns, so few-shot examples are no longer reconstructed from the projection.
+
+### Changed
+
+- **The model declares the scope in `FROM`**, replacing 0.0.2's "try translating against each scope after generation and infer the scope from which one succeeds". The catalogue is grouped by scope and the model writes `FROM <scope>`; a query that translates in several scopes is no longer settled by grain convergence or a clarification card.
+- **Primary identifiers are required only when needed** (as in Cube): a standalone table can be queried without one; it is required only when the table takes part in a one-to-many join and carries an additive measure. Every physical table gets a default count: tables with a primary identifier count keys (entities), tables without one count rows (`COUNT(*)`, and the description says it counts rows).
+- **One-to-many fan-out is computed correctly instead of refused**: the amplifying join still runs, `SELECT DISTINCT(group-by dimensions + fact-root primary identifier)` collapses the duplicated rows, and the result is joined back to the fact root before aggregating. Without a primary identifier the query is still refused; many-to-many is never opened; frozen routes to entities that already have a safe path are unchanged.
+- **Foreign identifiers can be grouped by**: only primary identifiers are hidden (grouping by one is grouping by row). Account numbers, store numbers and other foreign identifiers can be group-by dimensions; they still stay out of the value dictionary.
+- **A model timeout or rejected candidates now end in a refusal** instead of falling back to the rule parser, whose answer was often a normal-looking wrong number.
+- **Querying no longer asks the model to think by default**: a chain of thought does not change whether the structured output is correct, only how long it takes (10.5 s against 0.8 s measured); it can be turned on in configuration. The model named in the request now applies to SQL generation too, not only to result interpretation.
+- SQL read timeout defaults to 60 seconds; each question has an overall time budget.
+- Alias review no longer blocks publishing.
+- The prompt's rule block is a fixed constant: rules the compiler already enforces were removed, and composition patterns became examples verified by the translator (4 → 11).
+- The UI follows the Ant Design 5 specification; the primary colour is `#2b7de9`.
+
+### Fixed
+
+- "What share of the whole is this value": the denominator was filtered by the same dimension down to the numerator, always giving 1.
+- `BETWEEN` predicates were rejected as a dropped condition.
+- A zero-row aggregate was treated as success.
+- Bare numbers and numeric literals in the question were taken for values of some dimension.
+- Members matched by the mapper do not necessarily belong to the dataset; they are now filtered by membership.
+- Aliases and parent accounts are honoured at query time.
+- An identifier column whose name varies by scope made the whole generation catalogue be dropped.
+- AI modelling: re-running a reviewed candidate failed outright; physical column names with spaces failed; alias batches timing out on slow models failed the whole run; the run was rejected by its own completeness check.
+- Modelling page: renaming a plain field did not save; deleting a relation used by a route returned 500; the edge disappeared when a field it used became a plain field; plain fields showed as "to be confirmed"; "Apply" went blank; row-count metrics were flagged for missing a unit.
+- Pre-release test questions reuse the semantic index instead of rebuilding it each time.
+- The data source page header spans the available width.
+
+---
+
 ## [0.0.3] - 2026-09-07
 
 ### Fixed

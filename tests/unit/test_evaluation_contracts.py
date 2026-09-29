@@ -833,7 +833,7 @@ def test_failure_message_carries_the_database_error():
     已在 details 里,必须进 message。"""
 
     from knowflow_analytics.errors import QueryExecutionError
-    from knowflow_analytics.query.service import _failure_message
+    from knowflow_analytics.errors import failure_message as _failure_message
 
     exc = QueryExecutionError(
         "PostgreSQL query failed",

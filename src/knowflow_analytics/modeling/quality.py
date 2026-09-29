@@ -18,7 +18,7 @@ from knowflow_analytics.contracts import (
     SemanticQuery,
     SemanticRelease,
 )
-from knowflow_analytics.errors import AnalyticsError, TranslationError
+from knowflow_analytics.errors import AnalyticsError, TranslationError, failure_message
 from knowflow_analytics.execution.dialect import SqlDialect, to_dialect_sql
 from knowflow_analytics.execution.executor import SqlExecutor, normalize_cell
 from knowflow_analytics.hashing import content_hash, semantic_evidence_hash
@@ -545,7 +545,7 @@ class ModelingQualityProfiler:
                 metric_id=metric_id,
                 status=QualityStatus.BLOCKING,
                 error_code=exc.code,
-                message=str(exc),
+                message=failure_message(exc),
             )
         return MetricPreview(
             id=preview_id,

@@ -32,7 +32,7 @@ from knowflow_analytics.contracts import (
     SemanticRelease,
     effective_time_default,
 )
-from knowflow_analytics.errors import AnalyticsError
+from knowflow_analytics.errors import AnalyticsError, failure_message
 from knowflow_analytics.execution.dialect import SqlDialect
 from knowflow_analytics.execution.targets import ExecutionTargetProvider
 from knowflow_analytics.gateways.calls import (
@@ -1131,6 +1131,9 @@ class AnalyticsQueryService:
                             }
                         )
                     break
+            # 规则与默认时间窗都会改写 S2SQL 后重译，必须和首次翻译用同一个方言：
+            # 漏传就回落到 PostgreSQL 默认值，MySQL 数据源上以 1064 失败。
+            dialect = self._targets.for_project(release.project_id).dialect
             rule_application = self._query_rule_engine.apply(
                 release=release,
                 dataset_id=corrected.dataset_id,
@@ -1160,6 +1163,7 @@ class AnalyticsQueryService:
                     corrected_s2sql=corrected.corrected_s2sql,
                     visible_element_ids=allowed_element_ids,
                     row_filters=row_filters,
+                    dialect=dialect,
                     row_limits=request.options.row_limits(),
                 )
             # 默认时间窗：问题没写时间范围时按助手设置补一个，补了就记进
@@ -1194,6 +1198,7 @@ class AnalyticsQueryService:
                             corrected_s2sql=injected.s2sql,
                             visible_element_ids=allowed_element_ids,
                             row_filters=row_filters,
+                            dialect=dialect,
                             row_limits=request.options.row_limits(),
                         )
                     except AnalyticsError as exc:
@@ -1626,7 +1631,7 @@ class AnalyticsQueryService:
                     query_id,
                     trace,
                     exc.code,
-                    _failure_message(exc),
+                    failure_message(exc),
                     exc.stage,
                     diagnostics=_error_diagnosis(exc),
                 )
@@ -1648,7 +1653,7 @@ class AnalyticsQueryService:
                 # and a next step; the detailed evidence stays behind
                 # include_diagnostics.
                 diagnostics=_error_diagnosis(exc),
-                error=QueryError(stage=exc.stage, code=exc.code, message=_failure_message(exc)),
+                error=QueryError(stage=exc.stage, code=exc.code, message=failure_message(exc)),
             )
         except Exception:
             LOGGER.exception(
@@ -1852,7 +1857,7 @@ class AnalyticsQueryService:
                 spec_hash=bound_release.spec_hash,
                 index_snapshot_id=index_snapshot_id,
                 trace=tuple(trace),
-                error=QueryError(stage=exc.stage, code=exc.code, message=_failure_message(exc)),
+                error=QueryError(stage=exc.stage, code=exc.code, message=failure_message(exc)),
             )
         except Exception:
             LOGGER.exception(
@@ -2915,7 +2920,7 @@ class AnalyticsQueryService:
                 spec_hash=published.release.spec_hash,
                 index_snapshot_id=published.index_snapshot.id,
                 trace=tuple(trace),
-                error=QueryError(stage=exc.stage, code=exc.code, message=_failure_message(exc)),
+                error=QueryError(stage=exc.stage, code=exc.code, message=failure_message(exc)),
             )
         except Exception:
             LOGGER.exception(
@@ -4258,23 +4263,6 @@ def apply_relative_time_window(
             ),
         }
     )
-
-
-def _failure_message(exc: AnalyticsError) -> str:
-    """失败信息带上数据库的真实报错。
-
-    「PostgreSQL query failed」对排障等于零:sqlstate 与 message_primary 早已
-    被安全截取进 exc.details,却只在 include_diagnostics 的 trace 里——评测卡
-    和普通失败响应都看不到,用户只知道挂了、不知道为什么(2026-08-26 实测)。
-    """
-
-    message = str(exc)
-    database_message = exc.details.get("database_message")
-    sqlstate = exc.details.get("sqlstate")
-    if database_message:
-        suffix = f" [{sqlstate}]" if sqlstate else ""
-        return f"{message}: {database_message}{suffix}"
-    return message
 
 
 def _stage_or_precheck(value: str) -> QueryStage:

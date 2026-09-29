@@ -13,14 +13,17 @@ import os
 import pytest
 from sqlalchemy import create_engine, inspect
 
+from knowflow_analytics.execution import SqlExecutor
 from knowflow_analytics.execution.dialect import SqlDialect
 from knowflow_analytics.modeling.introspector import SchemaIntrospector
 from knowflow_analytics.modeling.profile import ColumnStatisticsProfiler
+from knowflow_analytics.modeling.quality import ModelingQualityProfiler, QualityStatus
 from knowflow_analytics.modeling.type_system import (
     is_numeric_type,
     is_temporal_type,
     is_text_type,
 )
+from tests.support import create_sales_fixture_mysql
 
 _TABLE = "modeling_probe"
 
@@ -235,3 +238,27 @@ def test_schema_listing_omits_empty_schemas(mysql):
     finally:
         with mysql.begin() as connection:
             connection.exec_driver_sql("DROP DATABASE IF EXISTS kf_empty_probe")
+
+
+@pytest.mark.mysql
+def test_metric_preview_translates_with_the_datasource_dialect(mysql, sales_release):
+    """发布检查的指标样本也走翻译器，漏传方言时默认渲染成 PostgreSQL 方言。
+
+    PostgreSQL 数据源撞不上——默认值恰好就是 PostgreSQL；MySQL 数据源上发布检查
+    的每个指标样本都以 1064 失败，界面只剩一句 "mysql query failed"、样本取不出来，
+    而问数管线因为传了数据源方言所以同一指标能跑通。发布被质量报告挡死且无解。
+    """
+
+    url = os.getenv("KNOWFLOW_ANALYTICS_TEST_MYSQL_URL")
+    if not url:
+        pytest.skip("KNOWFLOW_ANALYTICS_TEST_MYSQL_URL 未配置")
+    create_sales_fixture_mysql(url)
+    executor = SqlExecutor(url, dialect=SqlDialect.MYSQL)
+    profiler = ModelingQualityProfiler(mysql, executor, dialect=SqlDialect.MYSQL)
+    try:
+        preview = profiler.preview_metric("sales_dataset", "net_revenue", sales_release)
+    finally:
+        executor.close()
+
+    assert preview.status is QualityStatus.PENDING_REVIEW
+    assert preview.rows == ((380,),)

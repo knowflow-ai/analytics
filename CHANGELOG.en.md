@@ -6,6 +6,16 @@ Versioning note: while on `0.x`, semantic resource contracts, query stages, and 
 
 ---
 
+## [0.0.5] - 2026-09-30
+
+Everything since `v0.0.4`. Image `knowflowai/analytics:v0.0.5` (`linux/amd64`, `linux/arm64`).
+
+### Fixed
+
+- **Metric samples in the pre-release quality report always failed on MySQL sources**: translation did not pass the source's dialect, so the SQL was rendered with PostgreSQL syntax (double-quoted identifiers) and MySQL rejected it with 1064.
+- **Questions failed on MySQL sources when a query rule matched or a default time window was added**: both re-translations dropped the dialect the same way; they now use the same dialect as the first translation.
+- A failed metric sample only said `mysql query failed`; it now carries the database's own message (never the SQL text), the same as a failed question.
+
 ## [0.0.4] - 2026-09-25
 
 Everything since `v0.0.3`. Image `knowflowai/analytics:v0.0.4` (`linux/amd64`, `linux/arm64`).
